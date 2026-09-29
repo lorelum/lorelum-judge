@@ -21,8 +21,8 @@ bun run validate
 - `main` 只通过 PR 变更，每个 PR 只声明一个问题或边界。
 - 公共 schema、package interface、runtime contract、评测 semantics、持久化 record 或
   流水线 gate 的变更必须先有收敛的 issue，再创建 `openspec/changes/<change-name>/`。
-- 初始 PR 只包含 OpenSpec artifacts 和必要流程约束。后续实现、验证和任务勾选持续提交到
-  同一分支和同一 PR，不为同一 change 另开实现 PR。
+- 一个 change 使用一个长期分支和一个 PR。分支先提交 OpenSpec artifacts，使设计可在实现前
+  审阅；实现、验证和任务勾选继续提交到同一分支和同一 PR，不为同一 change 另开实现 PR。
 - 不改变 contract 的文档或工具修正可以直接提 PR，但正文必须说明根因、修复边界和验证方式。
 - 每项 `tasks.md` 工作完成后立即勾选，并在 PR 中保留实际命令和结果。
 
