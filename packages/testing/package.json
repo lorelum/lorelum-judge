@@ -1,0 +1,26 @@
+{
+  "name": "@lorelum/judge-testing",
+  "version": "0.0.0",
+  "description": "Deterministic test kit for Lorelum Judge consumers.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@lorelum/judge": "workspace:*",
+    "@lorelum/judge-protocol": "workspace:*",
+    "@lorelum/judge-runtime": "workspace:*"
+  }
+}

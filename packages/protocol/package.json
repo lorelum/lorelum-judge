@@ -1,0 +1,26 @@
+{
+  "name": "@lorelum/judge-protocol",
+  "version": "0.0.0",
+  "description": "Versioned protocol and identity primitives for Lorelum Judge.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.52",
+    "ajv": "^8.20.0",
+    "canonicalize": "^5.1.0"
+  }
+}

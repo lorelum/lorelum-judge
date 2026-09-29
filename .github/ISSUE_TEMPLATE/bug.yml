@@ -1,0 +1,32 @@
+name: Bug
+description: Report an incorrect or unstable behavior.
+labels:
+  - bug
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What happened, and what was expected?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the smallest reproducible input or command.
+    validations:
+      required: true
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      options:
+        - "@lorelum/judge-protocol"
+        - "@lorelum/judge-runtime"
+        - "@lorelum/judge"
+        - "@lorelum/judge-testing"
+        - "@lorelum/judge-adapters"
+        - "@lorelum/judge-cli"
+    validations:
+      required: true

@@ -1,0 +1,25 @@
+{
+  "name": "@lorelum/judge",
+  "version": "0.0.0",
+  "description": "Evaluation agent core for software engineering work.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@lorelum/judge-protocol": "workspace:*",
+    "@lorelum/judge-runtime": "workspace:*"
+  }
+}
