@@ -44,9 +44,11 @@ framework adapters must pass.
 
 ### Resume is explicit
 
-The reference runtime saves state after each step. `resume()` loads a persisted
-state and continues from the next step. A missing or non-resumable state returns
-a structured error rather than silently starting new work.
+The reference runtime saves state after each step. When the step budget is
+reached, it returns `paused` rather than claiming completion or failure.
+`resume()` loads a persisted state and continues from the next step. A missing
+or non-resumable state returns a structured error rather than silently starting
+new work.
 
 ### Failure categories are structured
 
