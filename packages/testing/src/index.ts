@@ -1,3 +1,3 @@
-export * from "./conformance";
-export * from "./memory";
-export * from "./scripted-model";
+export * from "./conformance.js";
+export * from "./memory.js";
+export * from "./scripted-model.js";

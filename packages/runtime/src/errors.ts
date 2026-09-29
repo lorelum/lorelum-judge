@@ -1,5 +1,5 @@
-import type { JsonValue } from "./json";
-import type { RuntimeFailure, RuntimeFailureKind } from "./run";
+import type { JsonValue } from "./json.js";
+import type { RuntimeFailure, RuntimeFailureKind } from "./run.js";
 
 export interface RuntimeFailureErrorOptions {
   readonly retryable?: boolean;

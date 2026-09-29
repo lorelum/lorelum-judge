@@ -1,7 +1,7 @@
-import type { ExecutionPort } from "./execution";
-import type { ModelPort } from "./model";
-import type { RuntimeEvent, RuntimeRun } from "./run";
-import type { ToolRegistry } from "./tools";
+import type { ExecutionPort } from "./execution.js";
+import type { ModelPort } from "./model.js";
+import type { RuntimeEvent, RuntimeRun } from "./run.js";
+import type { ToolRegistry } from "./tools.js";
 
 export interface RunStore {
   load(runId: string): Promise<RuntimeRun | undefined>;

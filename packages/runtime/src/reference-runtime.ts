@@ -1,7 +1,7 @@
-import { toRuntimeFailure } from "./errors";
-import type { JsonValue } from "./json";
-import type { ModelResponse, RuntimeMessage } from "./model";
-import type { RuntimePorts } from "./ports";
+import { toRuntimeFailure } from "./errors.js";
+import type { JsonObject, JsonValue } from "./json.js";
+import type { ModelResponse, RuntimeMessage } from "./model.js";
+import type { RuntimePorts } from "./ports.js";
 import type {
   ResumeRequest,
   ResumeResult,
@@ -10,14 +10,56 @@ import type {
   RuntimeRequest,
   RuntimeRun,
   RuntimeStep,
-} from "./run";
-import type { AgentRuntime } from "./runtime";
+} from "./run.js";
+import type { AgentRuntime } from "./runtime.js";
 
 const RUN_SCHEMA = "lorelum.runtime.run/v1" as const;
 const DEFAULT_MAX_STEPS = 8;
+const FALLBACK_TIMESTAMP = "1970-01-01T00:00:00.000Z";
 
 function timestamp(ports: RuntimePorts): string {
   return ports.clock.now().toISOString();
+}
+
+function safeTimestamp(
+  ports: RuntimePorts,
+  fallback: string,
+): {
+  readonly at: string;
+  readonly failure?: RuntimeFailure;
+} {
+  try {
+    return { at: timestamp(ports) };
+  } catch (error) {
+    return {
+      at: fallback,
+      failure: toRuntimeFailure(error, "environment_error"),
+    };
+  }
+}
+
+function failureMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function addFailureDetail(failure: RuntimeFailure, key: string, detail: unknown): RuntimeFailure {
+  const existing =
+    failure.details !== undefined &&
+    typeof failure.details === "object" &&
+    failure.details !== null &&
+    !Array.isArray(failure.details)
+      ? (failure.details as JsonObject)
+      : failure.details === undefined
+        ? {}
+        : { cause: failure.details };
+
+  return {
+    ...failure,
+    details: {
+      ...existing,
+      [key]: failureMessage(detail),
+    },
+  };
 }
 
 function createRun(request: RuntimeRequest, ports: RuntimePorts): RuntimeRun {
@@ -33,6 +75,21 @@ function createRun(request: RuntimeRequest, ports: RuntimePorts): RuntimeRun {
     events: [],
     createdAt: now,
     updatedAt: now,
+  };
+}
+
+function createFallbackRun(request: RuntimeRequest): RuntimeRun {
+  return {
+    schema: RUN_SCHEMA,
+    runId: request.runId,
+    status: "running",
+    stepIndex: 0,
+    maxSteps: request.maxSteps ?? DEFAULT_MAX_STEPS,
+    messages: [...request.messages],
+    steps: [],
+    events: [],
+    createdAt: FALLBACK_TIMESTAMP,
+    updatedAt: FALLBACK_TIMESTAMP,
   };
 }
 
@@ -62,19 +119,47 @@ async function finishFailed(
   ports: RuntimePorts,
   failure: RuntimeFailure,
 ): Promise<RuntimeRun> {
+  const clock = safeTimestamp(ports, run.updatedAt);
+  let effectiveFailure =
+    clock.failure === undefined
+      ? failure
+      : addFailureDetail(failure, "clock_error", clock.failure.message);
+
+  let event: Extract<RuntimeEvent, { type: "run_failed" }> = {
+    runId: run.runId,
+    at: clock.at,
+    stepIndex: run.stepIndex,
+    type: "run_failed",
+    failure: effectiveFailure,
+  };
+
+  try {
+    await ports.telemetry.emit(event);
+  } catch (error) {
+    effectiveFailure = addFailureDetail(effectiveFailure, "telemetry_error", error);
+    event = { ...event, failure: effectiveFailure };
+  }
+
   const failed: RuntimeRun = {
     ...run,
     status: "failed",
-    failure,
-    updatedAt: timestamp(ports),
+    failure: effectiveFailure,
+    events: [...run.events, event],
+    updatedAt: clock.at,
   };
-  const withEvent = await appendEvent(failed, ports, {
-    ...eventBase(failed, ports),
-    type: "run_failed",
-    failure,
-  });
-  await ports.store.save(withEvent);
-  return withEvent;
+
+  try {
+    await ports.store.save(failed);
+    return failed;
+  } catch (error) {
+    effectiveFailure = addFailureDetail(effectiveFailure, "store_error", error);
+    const updatedEvent = { ...event, failure: effectiveFailure };
+    return {
+      ...failed,
+      failure: effectiveFailure,
+      events: [...run.events, updatedEvent],
+    };
+  }
 }
 
 async function finishCancelled(run: RuntimeRun, ports: RuntimePorts): Promise<RuntimeRun> {
@@ -98,21 +183,26 @@ async function finishCompleted(
   step: RuntimeStep,
   output: JsonValue,
 ): Promise<RuntimeRun> {
+  const completedStepIndex = run.stepIndex;
   const completed: RuntimeRun = {
     ...run,
     status: "completed",
-    stepIndex: run.stepIndex + 1,
+    stepIndex: completedStepIndex + 1,
     messages,
     steps: [...run.steps, step],
     output,
     updatedAt: timestamp(ports),
   };
   const withStep = await appendEvent(completed, ports, {
-    ...eventBase(completed, ports),
+    runId: completed.runId,
+    at: timestamp(ports),
+    stepIndex: completedStepIndex,
     type: "step_completed",
   });
   const finalRun = await appendEvent(withStep, ports, {
-    ...eventBase(withStep, ports),
+    runId: withStep.runId,
+    at: timestamp(ports),
+    stepIndex: completedStepIndex,
     type: "run_completed",
   });
   await ports.store.save(finalRun);
@@ -221,22 +311,7 @@ async function executeTools(
     });
   }
 
-  return {
-    ok: true,
-    run: {
-      ...current,
-      stepIndex: current.stepIndex + 1,
-      steps: [
-        ...current.steps,
-        {
-          index: current.stepIndex,
-          responseKind: "tool_calls",
-          toolCallIds: response.calls.map((call) => call.id),
-        },
-      ],
-      updatedAt: timestamp(ports),
-    },
-  };
+  return { ok: true, run: current };
 }
 
 async function executeRun(
@@ -246,114 +321,150 @@ async function executeRun(
 ): Promise<RuntimeRun> {
   let run = initialRun;
 
-  while (run.status === "running") {
-    if (signal.aborted) {
-      return finishCancelled(run, ports);
-    }
-
-    if (run.stepIndex >= run.maxSteps) {
-      const paused: RuntimeRun = {
-        ...run,
-        status: "paused",
-        updatedAt: timestamp(ports),
-      };
-      const withEvent = await appendEvent(paused, ports, {
-        ...eventBase(paused, ports),
-        type: "run_paused",
-      });
-      await ports.store.save(withEvent);
-      return withEvent;
-    }
-
-    run = await appendEvent(run, ports, {
-      ...eventBase(run, ports),
-      type: "model_requested",
-    });
-
-    let response: ModelResponse;
-    try {
-      response = await ports.model.generate({
-        runId: run.runId,
-        stepIndex: run.stepIndex,
-        messages: run.messages,
-        tools: ports.tools.list().map((tool) => ({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-        })),
-        signal,
-      });
-    } catch (error) {
+  try {
+    while (run.status === "running") {
       if (signal.aborted) {
         return finishCancelled(run, ports);
       }
-      return finishFailed(run, ports, toRuntimeFailure(error, "model_error"));
-    }
 
-    run = await appendEvent(run, ports, {
-      ...eventBase(run, ports),
-      type: "model_responded",
-      responseKind: response.kind,
-    });
-
-    if (response.kind === "message") {
-      return finishCompleted(
-        run,
-        ports,
-        [...run.messages, assistantMessage(response)],
-        {
-          index: run.stepIndex,
-          responseKind: "message",
-          toolCallIds: [],
-        },
-        response.content,
-      );
-    }
-
-    if (response.kind === "structured") {
-      return finishCompleted(
-        run,
-        ports,
-        [...run.messages, assistantMessage(response)],
-        {
-          index: run.stepIndex,
-          responseKind: "structured",
-          toolCallIds: [],
-        },
-        response.value,
-      );
-    }
-
-    const toolOutcome = await executeTools(run, ports, response, signal);
-    if (!toolOutcome.ok) {
-      if (signal.aborted) {
-        return finishCancelled(toolOutcome.run, ports);
+      if (run.stepIndex >= run.maxSteps) {
+        const paused: RuntimeRun = {
+          ...run,
+          status: "paused",
+          updatedAt: timestamp(ports),
+        };
+        const withEvent = await appendEvent(paused, ports, {
+          ...eventBase(paused, ports),
+          type: "run_paused",
+        });
+        await ports.store.save(withEvent);
+        return withEvent;
       }
-      return finishFailed(toolOutcome.run, ports, toolOutcome.failure);
+
+      run = await appendEvent(run, ports, {
+        ...eventBase(run, ports),
+        type: "model_requested",
+      });
+
+      let response: ModelResponse;
+      try {
+        response = await ports.model.generate({
+          runId: run.runId,
+          stepIndex: run.stepIndex,
+          messages: run.messages,
+          tools: ports.tools.list().map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+          })),
+          signal,
+        });
+      } catch (error) {
+        if (signal.aborted) {
+          return finishCancelled(run, ports);
+        }
+        return finishFailed(run, ports, toRuntimeFailure(error, "model_error"));
+      }
+
+      run = await appendEvent(run, ports, {
+        ...eventBase(run, ports),
+        type: "model_responded",
+        responseKind: response.kind,
+      });
+
+      if (response.kind === "message") {
+        return finishCompleted(
+          run,
+          ports,
+          [...run.messages, assistantMessage(response)],
+          {
+            index: run.stepIndex,
+            responseKind: "message",
+            toolCallIds: [],
+          },
+          response.content,
+        );
+      }
+
+      if (response.kind === "structured") {
+        return finishCompleted(
+          run,
+          ports,
+          [...run.messages, assistantMessage(response)],
+          {
+            index: run.stepIndex,
+            responseKind: "structured",
+            toolCallIds: [],
+          },
+          response.value,
+        );
+      }
+
+      const toolOutcome = await executeTools(run, ports, response, signal);
+      if (!toolOutcome.ok) {
+        if (signal.aborted) {
+          return finishCancelled(toolOutcome.run, ports);
+        }
+        return finishFailed(toolOutcome.run, ports, toolOutcome.failure);
+      }
+
+      const completedStepIndex = toolOutcome.run.stepIndex;
+      run = await appendEvent(toolOutcome.run, ports, {
+        ...eventBase(toolOutcome.run, ports),
+        type: "step_completed",
+      });
+      run = {
+        ...run,
+        stepIndex: completedStepIndex + 1,
+        steps: [
+          ...run.steps,
+          {
+            index: completedStepIndex,
+            responseKind: "tool_calls",
+            toolCallIds: response.calls.map((call) => call.id),
+          },
+        ],
+      };
+      await ports.store.save(run);
     }
 
-    run = await appendEvent(toolOutcome.run, ports, {
-      ...eventBase(toolOutcome.run, ports),
-      type: "step_completed",
-    });
-    await ports.store.save(run);
+    return run;
+  } catch (error) {
+    return finishFailed(run, ports, toRuntimeFailure(error, "environment_error"));
   }
-
-  return run;
 }
 
 export class ReferenceRuntime implements AgentRuntime {
   async run(request: RuntimeRequest, ports: RuntimePorts): Promise<RuntimeRun> {
-    let run = createRun(request, ports);
-    run = await appendEvent(run, ports, {
-      ...eventBase(run, ports),
-      type: "run_started",
-    });
-    return executeRun(run, request.signal, ports);
+    let run: RuntimeRun | undefined;
+
+    try {
+      run = createRun(request, ports);
+      run = await appendEvent(run, ports, {
+        ...eventBase(run, ports),
+        type: "run_started",
+      });
+      return await executeRun(run, request.signal, ports);
+    } catch (error) {
+      return finishFailed(
+        run ?? createFallbackRun(request),
+        ports,
+        toRuntimeFailure(error, "environment_error"),
+      );
+    }
   }
 
   async resume(request: ResumeRequest, ports: RuntimePorts): Promise<ResumeResult> {
-    const stored = await ports.store.load(request.runId);
+    let stored: RuntimeRun | undefined;
+    try {
+      stored = await ports.store.load(request.runId);
+    } catch (error) {
+      return {
+        ok: false,
+        failure: toRuntimeFailure(error, "environment_error"),
+      };
+    }
+
     if (stored === undefined) {
       return {
         ok: false,
@@ -380,11 +491,33 @@ export class ReferenceRuntime implements AgentRuntime {
       request.maxSteps !== undefined && request.maxSteps > stored.maxSteps
         ? request.maxSteps
         : stored.maxSteps;
+
+    if (stored.stepIndex >= nextMaxSteps) {
+      return {
+        ok: false,
+        failure: {
+          kind: "protocol_error",
+          message: `Run has no step budget remaining: ${request.runId}`,
+          retryable: false,
+        },
+      };
+    }
+
+    let updatedAt: string;
+    try {
+      updatedAt = timestamp(ports);
+    } catch (error) {
+      return {
+        ok: false,
+        failure: toRuntimeFailure(error, "environment_error"),
+      };
+    }
+
     const resumable: RuntimeRun = {
       ...stored,
       status: "running",
       maxSteps: nextMaxSteps,
-      updatedAt: timestamp(ports),
+      updatedAt,
     };
     const run = await executeRun(resumable, request.signal, ports);
     return { ok: true, run };

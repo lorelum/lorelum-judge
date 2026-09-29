@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from "./json";
+import type { JsonObject, JsonValue } from "./json.js";
 
 export type RuntimeMessageRole = "system" | "user" | "assistant" | "tool";
 

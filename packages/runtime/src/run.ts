@@ -1,5 +1,5 @@
-import type { JsonValue } from "./json";
-import type { RuntimeMessage } from "./model";
+import type { JsonValue } from "./json.js";
+import type { RuntimeMessage } from "./model.js";
 
 export type RuntimeStatus = "running" | "paused" | "completed" | "failed" | "cancelled";
 

@@ -50,6 +50,46 @@ completion, pause, and terminal state. The status set MUST include `running`,
 - **WHEN** a run reaches its step budget with more work available
 - **THEN** the run reaches `paused` and retains enough state to resume
 
+#### Scenario: Step completion events use the completed step index
+
+- **WHEN** a run step completes
+- **THEN** `step_completed` and the terminal `run_completed` event use the
+  completed step's index
+- **AND** the next `model_requested` event uses the incremented run step index
+
+### Requirement: Runtime port failures become structured failures
+
+The runtime MUST convert storage, clock, telemetry, model, tool, and execution
+port exceptions into a terminal failed run or a structured resume failure. A
+port exception MUST NOT reject `run()` or `resume()`. A failed run returns
+`environment_error` unless the port provided a more specific structured
+failure.
+
+#### Scenario: Store failure does not reject the run
+
+- **WHEN** the run store throws while saving a run
+- **THEN** `run()` resolves to a failed run
+- **AND** the failure is classified as `environment_error`
+- **AND** the returned run contains a `run_failed` event
+
+#### Scenario: Telemetry failure does not reject the run
+
+- **WHEN** telemetry throws while emitting an event
+- **THEN** `run()` resolves to a failed run with an `environment_error`
+- **AND** the returned run retains a best-effort `run_failed` event
+
+#### Scenario: Clock failure does not reject the run
+
+- **WHEN** the clock throws while a run is being created or updated
+- **THEN** `run()` resolves to a failed run with an `environment_error`
+- **AND** the returned run uses a documented fallback timestamp for the failure
+  envelope
+
+#### Scenario: Store load failure is a structured resume result
+
+- **WHEN** the run store throws while loading a run for resume
+- **THEN** `resume()` returns `ok: false` with an `environment_error`
+
 ### Requirement: Runtime executes tool calls
 
 The runtime MUST support model responses containing one or more tool calls,
@@ -102,6 +142,13 @@ structured error when the run cannot be resumed.
 - **WHEN** `resume()` is called for a run id that does not exist
 - **THEN** it returns a structured `protocol_error` and does not create a new
   run
+
+#### Scenario: Resume without remaining budget fails explicitly
+
+- **WHEN** a paused run has no remaining step budget and `resume()` does not
+  extend it
+- **THEN** `resume()` returns `ok: false` with a `protocol_error`
+- **AND** it does not return `ok: true` with the run still paused
 
 ### Requirement: Conformance is reusable across runtimes
 

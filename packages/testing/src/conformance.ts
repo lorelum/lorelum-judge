@@ -1,6 +1,7 @@
 import {
   type AgentRuntime,
   type ModelResponse,
+  type RuntimeEvent,
   RuntimeFailureError,
   type RuntimePorts,
   type RuntimeRun,
@@ -13,8 +14,8 @@ import {
   InMemoryRunStore,
   NoopExecutionPort,
   RecordingTelemetry,
-} from "./memory";
-import { createScriptedModel, type ScriptedModel } from "./scripted-model";
+} from "./memory.js";
+import { createScriptedModel, type ScriptedModel } from "./scripted-model.js";
 
 export interface TestPortsOptions {
   readonly responses: readonly (ModelResponse | Error)[];
@@ -69,6 +70,21 @@ async function expectCompleted(run: RuntimeRun, output: unknown): Promise<void> 
   assert(run.events.at(-1)?.type === "run_completed", "Missing run_completed event.");
 }
 
+function eventStepIndexes(run: RuntimeRun, type: RuntimeEvent["type"]): readonly number[] {
+  return run.events.filter((event) => event.type === type).map((event) => event.stepIndex);
+}
+
+function assertEventStepIndexes(
+  run: RuntimeRun,
+  type: RuntimeEvent["type"],
+  expected: readonly number[],
+): void {
+  assert(
+    JSON.stringify(eventStepIndexes(run, type)) === JSON.stringify(expected),
+    `Unexpected ${type} step indexes: ${JSON.stringify(eventStepIndexes(run, type))}.`,
+  );
+}
+
 async function textCase(runtime: AgentRuntime): Promise<void> {
   const ports = createTestPorts({
     responses: [{ kind: "message", content: "done" }],
@@ -81,6 +97,8 @@ async function textCase(runtime: AgentRuntime): Promise<void> {
   assert(ports.model.requests.length === 1, "Expected one model request.");
   assert(run.steps.length === 1, "Completed run did not record one step.");
   assert(run.steps[0]?.responseKind === "message", "Text step kind was not recorded.");
+  assertEventStepIndexes(run, "step_completed", [0]);
+  assertEventStepIndexes(run, "run_completed", [0]);
   assert((await ports.store.load("text"))?.status === "completed", "Run was not persisted.");
 }
 
@@ -111,6 +129,9 @@ async function toolCase(runtime: AgentRuntime): Promise<void> {
   assert(ports.model.requests.length === 2, "Expected two model requests.");
   assert(run.steps[0]?.responseKind === "tool_calls", "Tool step kind was not recorded.");
   assert(run.steps[0]?.toolCallIds[0] === "call-1", "Tool call id was not recorded.");
+  assertEventStepIndexes(run, "tool_completed", [0]);
+  assertEventStepIndexes(run, "step_completed", [0, 1]);
+  assertEventStepIndexes(run, "model_requested", [0, 1]);
   const secondRequest = ports.model.requests[1];
   assert(secondRequest !== undefined, "Missing second model request.");
   assert(
@@ -284,6 +305,133 @@ async function missingResumeCase(runtime: AgentRuntime): Promise<void> {
   assert(result.failure.kind === "protocol_error", "Missing run did not return protocol_error.");
 }
 
+async function storeFailureCase(runtime: AgentRuntime): Promise<void> {
+  const ports = createTestPorts({
+    responses: [{ kind: "message", content: "done" }],
+  });
+  ports.store.save = async () => {
+    throw new Error("disk full");
+  };
+
+  const run = await runtime.run(
+    { runId: "store-error", messages: [userMessage("fail")], signal: new AbortController().signal },
+    ports,
+  );
+  assert(run.status === "failed", `Expected failed, received ${run.status}.`);
+  assert(
+    run.failure?.kind === "environment_error",
+    "Store failure was not classified as environment_error.",
+  );
+  assert(
+    run.events.some((event) => event.type === "run_failed"),
+    "Store failure lost the run_failed event.",
+  );
+}
+
+async function telemetryFailureCase(runtime: AgentRuntime): Promise<void> {
+  const ports = createTestPorts({
+    responses: [{ kind: "message", content: "done" }],
+  });
+  ports.telemetry.emit = () => {
+    throw new Error("telemetry backend down");
+  };
+
+  const run = await runtime.run(
+    {
+      runId: "telemetry-error",
+      messages: [userMessage("fail")],
+      signal: new AbortController().signal,
+    },
+    ports,
+  );
+  assert(run.status === "failed", `Expected failed, received ${run.status}.`);
+  assert(
+    run.failure?.kind === "environment_error",
+    "Telemetry failure was not classified as environment_error.",
+  );
+  assert(
+    run.events.some((event) => event.type === "run_failed"),
+    "Telemetry failure lost the run_failed event.",
+  );
+}
+
+async function clockFailureCase(runtime: AgentRuntime): Promise<void> {
+  const ports = createTestPorts({
+    responses: [{ kind: "message", content: "done" }],
+  });
+  ports.clock.now = () => {
+    throw new Error("clock unavailable");
+  };
+
+  const run = await runtime.run(
+    { runId: "clock-error", messages: [userMessage("fail")], signal: new AbortController().signal },
+    ports,
+  );
+  assert(run.status === "failed", `Expected failed, received ${run.status}.`);
+  assert(
+    run.failure?.kind === "environment_error",
+    "Clock failure was not classified as environment_error.",
+  );
+  assert(run.createdAt === "1970-01-01T00:00:00.000Z", "Clock fallback timestamp was not used.");
+}
+
+async function storeLoadFailureCase(runtime: AgentRuntime): Promise<void> {
+  const ports = createTestPorts({ responses: [] });
+  ports.store.load = async () => {
+    throw new Error("store unavailable");
+  };
+
+  const result = await runtime.resume(
+    { runId: "load-error", signal: new AbortController().signal },
+    ports,
+  );
+  assert(!result.ok, "Store load failure unexpectedly resumed.");
+  assert(
+    result.failure.kind === "environment_error",
+    "Store load failure was not classified as environment_error.",
+  );
+}
+
+async function exhaustedResumeCase(runtime: AgentRuntime): Promise<void> {
+  const tool: ToolDefinition = {
+    name: "lookup",
+    description: "Look up a value.",
+    inputSchema: { type: "object" },
+    execute() {
+      return { value: 42 };
+    },
+  };
+  const ports = createTestPorts({
+    responses: [
+      {
+        kind: "tool_calls",
+        calls: [{ id: "call-1", name: "lookup", arguments: {} }],
+      },
+    ],
+    tools: [tool],
+  });
+  const paused = await runtime.run(
+    {
+      runId: "exhausted-resume",
+      messages: [userMessage("pause")],
+      maxSteps: 1,
+      signal: new AbortController().signal,
+    },
+    ports,
+  );
+  assert(paused.status === "paused", `Expected paused, received ${paused.status}.`);
+
+  const result = await runtime.resume(
+    { runId: "exhausted-resume", maxSteps: 1, signal: new AbortController().signal },
+    ports,
+  );
+  assert(!result.ok, "Exhausted run unexpectedly resumed.");
+  assert(
+    result.failure.kind === "protocol_error",
+    "Exhausted resume did not return protocol_error.",
+  );
+}
+
 async function modelFailureCase(runtime: AgentRuntime): Promise<void> {
   const ports = createTestPorts({ responses: [new Error("model unavailable")] });
   const run = await runtime.run(
@@ -395,6 +543,11 @@ const conformanceCases: ReadonlyArray<{
   { name: "pause and resume", execute: resumeCase },
   { name: "step checkpoint", execute: stepCheckpointCase },
   { name: "missing resume state", execute: missingResumeCase },
+  { name: "store failure", execute: storeFailureCase },
+  { name: "telemetry failure", execute: telemetryFailureCase },
+  { name: "clock failure", execute: clockFailureCase },
+  { name: "store load failure", execute: storeLoadFailureCase },
+  { name: "exhausted resume", execute: exhaustedResumeCase },
   { name: "model failure", execute: modelFailureCase },
   { name: "environment failure", execute: environmentFailureCase },
   { name: "tool failure", execute: toolFailureCase },

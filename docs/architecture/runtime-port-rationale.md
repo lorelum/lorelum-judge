@@ -37,6 +37,12 @@ frameworks without copying their runtime-owned schemas:
 - A step-budget pause is distinguishable from completion, failure, and
   cancellation.
 - Model, tool, and environment failures have different structured categories.
+- Storage, clock, telemetry, model, tool, and execution port exceptions become
+  structured failures instead of rejecting the run.
+- `step_completed` uses the index of the step that completed; only the next
+  `model_requested` event advances to the next step index.
+- `resume()` returns a structured error when the current step budget cannot
+  make progress, instead of returning a paused run as a successful resume.
 - Conformance is a reusable suite over the public `AgentRuntime` interface, so
   a future framework adapter cannot claim compatibility from its own tests.
 
