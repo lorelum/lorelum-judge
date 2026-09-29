@@ -4,6 +4,26 @@ Status: architecture survey for the foundation. It is not a framework selection.
 
 Reviewed: 2026-09-29.
 
+## Sources
+
+- [OpenAI Agents Python](https://github.com/openai/openai-agents-python)
+- [OpenAI Agents JS](https://github.com/openai/openai-agents-js)
+- [LangGraph](https://github.com/langchain-ai/langgraph)
+- [Pydantic AI](https://github.com/pydantic/pydantic-ai)
+- [Vercel AI SDK](https://github.com/vercel/ai)
+- [Vercel Eve](https://github.com/vercel/eve)
+- [Stirrup](https://github.com/ArtificialAnalysis/Stirrup)
+- [Mastra](https://github.com/mastra-ai/mastra)
+- [Google ADK JS](https://github.com/google/adk-js)
+- [smolagents](https://github.com/huggingface/smolagents)
+- [Atomic Agents](https://github.com/Eigenwise/atomic-agents)
+- [MCP Agent](https://github.com/lastmile-ai/mcp-agent)
+- [Pydantic Evals](https://github.com/pydantic/pydantic-ai/tree/main/pydantic_evals)
+- [DeepEval](https://github.com/confident-ai/deepeval)
+- [Braintrust SDK](https://github.com/braintrustdata/braintrust-sdk)
+- [OpenAI Evals](https://github.com/openai/evals)
+- [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness)
+
 ## Evaluation Criteria
 
 The repository has three distinct technical layers:

@@ -6,6 +6,17 @@ Reviewed: 2026-09-29.
 
 ## Sources
 
+The directory conclusions use the same repositories linked in
+[Agent Framework Survey](agent-framework-survey.md#sources), plus:
+
+- [OpenAI Agents JS](https://github.com/openai/openai-agents-js/tree/main/packages)
+- [Pydantic AI package layout](https://github.com/pydantic/pydantic-ai)
+- [LangGraph library layout](https://github.com/langchain-ai/langgraph/tree/main/libs)
+- [Vercel Eve package layout](https://github.com/vercel/eve/tree/main/packages)
+- [Google ADK JS](https://github.com/google/adk-js)
+
+## Survey Set
+
 The survey covers lightweight agent projects, production TypeScript agent
 platforms, and evaluation systems:
 
