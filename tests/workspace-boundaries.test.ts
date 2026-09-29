@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { checkWorkspace, isAllowedDependency } from "../scripts/check-layers";
+import {
+  checkWorkspace,
+  isAllowedDependency,
+  isAllowedTestDependency,
+} from "../scripts/check-layers";
 
 describe("workspace package boundaries", () => {
   test("current workspace graph is valid", () => {
@@ -23,5 +27,10 @@ describe("workspace package boundaries", () => {
     expect(isAllowedDependency("@lorelum/runtime-openai", "@lorelum/judge-runtime")).toBe(true);
     expect(isAllowedDependency("@lorelum/provider-openai", "@lorelum/judge-runtime")).toBe(true);
     expect(isAllowedDependency("@lorelum/runtime-openai", "@lorelum/judge-workflow")).toBe(false);
+    expect(isAllowedDependency("@lorelum/runtime-openai", "@lorelum/judge-testing")).toBe(false);
+    expect(isAllowedTestDependency("@lorelum/runtime-openai", "@lorelum/judge-testing")).toBe(true);
+    expect(isAllowedTestDependency("@lorelum/provider-openai", "@lorelum/judge-testing")).toBe(
+      true,
+    );
   });
 });
