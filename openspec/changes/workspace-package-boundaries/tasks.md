@@ -3,7 +3,8 @@
 - [x] 1.1 Confirm issue #3 owns only package boundaries and import enforcement.
 - [x] 1.2 Add the OpenSpec proposal, design, tasks, and specification.
 - [x] 1.3 Validate the change with OpenSpec strict validation.
-- [ ] 1.4 Create the initial PR with OpenSpec artifacts only.
+- [x] 1.4 Create the change PR with OpenSpec artifacts before implementation
+  and continue implementation on the same branch.
 
 ## 2. Core Package Boundaries
 
