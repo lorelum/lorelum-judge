@@ -2,8 +2,8 @@
 
 ## 报告方式
 
-不要为可能暴露凭据、仓库内容、执行环境或模型输入的漏洞创建公开 issue。请私下联系维护者，
-并提供：
+不要为可能暴露凭据、仓库内容、执行环境或模型输入的漏洞创建公开 issue。请通过仓库的
+GitHub Security Advisories 页面选择 “Report a vulnerability”，提供：
 
 - 受影响的 package、commit 和运行环境；
 - 最小复现步骤或 proof of concept；
