@@ -1,0 +1,40 @@
+## 1. Issue, OpenSpec, and Initial PR
+
+- [x] 1.1 Confirm issue #4 owns only framework-neutral runtime behavior.
+- [x] 1.2 Add the OpenSpec proposal, design, tasks, and specification.
+- [x] 1.3 Validate the change with OpenSpec strict validation.
+- [x] 1.4 Create the change PR with OpenSpec artifacts before implementation
+  and continue implementation on the same branch.
+
+## 2. Runtime Ports and Contracts
+
+- [x] 2.1 Define model, tool, execution, storage, clock, and telemetry ports.
+- [x] 2.2 Define JSON-compatible messages, tool calls, errors, events, state,
+  and run records.
+- [x] 2.3 Define cancellation and runtime failure categories.
+- [x] 2.4 Export only public runtime contracts from the package entrypoint.
+
+## 3. Reference Runtime
+
+- [x] 3.1 Implement the reference runtime loop.
+- [x] 3.2 Persist state after each completed step.
+- [x] 3.3 Implement resume from persisted state.
+- [x] 3.4 Handle text, tool-call, structured-output, cancellation, and failure
+  paths deterministically.
+
+## 4. Test Kit and Conformance
+
+- [x] 4.1 Add scripted model, in-memory store, deterministic clock, and
+  recording telemetry.
+- [x] 4.2 Add a reusable conformance runner that accepts an `AgentRuntime`.
+- [x] 4.3 Run the conformance runner against the reference runtime.
+- [x] 4.4 Add focused failure-category and resume tests.
+- [x] 4.5 Add port-failure cases and exact event step-index assertions.
+
+## 5. Verification and Review
+
+- [x] 5.1 Run `bun install --frozen-lockfile` and `bun run validate`.
+- [x] 5.2 Run OpenSpec strict validation.
+- [x] 5.3 Read back the PR and record AI review findings and resolution.
+- [x] 5.4 Update the PR body with commands, results, and deferred framework
+  adapter work.
