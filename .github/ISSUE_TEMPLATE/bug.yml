@@ -1,0 +1,33 @@
+name: Bug
+description: 报告可复现的异常行为。
+labels:
+  - bug
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: 说明预期行为、实际行为和最小复现步骤。
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Version and environment
+      description: 提供 commit、OS、runtime 和相关工具版本。
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / error output
+      description: 以文本粘贴最小相关日志，并移除 token、内部地址和个人信息。
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: 我已搜索现有 issue 和 Discussions，这不是重复问题。
+          required: true

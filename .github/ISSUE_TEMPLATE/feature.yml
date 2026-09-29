@@ -1,0 +1,43 @@
+name: Feature
+description: 提议一个有单一问题、边界和可核验验收的变更。
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题
+      description: 当前无法完成什么？谁受到影响？引用 issue、失败运行、PR 或文档。
+    validations:
+      required: true
+  - type: textarea
+    id: direction
+    attributes:
+      label: 建议方向
+      description: 说明目标和任何方案必须满足的原则，不预先锁死 implementation design。
+    validations:
+      required: true
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: 非目标
+      description: 明确延期哪些决定，以及它们将在哪里处理。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 使用可由 non-author 独立检查的 checkbox。
+      value: |
+        - [ ] <observable behavior or artifact>
+        - [ ] <command or test that can be independently run>
+    validations:
+      required: true
+  - type: textarea
+    id: related
+    attributes:
+      label: 关联工作
+      description: 每个链接说明它在问题中的角色，例如 recurrence evidence、prior attempt 或 constraint。
+    validations:
+      required: true

@@ -1,5 +1,8 @@
 # Repository Rules
 
+- Write collaborator-facing issues, pull requests, and review comments in
+  Chinese unless the request or repository policy says otherwise. Keep paths,
+  commands, code identifiers, and error messages in their original spelling.
 - `main` changes through pull requests. Keep each pull request within one
   declared scope and link the issue it resolves.
 - Contract-class changes require a converging GitHub issue and an OpenSpec
