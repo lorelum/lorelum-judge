@@ -3,7 +3,8 @@
 - [x] 1.1 Confirm issue #4 owns only framework-neutral runtime behavior.
 - [x] 1.2 Add the OpenSpec proposal, design, tasks, and specification.
 - [x] 1.3 Validate the change with OpenSpec strict validation.
-- [ ] 1.4 Create the initial PR with OpenSpec artifacts only.
+- [x] 1.4 Create the change PR with OpenSpec artifacts before implementation
+  and continue implementation on the same branch.
 
 ## 2. Runtime Ports and Contracts
 
@@ -28,6 +29,7 @@
 - [x] 4.2 Add a reusable conformance runner that accepts an `AgentRuntime`.
 - [x] 4.3 Run the conformance runner against the reference runtime.
 - [x] 4.4 Add focused failure-category and resume tests.
+- [x] 4.5 Add port-failure cases and exact event step-index assertions.
 
 ## 5. Verification and Review
 
