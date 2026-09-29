@@ -1,9 +1,8 @@
 version: 2
 updates:
-  - package-ecosystem: bun
-    directory: /
-    schedule:
-      interval: weekly
+  # Re-enable the Bun ecosystem after Dependabot supports bun.lock version 2.
+  # Bun 1.4.2 writes lockfileVersion 2, while the current Bun updater supports
+  # only version 1 and fails every scheduled update.
   - package-ecosystem: github-actions
     directory: /
     schedule:
