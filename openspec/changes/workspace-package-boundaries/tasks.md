@@ -7,27 +7,27 @@
 
 ## 2. Core Package Boundaries
 
-- [ ] 2.1 Add `protocol`, `runtime`, `judge`, `workflow`, `testing`, and
+- [x] 2.1 Add `protocol`, `runtime`, `judge`, `workflow`, `testing`, and
   `adapters` package manifests.
-- [ ] 2.2 Add package READMEs, no-op public entrypoints, and local TypeScript
+- [x] 2.2 Add package READMEs, no-op public entrypoints, and local TypeScript
   configuration.
-- [ ] 2.3 Add the `apps/cli` ownership boundary without CLI behavior.
-- [ ] 2.4 Document the allowed dependency graph and deferred package names.
+- [x] 2.3 Add the `apps/cli` ownership boundary without CLI behavior.
+- [x] 2.4 Document the allowed dependency graph and deferred package names.
 
 ## 3. Import Enforcement
 
-- [ ] 3.1 Add a deterministic workspace package scanner.
-- [ ] 3.2 Reject relative imports that cross package boundaries.
-- [ ] 3.3 Reject undeclared or disallowed workspace dependencies.
-- [ ] 3.4 Add the checker to the root `validate` command.
-- [ ] 3.5 Add focused tests for the dependency policy.
+- [x] 3.1 Add a deterministic workspace package scanner.
+- [x] 3.2 Reject relative imports that cross package boundaries.
+- [x] 3.3 Reject undeclared or disallowed workspace dependencies.
+- [x] 3.4 Add the checker to the root `validate` command.
+- [x] 3.5 Add focused tests for the dependency policy.
 
 ## 4. Verification and Review
 
-- [ ] 4.1 Run `bun install --frozen-lockfile`.
-- [ ] 4.2 Run `bun run check:layers` and `bun run validate`.
-- [ ] 4.3 Run OpenSpec strict validation.
-- [ ] 4.4 Exercise one deliberate illegal import and confirm non-zero exit.
+- [x] 4.1 Run `bun install --frozen-lockfile`.
+- [x] 4.2 Run `bun run check:layers` and `bun run validate`.
+- [x] 4.3 Run OpenSpec strict validation.
+- [x] 4.4 Exercise one deliberate illegal import and confirm non-zero exit.
 - [ ] 4.5 Read back the PR and record AI review findings and resolution.
 
 ## 5. Final Gate
