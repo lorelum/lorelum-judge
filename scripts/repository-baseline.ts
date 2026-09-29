@@ -23,6 +23,29 @@ const requiredFiles = [
 
 const requiredValidationSteps = ["bun install --frozen-lockfile", "bun run validate"] as const;
 
+export function validateBunVersionConsistency(
+  packageManager: string | undefined,
+  workflow: string,
+): readonly string[] {
+  const failures: string[] = [];
+  const workflowMatch = /^\s*bun-version:\s*["']?([^"'\s]+)["']?\s*$/m.exec(workflow);
+  const workflowVersion = workflowMatch?.[1];
+
+  if (workflowVersion === undefined) {
+    failures.push("validate workflow must pin bun-version");
+    return failures;
+  }
+
+  const expectedPackageManager = `bun@${workflowVersion}`;
+  if (packageManager !== expectedPackageManager) {
+    failures.push(
+      `package.json packageManager must match validate workflow: expected ${expectedPackageManager}`,
+    );
+  }
+
+  return failures;
+}
+
 export function validateRepository(): readonly string[] {
   const failures: string[] = [];
 
@@ -33,16 +56,15 @@ export function validateRepository(): readonly string[] {
   }
 
   const manifestPath = join(repositoryRoot, "package.json");
-  if (existsSync(manifestPath)) {
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
-      packageManager?: string;
-      scripts?: Record<string, string>;
-      workspaces?: string[];
-    };
+  const manifest = existsSync(manifestPath)
+    ? (JSON.parse(readFileSync(manifestPath, "utf8")) as {
+        packageManager?: string;
+        scripts?: Record<string, string>;
+        workspaces?: string[];
+      })
+    : undefined;
 
-    if (manifest.packageManager !== "bun@1.4.2") {
-      failures.push("package.json must pin packageManager to bun@1.4.2");
-    }
+  if (manifest !== undefined) {
     if (manifest.scripts?.validate === undefined) {
       failures.push("package.json must define the validate script");
     }
@@ -62,6 +84,12 @@ export function validateRepository(): readonly string[] {
         failures.push(`validate workflow must run: ${step}`);
       }
     }
+
+    failures.push(...validateBunVersionConsistency(manifest?.packageManager, workflow));
+  }
+
+  if (!existsSync(workflowPath)) {
+    failures.push(...validateBunVersionConsistency(manifest?.packageManager, ""));
   }
 
   return failures;
