@@ -27,14 +27,14 @@
 
 - [x] 4.1 Run `bun install --frozen-lockfile`.
 - [x] 4.2 Run every command reachable from `bun run validate`.
-- [ ] 4.3 Read back the issue and PR rendering and confirm headings, lists,
+- [x] 4.3 Read back the issue and PR rendering and confirm headings, lists,
   checkboxes, and code fences survived.
 - [x] 4.4 Confirm the diff contains no product package or historical seed
   migration.
 
 ## 5. Final Gate
 
-- [ ] 5.1 Update the PR body with verbatim commands, results, deferred work, and
+- [x] 5.1 Update the PR body with verbatim commands, results, deferred work, and
   AI-assistance disclosure.
-- [ ] 5.2 Confirm every acceptance criterion in #2 has evidence or an explicit
+- [x] 5.2 Confirm every acceptance criterion in #2 has evidence or an explicit
   unresolved reason.
