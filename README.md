@@ -8,6 +8,21 @@ The repository is currently in foundation development. Protocol,
 measurement-contract, runtime, and workflow packages are added only through
 their own issues and OpenSpec changes.
 
+## Package Boundaries
+
+| Directory | Package | Responsibility |
+| --- | --- | --- |
+| `packages/protocol` | `@lorelum/judge-protocol` | Versioned cross-boundary contracts |
+| `packages/runtime` | `@lorelum/judge-runtime` | Framework-neutral runtime and ports |
+| `packages/judge` | `@lorelum/judge` | Judge domain and measurement workflows |
+| `packages/workflow` | `@lorelum/judge-workflow` | Planning, implementation, revision, and delivery |
+| `packages/testing` | `@lorelum/judge-testing` | Deterministic consumer test kit |
+| `packages/adapters` | `@lorelum/judge-adapters` | Provider-neutral environment adapters |
+| `apps/cli` | `@lorelum/judge-cli` | Command-line application boundary |
+
+The dependency graph and import rules are documented in
+`docs/architecture/repository-layout.md` and enforced by `bun run check:layers`.
+
 ## Development
 
 ```sh
