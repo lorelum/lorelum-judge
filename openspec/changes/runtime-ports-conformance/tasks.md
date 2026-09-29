@@ -33,6 +33,6 @@
 
 - [x] 5.1 Run `bun install --frozen-lockfile` and `bun run validate`.
 - [x] 5.2 Run OpenSpec strict validation.
-- [ ] 5.3 Read back the PR and record AI review findings and resolution.
-- [ ] 5.4 Update the PR body with commands, results, and deferred framework
+- [x] 5.3 Read back the PR and record AI review findings and resolution.
+- [x] 5.4 Update the PR body with commands, results, and deferred framework
   adapter work.
