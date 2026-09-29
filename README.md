@@ -23,6 +23,11 @@ their own issues and OpenSpec changes.
 The dependency graph and import rules are documented in
 `docs/architecture/repository-layout.md` and enforced by `bun run check:layers`.
 
+## Architecture Review
+
+Start with `docs/architecture/README.md` for the framework survey, directory
+survey, design rationale, and the external review checklist.
+
 ## Development
 
 ```sh
