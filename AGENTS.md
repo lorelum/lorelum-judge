@@ -9,6 +9,10 @@
   change before implementation. This includes public schemas, package
   interfaces, runtime contracts, evaluation semantics, persisted records, and
   pipeline gates.
+- A contract-class change may begin with an OpenSpec-only commit, but
+  implementation, verification, and task updates continue on the same branch
+  and pull request. Do not create a second implementation pull request for the
+  same change.
 - Contained documentation or tooling fixes that do not alter contract behavior
   may use a direct pull request. The body must state the root cause, fix
   boundary, and exact verification.

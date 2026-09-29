@@ -4,8 +4,8 @@
 - [x] 1.2 Add the OpenSpec proposal, design, tasks, and specification.
 - [x] 1.3 Validate the change with the repository's OpenSpec validation path or,
   before tooling exists, a documented structural check.
-- [x] 1.4 Create the initial PR with OpenSpec artifacts and process constraints
-  only.
+- [x] 1.4 Create the change PR with OpenSpec artifacts before implementation
+  and continue implementation on the same branch.
 
 ## 2. Root Workspace and Tooling
 
