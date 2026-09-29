@@ -28,10 +28,10 @@
 - [x] 4.2 Run `bun run check:layers` and `bun run validate`.
 - [x] 4.3 Run OpenSpec strict validation.
 - [x] 4.4 Exercise one deliberate illegal import and confirm non-zero exit.
-- [ ] 4.5 Read back the PR and record AI review findings and resolution.
+- [x] 4.5 Read back the PR and record AI review findings and resolution.
 
 ## 5. Final Gate
 
-- [ ] 5.1 Update the PR body with commands, results, deferred work, and
+- [x] 5.1 Update the PR body with commands, results, deferred work, and
   verification evidence.
-- [ ] 5.2 Confirm every acceptance criterion in #3 has evidence.
+- [x] 5.2 Confirm every acceptance criterion in #3 has evidence.
