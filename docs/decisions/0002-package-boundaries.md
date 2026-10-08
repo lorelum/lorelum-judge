@@ -28,8 +28,8 @@ The neutral runtime lives in `packages/runtime`. A framework implementation is
 added only when it is actually evaluated or supported. The framework SDK must
 not enter protocol, judge domain rules, or persisted artifacts.
 
-Alternative rejected: put adapters in `packages/adapters`. This would make one
-package carry every framework dependency and release cadence.
+Alternative rejected: put every framework implementation in one shared package.
+This would make one package carry every framework dependency and release cadence.
 
 ### Revision workflow is a separate package
 
@@ -53,9 +53,9 @@ public API before consumers exist.
 
 ### Provider adapters split by SDK
 
-`packages/adapters` owns provider-neutral infrastructure. Concrete SDKs use
-packages such as `provider-openai` and `provider-anthropic`, created when a real
-integration exists.
+No provider-neutral adapter package exists until a real implementation and
+consumer exist (#22). Concrete SDKs use packages such as `provider-openai` and
+`provider-anthropic`, created when a real integration exists.
 
 Alternative rejected: start with one package per provider or one package for
 all providers. One package per provider before implementation creates unused

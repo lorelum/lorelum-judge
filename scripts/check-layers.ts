@@ -48,27 +48,6 @@ const corePolicies: Readonly<Record<string, PackageDependencyPolicy>> = {
     runtime: ["@lorelum/judge-protocol", "@lorelum/judge-runtime", "@lorelum/judge"],
     test: ["@lorelum/judge-protocol", "@lorelum/judge-runtime", "@lorelum/judge"],
   },
-  "@lorelum/judge-adapters": {
-    runtime: ["@lorelum/judge-protocol", "@lorelum/judge-runtime"],
-    test: ["@lorelum/judge-protocol", "@lorelum/judge-runtime", "@lorelum/judge-testing"],
-  },
-  "@lorelum/judge-cli": {
-    runtime: [
-      "@lorelum/judge-protocol",
-      "@lorelum/judge-runtime",
-      "@lorelum/judge",
-      "@lorelum/judge-workflow",
-      "@lorelum/judge-adapters",
-    ],
-    test: [
-      "@lorelum/judge-protocol",
-      "@lorelum/judge-runtime",
-      "@lorelum/judge",
-      "@lorelum/judge-workflow",
-      "@lorelum/judge-adapters",
-      "@lorelum/judge-testing",
-    ],
-  },
 };
 
 function policyFor(packageName: string): PackageDependencyPolicy | undefined {

@@ -18,8 +18,6 @@ runtime  -> protocol
 judge    -> protocol, runtime
 workflow -> protocol, runtime, judge
 testing  -> protocol, runtime, judge
-adapters -> protocol, runtime
-cli      -> protocol, runtime, judge, workflow, adapters
 ```
 
 `scripts/check-layers.ts` validates these edges, requires declared
@@ -62,16 +60,6 @@ does not redefine measurement semantics.
 Deterministic consumer helpers. It is a separate private package so production
 packages cannot acquire a hidden runtime dependency on test fixtures.
 
-### Adapters
-
-Provider-neutral transport, normalization, retry, usage, streaming, storage, and
-execution infrastructure. Concrete SDKs remain in `provider-*` packages.
-
-### CLI
-
-Command parsing, configuration assembly, workflow invocation, rendering, and
-process exit behavior. It contains no new domain semantics.
-
 ## Initial Build Order
 
 1. Repository bootstrap and package boundaries.
@@ -80,7 +68,7 @@ process exit behavior. It contains no new domain semantics.
 4. Judge domain rules, rubric compilation, evidence, calibration, and gate.
 5. Engineering workflow and deterministic test kit.
 6. Provider, execution, storage, and benchmark adapters.
-7. CLI usage and end-to-end examples.
+7. End-to-end usage examples.
 
 ## Framework Rule
 

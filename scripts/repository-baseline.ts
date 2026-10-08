@@ -68,11 +68,8 @@ export function validateRepository(): readonly string[] {
     if (manifest.scripts?.validate === undefined) {
       failures.push("package.json must define the validate script");
     }
-    if (
-      manifest.workspaces?.includes("packages/*") !== true ||
-      manifest.workspaces.includes("apps/*") !== true
-    ) {
-      failures.push("package.json must declare packages/* and apps/* workspaces");
+    if (manifest.workspaces?.includes("packages/*") !== true) {
+      failures.push("package.json must declare the packages/* workspace");
     }
   }
 

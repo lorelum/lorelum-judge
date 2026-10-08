@@ -11,25 +11,6 @@
         "typescript": "7.0.2",
       },
     },
-    "apps/cli": {
-      "name": "@lorelum/judge-cli",
-      "version": "0.0.0",
-      "dependencies": {
-        "@lorelum/judge": "workspace:*",
-        "@lorelum/judge-adapters": "workspace:*",
-        "@lorelum/judge-protocol": "workspace:*",
-        "@lorelum/judge-runtime": "workspace:*",
-        "@lorelum/judge-workflow": "workspace:*",
-      },
-    },
-    "packages/adapters": {
-      "name": "@lorelum/judge-adapters",
-      "version": "0.0.0",
-      "dependencies": {
-        "@lorelum/judge-protocol": "workspace:*",
-        "@lorelum/judge-runtime": "workspace:*",
-      },
-    },
     "packages/judge": {
       "name": "@lorelum/judge",
       "version": "0.0.0",
@@ -88,10 +69,6 @@
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.5.14", "", { "os": "win32", "cpu": "x64" }, "sha512-oJWmBhoHsnhUKIke+0gXDX0mltJrWHA1UyHsrTlXwX0TL64ilVZAo+TYZm97baecV0esBdpzy3k96q+09JaZUQ=="],
 
     "@lorelum/judge": ["@lorelum/judge@workspace:packages/judge"],
-
-    "@lorelum/judge-adapters": ["@lorelum/judge-adapters@workspace:packages/adapters"],
-
-    "@lorelum/judge-cli": ["@lorelum/judge-cli@workspace:apps/cli"],
 
     "@lorelum/judge-protocol": ["@lorelum/judge-protocol@workspace:packages/protocol"],
 

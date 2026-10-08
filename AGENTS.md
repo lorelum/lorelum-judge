@@ -47,8 +47,6 @@ runtime  -> protocol
 judge    -> protocol, runtime
 workflow -> protocol, runtime, judge
 testing  -> protocol, runtime, judge
-adapters -> protocol, runtime
-cli      -> protocol, runtime, judge, workflow, adapters
 ```
 
 可以概括为：
@@ -64,8 +62,6 @@ protocol <- runtime <- judge <- workflow
 | `packages/judge` | task framing、rubric、evidence、measurement、calibration 和 gate domain |
 | `packages/workflow` | planning、implementation、revision、delivery、budget 和 stop condition |
 | `packages/testing` | deterministic model、store、clock、telemetry、fixture 和 conformance |
-| `packages/adapters` | provider-neutral transport、storage、execution 和 normalization |
-| `apps/cli` | 命令解析、配置组装、workflow 调用、渲染和退出码 |
 
 规则：
 
@@ -146,7 +142,7 @@ identity 不一致时，可以 shadow、diagnostic 或明确标记 indeterminate
 - framework-neutral runtime ports、state、event、failure、resume 和 cancel；
 - deterministic test doubles；
 - 18 项 runtime conformance；
-- protocol、judge、workflow、adapters 和 CLI 的边界，部分 package 仍只有 no-op entrypoint。
+- protocol、judge 和 workflow 的边界，部分 package 仍只有 no-op entrypoint。
 
 尚未实现的内容：
 

@@ -20,7 +20,7 @@ describe("workspace package boundaries", () => {
 
   test("keeps production packages independent from the test kit", () => {
     expect(isAllowedDependency("@lorelum/judge", "@lorelum/judge-testing")).toBe(false);
-    expect(isAllowedDependency("@lorelum/judge-cli", "@lorelum/judge-testing")).toBe(false);
+    expect(isAllowedDependency("@lorelum/judge-workflow", "@lorelum/judge-testing")).toBe(false);
   });
 
   test("reserves runtime and provider integration boundaries", () => {
