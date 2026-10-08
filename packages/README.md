@@ -12,7 +12,6 @@ runtime/    @lorelum/judge-runtime
 judge/      @lorelum/judge
 workflow/   @lorelum/judge-workflow
 testing/    @lorelum/judge-testing
-adapters/   @lorelum/judge-adapters
 ```
 
 Framework runtimes use `runtime-*`. Concrete provider SDKs use `provider-*`.

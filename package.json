@@ -9,11 +9,10 @@
     "node": ">=22.0.0"
   },
   "workspaces": [
-    "packages/*",
-    "apps/*"
+    "packages/*"
   ],
   "scripts": {
-    "build": "bun run --filter '@lorelum/judge-protocol' build && bun run --filter '@lorelum/judge-runtime' build && bun run --filter '@lorelum/judge' build && bun run --filter '@lorelum/judge-workflow' build && bun run --filter '@lorelum/judge-testing' build && bun run --filter '@lorelum/judge-adapters' build && bun run --filter '@lorelum/judge-cli' build",
+    "build": "bun run --filter '@lorelum/judge-protocol' build && bun run --filter '@lorelum/judge-runtime' build && bun run --filter '@lorelum/judge' build && bun run --filter '@lorelum/judge-workflow' build && bun run --filter '@lorelum/judge-testing' build",
     "check": "biome check .",
     "check:dist": "bun run scripts/check-dist.ts",
     "check:layers": "bun run scripts/check-layers.ts",
