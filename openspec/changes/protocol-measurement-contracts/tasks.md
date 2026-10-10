@@ -53,6 +53,6 @@
 
 ## 8. Final Gate
 
-- [ ] 8.1 Update the PR body with commands, results, deferred work, and
+- [x] 8.1 Update the PR body with commands, results, deferred work, and
   verification evidence.
-- [ ] 8.2 Confirm every acceptance criterion in #32 has evidence.
+- [x] 8.2 Confirm every acceptance criterion in #32 has evidence.
