@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:calibration-artifact:v1",
+  "title": "CalibrationArtifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "definitionIdentity",
+    "instrumentIdentity",
+    "gatePolicyIdentity",
+    "status"
+  ],
+  "properties": {
+    "schema": { "const": "lorelum.judge.calibration-artifact/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "definitionIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "instrumentIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "gatePolicyIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "status": {
+      "enum": ["diagnostic", "shadow", "provisional", "enforced", "expired", "revoked"]
+    }
+  }
+}

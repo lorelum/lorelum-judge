@@ -12,28 +12,62 @@ const outputDirectory = join(repositoryRoot, "packages/protocol/src/generated");
 const banner =
   "// Generated from src/schemas by scripts/generate-protocol-types.ts. Do not edit.\n";
 
+interface LoadedSchema {
+  readonly file: string;
+  readonly title: string;
+  readonly id: string;
+  readonly schema: Schema;
+}
+
+function loadSchemas(): readonly LoadedSchema[] {
+  return readdirSync(schemaDirectory)
+    .filter((name) => name.endsWith(".schema.json"))
+    .sort()
+    .map((file) => {
+      const parsed: unknown = JSON.parse(readFileSync(join(schemaDirectory, file), "utf8"));
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        !("title" in parsed) ||
+        typeof parsed.title !== "string" ||
+        !("$id" in parsed) ||
+        typeof parsed.$id !== "string"
+      ) {
+        throw new Error(`${file} must be an object with a string title and $id`);
+      }
+      return { file, title: parsed.title, id: parsed.$id, schema: parsed as Schema };
+    });
+}
+
+/** The resolver is handed a file URL whose last segment is the URL-encoded URN. */
+function schemaForReference(
+  byId: ReadonlyMap<string, Schema>,
+  reference: { url: string },
+): Schema | undefined {
+  return byId.get(decodeURIComponent(reference.url.split("/").pop() ?? ""));
+}
+
 async function generate(): Promise<ReadonlyMap<string, string>> {
   const outputs = new Map<string, string>();
-  const files = readdirSync(schemaDirectory)
-    .filter((name) => name.endsWith(".schema.json"))
-    .sort();
+  const schemas = loadSchemas();
+  const byId = new Map(schemas.map((loaded) => [loaded.id, loaded.schema]));
 
-  for (const file of files) {
-    const parsed: unknown = JSON.parse(readFileSync(join(schemaDirectory, file), "utf8"));
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      !("title" in parsed) ||
-      typeof parsed.title !== "string"
-    ) {
-      throw new Error(`${file} must be an object with a string title`);
-    }
-    const title = parsed.title;
-    const schema = parsed as Schema;
+  for (const { file, title, schema } of schemas) {
     const body = await compile(schema, title, {
       bannerComment: banner,
       additionalProperties: false,
       format: false,
+      $refOptions: {
+        resolve: {
+          urn: {
+            order: 1,
+            canRead: (reference: { url: string }) =>
+              schemaForReference(byId, reference) !== undefined,
+            read: (reference: { url: string }) =>
+              JSON.stringify(schemaForReference(byId, reference)),
+          },
+        },
+      },
     });
     outputs.set(`${file.replace(/\.schema\.json$/, "")}.ts`, body);
   }
