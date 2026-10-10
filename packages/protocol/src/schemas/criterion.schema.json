@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "lorelum.judge.criterion/v1",
+  "title": "Criterion",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "kind", "description", "mandatory", "anchors", "evidence"],
+  "properties": {
+    "schema": { "const": "lorelum.judge.criterion/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "kind": { "enum": ["contract", "quality", "comparison"] },
+    "description": { "type": "string", "minLength": 1 },
+    "mandatory": { "type": "boolean" },
+    "source": { "$ref": "#/definitions/source" },
+    "anchors": { "type": "array", "items": { "$ref": "#/definitions/anchor" } },
+    "evidence": { "type": "array", "items": { "$ref": "#/definitions/evidenceSelector" } }
+  },
+  "if": { "properties": { "mandatory": { "const": true } }, "required": ["mandatory"] },
+  "then": {
+    "required": ["source"],
+    "properties": { "source": { "$ref": "#/definitions/source" } }
+  },
+  "definitions": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "ref"],
+      "properties": {
+        "origin": { "enum": ["user", "policy", "contract", "decision"] },
+        "ref": { "type": "string", "minLength": 1 }
+      }
+    },
+    "anchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "description"],
+      "properties": {
+        "verdict": {
+          "enum": ["met", "unmet", "strong", "adequate", "weak", "better", "equivalent", "worse"]
+        },
+        "description": { "type": "string", "minLength": 1 }
+      }
+    },
+    "evidenceSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidenceId", "role"],
+      "properties": {
+        "evidenceId": { "type": "string", "minLength": 1 },
+        "role": { "enum": ["primary", "reference"] }
+      }
+    }
+  }
+}
