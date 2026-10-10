@@ -2,7 +2,7 @@
 
 ## 开发环境
 
-仓库使用 Bun 1.4.2，并在根目录提供唯一验证入口：
+仓库使用 Bun 1.4.2 和 Node 22.21.0（`check:dist` 在 Node ESM 下加载构建产物），并在根目录提供唯一验证入口：
 
 ```sh
 bun install --frozen-lockfile
