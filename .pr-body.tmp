@@ -1,0 +1,75 @@
+## 范围
+
+实现 #30（#6 的第二部分）：`protocol` 的 Criterion、Anchor、EvidenceSelector、Verdict 契约，以及 JSON Schema 校验。本 PR 同时包含 OpenSpec change 的归档（`openspec/specs/protocol-criterion-verdict/`）。
+
+Closes #30
+
+## 改动
+
+- `packages/protocol/src/schemas/{criterion,verdict}.schema.json`：JSON Schema 为权威，`schema` 字段为常量并带版本（`lorelum.judge.criterion/v1`、`lorelum.judge.verdict/v1`）。
+- `packages/protocol/src/generated/`：由 schema 生成的类型，已提交。`scripts/generate-protocol-types.ts` 提供生成与 `--check`（检查过期与孤立文件）；`bun run validate` 新增 `check:protocol-types`。`biome.json` 忽略 `generated`。
+- `packages/protocol/src/criterion.ts`：`validateCriterion`、`validateCriteria`、`validateVerdict`，返回 `{ ok, value | issues }`，issue 为 `{ path, code, message }`，路径统一为 `$.anchors[1].verdict` 形式；不抛异常，不导出 `ajv` 类型。`validateVerdict` 会先校验传入的 criterion。
+- 依赖：`ajv@8.20.0`（`protocol` 运行时）、`json-schema-to-typescript@16.0.0`（根 devDependency），均精确固定。
+- 未改动 runtime 契约。
+
+## 规则
+
+- 有限 verdict：contract（met/unmet）、quality（strong/adequate/weak）、comparison（better/equivalent/worse）；全部类型另允许 `unknown`、`insufficient`。
+- anchors 恰好覆盖该类型的全部决定性 verdict。
+- mandatory criterion 必须有 `source`（user / policy / contract / decision）。
+- 同一 evidence 在一组 criterion 中只能是一个 criterion 的 `primary`，可被任意多个 `reference`；同一 criterion 内一个 evidence id 只能声明一次。
+- 决定性 verdict 必须引用该 criterion 声明过的 evidence；`unknown` / `insufficient` 可无 evidence。
+
+## 验收对照（#30）
+
+| 验收 | 证据 |
+|---|---|
+| mandatory criterion 缺来源时校验失败 | `criterion.test.ts` "mandatory criterion source"；Node ESM 冒烟 |
+| 缺失证据不能被写成失败或零分 | "verdict" 组：`unmet` 无 evidence 返回 `verdict_without_evidence`，`unknown` / `insufficient` 通过 |
+| 同一 evidence 只能有一个 primary | "evidence ownership" 组：两个 primary 返回 `duplicate_primary_evidence`；一个 primary 加多个 reference 通过 |
+| anchors 与允许 verdict 一致 | "criterion anchors" 组；"verdict" 组中 `verdict_not_allowed` |
+| 非法输入返回结构化错误 | "invalid input" 与 "verdict with an unvalidated criterion" 组 |
+| 生成类型过期则 validate 失败 | 临时改 schema 不重新生成，`check:protocol-types` 以 1 退出；放入孤立文件同样以 1 退出；均已还原 |
+| Node ESM dist 可加载 schema 并校验 | 对重建后的 `dist` 实际执行，结果符合 spec |
+| `bun run validate` 通过 | 见下 |
+
+## 验证
+
+```sh
+bun install --frozen-lockfile
+```
+`Checked 38 installs across 61 packages (no changes)`
+
+```sh
+bun run validate
+```
+通过：baseline valid、`Workspace package dependencies are valid.`、`Generated protocol types are up to date.`、`76 pass 0 fail`、`Loaded 5 built package exports in Node ESM.`
+
+```sh
+openspec validate protocol-criterion-verdict --type change --strict
+```
+`Change 'protocol-criterion-verdict' is valid`（归档前）
+
+归档后追加：`openspec validate --specs --strict`，结果见本 PR 最后一个提交。
+
+## 评审
+
+第一轮评审（changes requested）的 7 条意见处理见评论 https://github.com/lorelum/lorelum-judge/pull/31#issuecomment-6095038136：6 条已修复，另 1 条关于 schema 位置，维护者已确认保留在 `packages/protocol/src/schemas/`，不改动。第二轮独立评审未进行。
+
+## 已知限制
+
+- mandatory 缺 `source` 时 `ajv` 产出两条 issue：真正原因，以及它对 `if/then` 的通用包装，未过滤。
+- 生成的类型是可变接口（生成器输出），未做后处理。
+- JSON 指针转义（`~0`、`~1`）的解码逻辑从当前 schema 无法触发，没有对应测试。
+- 未执行 runtime conformance（未改动 runtime 与 testing）。
+- `EvidenceSelector` 只按 id 标识，不含 evidence 状态与 prompt 投影。
+
+## 延期
+
+- #6c：MeasurementDefinition / InstrumentProfile / MeasurementRun。
+- #7：EvidenceBundle、evidence 状态与 prompt 投影。
+- #9：CalibrationArtifact / GatePolicy 语义。
+
+## AI 参与
+
+AI 编写、验证并处理评审意见；第一轮评审由独立 context 完成，第二轮未进行。

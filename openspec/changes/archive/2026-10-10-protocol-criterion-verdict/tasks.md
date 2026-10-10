@@ -50,6 +50,6 @@
 
 ## 7. Final Gate
 
-- [ ] 7.1 Update the PR body with commands, results, deferred work, and
+- [x] 7.1 Update the PR body with commands, results, deferred work, and
   verification evidence.
-- [ ] 7.2 Confirm every acceptance criterion in #30 has evidence.
+- [x] 7.2 Confirm every acceptance criterion in #30 has evidence.
