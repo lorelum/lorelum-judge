@@ -42,7 +42,7 @@ Lorelum Judge 是一个可独立消费的软件工程质量评测代理。它拥
 核心依赖方向为：
 
 ```text
-protocol -> none
+protocol -> no workspace package
 runtime  -> protocol
 judge    -> protocol, runtime
 workflow -> protocol, runtime, judge

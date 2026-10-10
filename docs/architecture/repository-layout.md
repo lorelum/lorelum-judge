@@ -13,7 +13,7 @@ public contracts defined here.
 ## Dependency Graph
 
 ```text
-protocol -> none
+protocol -> no workspace package
 runtime  -> protocol
 judge    -> protocol, runtime
 workflow -> protocol, runtime, judge
