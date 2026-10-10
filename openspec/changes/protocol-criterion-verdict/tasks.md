@@ -39,12 +39,14 @@
 
 ## 6. Verification and Review
 
-- [ ] 6.1 Run `bun install --frozen-lockfile`.
-- [ ] 6.2 Run `bun run validate`.
-- [ ] 6.3 Run `openspec validate protocol-criterion-verdict --type change --strict`.
-- [ ] 6.4 Import the built entrypoint in Node ESM and validate one criterion and
+- [x] 6.1 Run `bun install --frozen-lockfile`.
+- [x] 6.2 Run `bun run validate`.
+- [x] 6.3 Run `openspec validate protocol-criterion-verdict --type change --strict`.
+- [x] 6.4 Import the built entrypoint in Node ESM and validate one criterion and
   one verdict.
-- [ ] 6.5 Read back the PR and record AI review findings and resolution.
+- [x] 6.5 Read back the PR and record AI review findings and resolution.
+  Findings 1 to 6 of the first review were fixed in this change; finding 7's
+  schema location question is left for the maintainer. See the PR body.
 
 ## 7. Final Gate
 

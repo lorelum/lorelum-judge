@@ -27,9 +27,12 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
 - `unknown` and `insufficient` are allowed for every kind and may carry no
   evidence. A decisive verdict must cite evidence the criterion declares.
 - `validateCriteria` rejects two criteria that are primary for the same evidence.
+  Within one criterion an evidence id is declared at most once.
 - `validateCriterion`, `validateCriteria`, and `validateVerdict` return
   `{ ok: true, value }` or `{ ok: false, issues }` with `{ path, code, message }`;
-  they do not throw and expose no validator types.
+  they do not throw and expose no validator types. Paths use one format, for
+  example `$.anchors[1].verdict`. `validateVerdict` validates its criterion first
+  and reports problems with it as `invalid_criterion`.
 
 It does not own model calls, runtime state, filesystem execution, provider SDK
 types, or benchmark fixture conventions. Measurement definitions follow in #6c;

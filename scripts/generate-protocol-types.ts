@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { compile } from "json-schema-to-typescript";
@@ -42,6 +42,13 @@ async function generate(): Promise<ReadonlyMap<string, string>> {
 
 const outputs = await generate();
 
+function orphans(): string[] {
+  if (!existsSync(outputDirectory)) {
+    return [];
+  }
+  return readdirSync(outputDirectory).filter((name) => !outputs.has(name));
+}
+
 if (process.argv.includes("--check")) {
   const stale: string[] = [];
   for (const [name, body] of outputs) {
@@ -50,15 +57,23 @@ if (process.argv.includes("--check")) {
       stale.push(name);
     }
   }
-  if (stale.length > 0) {
+  const extra = orphans();
+  if (stale.length > 0 || extra.length > 0) {
+    const parts = [
+      ...(stale.length > 0 ? [`stale: ${stale.join(", ")}`] : []),
+      ...(extra.length > 0 ? [`orphaned: ${extra.join(", ")}`] : []),
+    ];
     process.stderr.write(
-      `Generated protocol types are stale: ${stale.join(", ")}. Run bun run generate:protocol.\n`,
+      `Generated protocol types are out of date (${parts.join("; ")}). Run bun run generate:protocol.\n`,
     );
     process.exit(1);
   }
   process.stdout.write("Generated protocol types are up to date.\n");
 } else {
   mkdirSync(outputDirectory, { recursive: true });
+  for (const name of orphans()) {
+    rmSync(join(outputDirectory, name));
+  }
   for (const [name, body] of outputs) {
     writeFileSync(join(outputDirectory, name), body);
   }

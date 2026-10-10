@@ -67,7 +67,8 @@ a decisive verdict.
 
 Across a set of criteria, one evidence id MUST be `primary` for at most one
 criterion. Any number of criteria MAY reference it, and criterion ids MUST be
-unique.
+unique. Within one criterion, an evidence id MUST be declared at most once, so a
+criterion cannot list the same evidence as both `primary` and `reference`.
 
 #### Scenario: Two primary owners are rejected
 
@@ -84,6 +85,11 @@ unique.
 
 - **WHEN** two criteria share an id
 - **THEN** validation fails with code `duplicate_criterion`
+
+#### Scenario: Same evidence declared twice in one criterion is rejected
+
+- **WHEN** one criterion lists the same evidence id twice, in any roles
+- **THEN** validation fails with code `duplicate_evidence`
 
 ### Requirement: A verdict cites only declared evidence
 
@@ -107,6 +113,11 @@ or `reference`.
   against
 - **THEN** validation fails with code `criterion_mismatch`
 
+#### Scenario: Unvalidated criterion does not throw
+
+- **WHEN** `validateVerdict` receives a criterion that is not a valid criterion
+- **THEN** it returns `ok: false` with code `invalid_criterion` and does not throw
+
 ### Requirement: Validation returns values and exposes no validator types
 
 Validation MUST NOT throw for invalid input. It MUST return `ok: true` with the
@@ -118,14 +129,30 @@ third-party validator type MUST appear in the public API.
 - **WHEN** validation receives a non-object value
 - **THEN** it returns `ok: false` and does not throw
 
+### Requirement: Issue paths have one format
+
+Every issue path, whether from schema or semantic validation, MUST use `$` for the
+root, `.name` for properties, and `[n]` for array indexes.
+
+#### Scenario: Schema issue uses bracket indexes
+
+- **WHEN** an anchor at index 1 has an unknown verdict
+- **THEN** the issue path is `$.anchors[1].verdict`
+
 ### Requirement: Generated types match the schemas
 
 The committed TypeScript types MUST be generated from the JSON Schemas, and the
-repository gate MUST fail when they differ from freshly generated output.
+repository gate MUST fail when they differ from freshly generated output or when a
+generated file has no matching schema.
 
 #### Scenario: Stale types fail the gate
 
 - **WHEN** a schema changes and the types are not regenerated
+- **THEN** `bun run validate` exits non-zero
+
+#### Scenario: Orphaned generated file fails the gate
+
+- **WHEN** a generated file remains after its schema is removed
 - **THEN** `bun run validate` exits non-zero
 
 ### Requirement: Built entrypoint validates in Node ESM

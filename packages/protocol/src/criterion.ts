@@ -27,7 +27,9 @@ export type IssueCode =
   | "criterion_mismatch"
   | "verdict_not_allowed"
   | "verdict_without_evidence"
-  | "evidence_not_declared";
+  | "evidence_not_declared"
+  | "duplicate_evidence"
+  | "invalid_criterion";
 
 export interface ValidationIssue {
   readonly path: string;
@@ -43,9 +45,21 @@ const ajv = new Ajv({ allErrors: true, strict: true });
 const checkCriterion = ajv.compile<Criterion>(criterionSchema);
 const checkVerdict = ajv.compile<Verdict>(verdictSchema);
 
+/** Converts an RFC 6901 JSON pointer (as reported by ajv) to `$.a[0].b` form. */
+function pointerToPath(pointer: string): string {
+  if (pointer === "") {
+    return "$";
+  }
+  const segments = pointer
+    .slice(1)
+    .split("/")
+    .map((segment) => segment.replaceAll("~1", "/").replaceAll("~0", "~"));
+  return `$${segments.map((segment) => (/^\d+$/.test(segment) ? `[${segment}]` : `.${segment}`)).join("")}`;
+}
+
 function schemaIssues(errors: readonly ErrorObject[] | null | undefined): ValidationIssue[] {
   return (errors ?? []).map((error) => ({
-    path: error.instancePath === "" ? "$" : `$${error.instancePath.replaceAll("/", ".")}`,
+    path: pointerToPath(error.instancePath),
     code: "schema",
     message: `${error.keyword}: ${error.message ?? "invalid"}`,
   }));
@@ -88,6 +102,18 @@ export function validateCriterion(input: unknown): ValidationResult<Criterion> {
         message: `missing anchor for "${verdict}"`,
       });
     }
+  }
+
+  const declared = new Set<string>();
+  for (const [index, selector] of input.evidence.entries()) {
+    if (declared.has(selector.evidenceId)) {
+      issues.push({
+        path: `$.evidence[${index}]`,
+        code: "duplicate_evidence",
+        message: `evidence "${selector.evidenceId}" is declared more than once`,
+      });
+    }
+    declared.add(selector.evidenceId);
   }
 
   return issues.length === 0 ? { ok: true, value: input } : { ok: false, issues };
@@ -145,7 +171,23 @@ export function validateCriteria(input: unknown): ValidationResult<readonly Crit
   return issues.length === 0 ? { ok: true, value: criteria } : { ok: false, issues };
 }
 
-export function validateVerdict(criterion: Criterion, input: unknown): ValidationResult<Verdict> {
+export function validateVerdict(
+  criterionInput: unknown,
+  input: unknown,
+): ValidationResult<Verdict> {
+  const checkedCriterion = validateCriterion(criterionInput);
+  if (!checkedCriterion.ok) {
+    return {
+      ok: false,
+      issues: checkedCriterion.issues.map((issue) => ({
+        path: `criterion${issue.path.slice(1)}`,
+        code: "invalid_criterion",
+        message: `${issue.code}: ${issue.message}`,
+      })),
+    };
+  }
+  const criterion = checkedCriterion.value;
+
   if (!checkVerdict(input)) {
     return { ok: false, issues: schemaIssues(checkVerdict.errors) };
   }

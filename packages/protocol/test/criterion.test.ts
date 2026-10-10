@@ -127,13 +127,127 @@ describe("mandatory criterion source", () => {
     expect(validateCriterion(criterion({ mandatory: false })).ok).toBe(true);
   });
 
-  test.each(["", "unknown-origin"])("rejects source origin or ref %p", (bad) => {
+  test("rejects an unknown source origin", () => {
     expect(
-      validateCriterion(criterion({ mandatory: true, source: { origin: bad, ref: "x" } })).ok,
+      validateCriterion(
+        criterion({ mandatory: true, source: { origin: "unknown-origin", ref: "x" } }),
+      ).ok,
     ).toBe(false);
+  });
+
+  test("rejects an empty source origin", () => {
     expect(
-      validateCriterion(criterion({ mandatory: true, source: { origin: "user", ref: bad } })).ok,
-    ).toBe(bad === "unknown-origin");
+      validateCriterion(criterion({ mandatory: true, source: { origin: "", ref: "x" } })).ok,
+    ).toBe(false);
+  });
+
+  test("rejects an empty source ref", () => {
+    expect(
+      validateCriterion(criterion({ mandatory: true, source: { origin: "user", ref: "" } })).ok,
+    ).toBe(false);
+  });
+});
+
+describe("issue paths", () => {
+  test("schema issues use the same path format as semantic issues", () => {
+    const result = validateCriterion(
+      criterion({
+        anchors: [
+          { verdict: "met", description: "a" },
+          { verdict: "bogus", description: "b" },
+        ],
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.map((issue) => issue.path)).toContain("$.anchors[1].verdict");
+      for (const issue of result.issues) {
+        expect(issue.path).not.toMatch(/\.\d/);
+      }
+    }
+  });
+
+  test("a top-level schema failure reports the root path", () => {
+    const result = validateCriterion(criterion({ mandatory: true }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.every((issue) => issue.path === "$")).toBe(true);
+    }
+  });
+
+  test("criteria set paths nest the criterion path under its index", () => {
+    const result = validateCriteria([
+      criterion(),
+      criterion({
+        id: "c2",
+        anchors: [
+          { verdict: "met", description: "a" },
+          { verdict: "bogus", description: "b" },
+        ],
+      }),
+    ]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.map((issue) => issue.path)).toContain("$[1].anchors[1].verdict");
+    }
+  });
+});
+
+describe("duplicate evidence in one criterion", () => {
+  test("rejects the same evidence declared as primary and reference", () => {
+    const result = validateCriterion(
+      criterion({
+        evidence: [
+          { evidenceId: "e1", role: "primary" },
+          { evidenceId: "e1", role: "reference" },
+        ],
+      }),
+    );
+    expect(codes(result)).toEqual(["duplicate_evidence"]);
+  });
+
+  test("rejects the same evidence declared twice as primary", () => {
+    const result = validateCriterion(
+      criterion({
+        evidence: [
+          { evidenceId: "e1", role: "primary" },
+          { evidenceId: "e1", role: "primary" },
+        ],
+      }),
+    );
+    expect(codes(result)).toEqual(["duplicate_evidence"]);
+  });
+
+  test("accepts distinct evidence ids", () => {
+    expect(
+      validateCriterion(
+        criterion({
+          evidence: [
+            { evidenceId: "e1", role: "primary" },
+            { evidenceId: "e2", role: "reference" },
+          ],
+        }),
+      ).ok,
+    ).toBe(true);
+  });
+});
+
+describe("verdict with an unvalidated criterion", () => {
+  const inputs: readonly (readonly [string, unknown])[] = [
+    ["null", null],
+    ["undefined", undefined],
+    ["empty object", {}],
+    ["unknown kind", criterion({ kind: "bogus" })],
+  ];
+
+  test.each(inputs)("returns invalid_criterion for %s without throwing", (_name, bad) => {
+    expect(() => validateVerdict(bad, verdict())).not.toThrow();
+    const result = validateVerdict(bad, verdict());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.every((issue) => issue.code === "invalid_criterion")).toBe(true);
+      expect(result.issues.every((issue) => issue.path.startsWith("criterion"))).toBe(true);
+    }
   });
 });
 

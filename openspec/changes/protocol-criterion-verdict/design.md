@@ -69,11 +69,13 @@ by schema version, not by mutating this shape.
 
 ### A verdict may cite only declared evidence
 
-`validateVerdict(criterion, value)` rejects a verdict whose `criterionId` differs,
-whose verdict is outside the kind's allowed set, whose decisive verdict has no
-`evidenceIds`, or that cites an id the criterion did not declare. The last rule
-keeps a verdict from borrowing evidence owned elsewhere without an explicit
-reference.
+`validateVerdict(criterion, value)` first validates `criterion`; an invalid or
+non-object criterion yields issues with code `invalid_criterion` and a path
+prefixed `criterion`, never a thrown error. It then rejects a verdict whose
+`criterionId` differs, whose verdict is outside the kind's allowed set, whose
+decisive verdict has no `evidenceIds`, or that cites an id the criterion did not
+declare. The last rule keeps a verdict from borrowing evidence owned elsewhere
+without an explicit reference.
 
 ### Schemas live under `src/schemas`
 
@@ -94,11 +96,17 @@ Biome. Generated interfaces are mutable; consumers do not write to them.
 ### Errors are values owned by protocol
 
 Validation returns `{ ok: true, value }` or `{ ok: false, issues }`, where an issue
-is `{ path, code, message }`. Schema failures use the `ajv` keyword as `code`;
-semantic failures use protocol codes such as `anchor_mismatch`,
-`duplicate_primary_evidence`, `verdict_not_allowed`, `verdict_without_evidence`,
-`evidence_not_declared`, `criterion_mismatch`, and `duplicate_criterion`. No `ajv`
+is `{ path, code, message }`. Schema failures use the single code `schema`, with
+the `ajv` keyword in `message`; keeping `ajv` vocabulary out of `code` stops the
+validator from leaking into the public API. Semantic failures use protocol codes
+such as `anchor_mismatch`, `duplicate_primary_evidence`, `verdict_not_allowed`,
+`verdict_without_evidence`, `evidence_not_declared`, `criterion_mismatch`,
+`duplicate_criterion`, `duplicate_evidence`, and `invalid_criterion`. No `ajv`
 type is exported. Nothing throws on invalid input.
+
+Every issue path uses one format: `$` for the root, `.name` for properties, and
+`[n]` for array indexes, for example `$.anchors[1].verdict`. JSON pointers from
+the validator are converted, including `~0` and `~1` escapes.
 
 ### Schema identifiers
 
