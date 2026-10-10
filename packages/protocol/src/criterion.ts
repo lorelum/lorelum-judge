@@ -4,6 +4,7 @@ import criterionSchema from "./schemas/criterion.schema.json" with { type: "json
 import verdictSchema from "./schemas/verdict.schema.json" with { type: "json" };
 import {
   compileSchema,
+  guarded,
   schemaIssues,
   type ValidationIssue,
   type ValidationResult,
@@ -31,6 +32,14 @@ function isDecisive(kind: CriterionKind, verdict: VerdictValue): boolean {
 }
 
 export function validateCriterion(input: unknown): ValidationResult<Criterion> {
+  return guarded<ValidationResult<Criterion>>(() => checkCriterionShape(input), failedResult);
+}
+
+function failedResult<T>(issue: ValidationIssue): ValidationResult<T> {
+  return { ok: false, issues: [issue] };
+}
+
+function checkCriterionShape(input: unknown): ValidationResult<Criterion> {
   if (!checkCriterion(input)) {
     return { ok: false, issues: schemaIssues(checkCriterion.errors) };
   }
@@ -81,6 +90,13 @@ export function validateCriterion(input: unknown): ValidationResult<Criterion> {
 }
 
 export function validateCriteria(input: unknown): ValidationResult<readonly Criterion[]> {
+  return guarded<ValidationResult<readonly Criterion[]>>(
+    () => checkCriteriaSet(input),
+    failedResult,
+  );
+}
+
+function checkCriteriaSet(input: unknown): ValidationResult<readonly Criterion[]> {
   if (!Array.isArray(input)) {
     return {
       ok: false,
@@ -136,6 +152,13 @@ export function validateVerdict(
   criterionInput: unknown,
   input: unknown,
 ): ValidationResult<Verdict> {
+  return guarded<ValidationResult<Verdict>>(
+    () => checkVerdictAgainst(criterionInput, input),
+    failedResult,
+  );
+}
+
+function checkVerdictAgainst(criterionInput: unknown, input: unknown): ValidationResult<Verdict> {
   const checkedCriterion = validateCriterion(criterionInput);
   if (!checkedCriterion.ok) {
     return {

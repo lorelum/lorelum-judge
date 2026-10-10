@@ -8,10 +8,13 @@ import {
   instrumentIdentity,
   measurementKey,
   validateCalibration,
+  validateCriteria,
+  validateCriterion,
   validateDefinition,
   validateGatePolicy,
   validateInstrument,
   validateRun,
+  validateVerdict,
 } from "../src/index.js";
 
 const hex = (character: string) => `sha256:${character.repeat(64)}`;
@@ -523,6 +526,15 @@ describe("measurement key", () => {
     expect(measurementKey(definition({ criteria: [] }), instrument(), []).ok).toBe(false);
     expect(measurementKey(definition(), { schema: "x" }, []).ok).toBe(false);
   });
+
+  test.each([null, undefined, 1, "x", {}])("rejects non-array evidence %p", (bad) => {
+    expect(() => measurementKey(definition(), instrument(), bad)).not.toThrow();
+    expect(measurementKey(definition(), instrument(), bad).ok).toBe(false);
+  });
+
+  test("rejects a non-string evidence entry", () => {
+    expect(measurementKey(definition(), instrument(), [1]).ok).toBe(false);
+  });
 });
 
 describe("invalid input never throws", () => {
@@ -557,5 +569,44 @@ describe("invalid input never throws", () => {
     ]) {
       expect(call).not.toThrow();
     }
+  });
+});
+
+describe("hostile input", () => {
+  const hostile = {
+    get schema(): string {
+      throw new Error("boom");
+    },
+  };
+
+  test("a throwing getter yields a structured failure from every entry point", () => {
+    const outcomes = [
+      validateDefinition(hostile),
+      validateInstrument(hostile),
+      validateGatePolicy(hostile),
+      validateCalibration(hostile),
+      definitionIdentity(hostile),
+      instrumentIdentity(hostile),
+      gatePolicyIdentity(hostile),
+      validateCriterion(hostile),
+      validateCriteria([hostile]),
+      validateVerdict(hostile, hostile),
+      validateRun(hostile, instrument(), run()),
+      validateRun(definition(), instrument(), hostile),
+      measurementKey(hostile, instrument(), []),
+    ];
+    for (const outcome of outcomes) {
+      expect(outcome.ok).toBe(false);
+    }
+  });
+
+  test("enforcement degrades to indeterminate for hostile input instead of throwing", () => {
+    const decision = evaluateEnforcement({
+      definition: hostile,
+      instrument: instrument(),
+      gatePolicy: gatePolicy(),
+      calibration: calibration(),
+    });
+    expect(decision).toMatchObject({ enforce: false, reasons: ["invalid_input"] });
   });
 });

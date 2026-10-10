@@ -13,6 +13,7 @@ import definitionSchema from "./schemas/measurement-definition.schema.json" with
 import runSchema from "./schemas/measurement-run.schema.json" with { type: "json" };
 import {
   compileSchema,
+  guarded,
   schemaIssues,
   type ValidationIssue,
   type ValidationResult,
@@ -36,39 +37,57 @@ const checkGatePolicy = compileSchema<GatePolicy>(gatePolicySchema);
 const checkCalibration = compileSchema<CalibrationArtifact>(calibrationSchema);
 const checkRun = compileSchema<MeasurementRun>(runSchema);
 
+function failed<T>(issue: ValidationIssue): ValidationResult<T> {
+  return { ok: false, issues: [issue] };
+}
+
 export function validateDefinition(input: unknown): ValidationResult<MeasurementDefinition> {
-  if (!checkDefinition(input)) {
-    return { ok: false, issues: schemaIssues(checkDefinition.errors) };
-  }
-  const criteria = validateCriteria(input.criteria);
-  if (!criteria.ok) {
-    return {
-      ok: false,
-      issues: criteria.issues.map((issue) => ({
-        ...issue,
-        path: `$.criteria${issue.path.slice(1)}`,
-      })),
-    };
-  }
-  return { ok: true, value: input };
+  return guarded<ValidationResult<MeasurementDefinition>>(() => {
+    if (!checkDefinition(input)) {
+      return { ok: false, issues: schemaIssues(checkDefinition.errors) };
+    }
+    const criteria = validateCriteria(input.criteria);
+    if (!criteria.ok) {
+      return {
+        ok: false,
+        issues: criteria.issues.map((issue) => ({
+          ...issue,
+          path: `$.criteria${issue.path.slice(1)}`,
+        })),
+      };
+    }
+    return { ok: true, value: input };
+  }, failed);
 }
 
 export function validateInstrument(input: unknown): ValidationResult<InstrumentProfile> {
-  return checkInstrument(input)
-    ? { ok: true, value: input }
-    : { ok: false, issues: schemaIssues(checkInstrument.errors) };
+  return guarded<ValidationResult<InstrumentProfile>>(
+    () =>
+      checkInstrument(input)
+        ? { ok: true, value: input }
+        : { ok: false, issues: schemaIssues(checkInstrument.errors) },
+    failed,
+  );
 }
 
 export function validateGatePolicy(input: unknown): ValidationResult<GatePolicy> {
-  return checkGatePolicy(input)
-    ? { ok: true, value: input }
-    : { ok: false, issues: schemaIssues(checkGatePolicy.errors) };
+  return guarded<ValidationResult<GatePolicy>>(
+    () =>
+      checkGatePolicy(input)
+        ? { ok: true, value: input }
+        : { ok: false, issues: schemaIssues(checkGatePolicy.errors) },
+    failed,
+  );
 }
 
 export function validateCalibration(input: unknown): ValidationResult<CalibrationArtifact> {
-  return checkCalibration(input)
-    ? { ok: true, value: input }
-    : { ok: false, issues: schemaIssues(checkCalibration.errors) };
+  return guarded<ValidationResult<CalibrationArtifact>>(
+    () =>
+      checkCalibration(input)
+        ? { ok: true, value: input }
+        : { ok: false, issues: schemaIssues(checkCalibration.errors) },
+    failed,
+  );
 }
 
 function identityIssue(path: string, reason: string): readonly ValidationIssue[] {
@@ -103,6 +122,17 @@ export function gatePolicyIdentity(input: unknown): IdentityOutcome {
  * failure or a zero.
  */
 export function validateRun(
+  definitionInput: unknown,
+  instrumentInput: unknown,
+  input: unknown,
+): ValidationResult<MeasurementRun> {
+  return guarded<ValidationResult<MeasurementRun>>(
+    () => checkRunAgainst(definitionInput, instrumentInput, input),
+    failed,
+  );
+}
+
+function checkRunAgainst(
   definitionInput: unknown,
   instrumentInput: unknown,
   input: unknown,

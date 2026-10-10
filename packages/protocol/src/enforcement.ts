@@ -6,7 +6,7 @@ import {
   validateCalibration,
   validateGatePolicy,
 } from "./measurement.js";
-import type { ValidationIssue } from "./validation.js";
+import { guarded, type ValidationIssue } from "./validation.js";
 
 export type EnforcementReason =
   | "invalid_input"
@@ -41,6 +41,13 @@ export interface EnforcementInput {
  * case degrades as the gate policy declares. Never throws.
  */
 export function evaluateEnforcement(input: EnforcementInput): EnforcementDecision {
+  return guarded<EnforcementDecision>(
+    () => decide(input),
+    () => ({ enforce: false, reasons: ["invalid_input"], degradeTo: "indeterminate" }),
+  );
+}
+
+function decide(input: EnforcementInput): EnforcementDecision {
   const policy = validateGatePolicy(input.gatePolicy);
   const degradeTo: Degradation = policy.ok ? policy.value.onUncalibrated : "indeterminate";
 
@@ -89,7 +96,18 @@ const identityPattern = /^sha256:[0-9a-f]{64}$/;
 export function measurementKey(
   definitionInput: unknown,
   instrumentInput: unknown,
-  evidenceIdentities: readonly string[],
+  evidenceIdentities: unknown,
+): KeyOutcome {
+  return guarded<KeyOutcome>(
+    () => computeKey(definitionInput, instrumentInput, evidenceIdentities),
+    (issue) => ({ ok: false, issues: [issue] }),
+  );
+}
+
+function computeKey(
+  definitionInput: unknown,
+  instrumentInput: unknown,
+  evidenceIdentities: unknown,
 ): KeyOutcome {
   const definition = definitionIdentity(definitionInput);
   if (!definition.ok) {
@@ -112,9 +130,19 @@ export function measurementKey(
     };
   }
 
+  if (!Array.isArray(evidenceIdentities)) {
+    return {
+      ok: false,
+      issues: [{ path: "evidence", code: "schema", message: "type: must be an array" }],
+    };
+  }
+
   const issues: ValidationIssue[] = [];
+  const valid = new Set<string>();
   for (const [index, evidence] of evidenceIdentities.entries()) {
-    if (typeof evidence !== "string" || !identityPattern.test(evidence)) {
+    if (typeof evidence === "string" && identityPattern.test(evidence)) {
+      valid.add(evidence);
+    } else {
       issues.push({
         path: `evidence[${index}]`,
         code: "schema",
@@ -126,7 +154,7 @@ export function measurementKey(
     return { ok: false, issues };
   }
 
-  const evidence = [...new Set(evidenceIdentities)].sort();
+  const evidence = [...valid].sort();
   const result = identityOf("lorelum.judge.measurement-key/v1", {
     definition: definition.identity,
     instrument: instrument.identity,

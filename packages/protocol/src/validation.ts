@@ -59,8 +59,19 @@ export function schemaIssues(errors: readonly ErrorObject[] | null | undefined):
   }));
 }
 
-export function schemaFailure<T>(
-  errors: readonly ErrorObject[] | null | undefined,
-): ValidationResult<T> {
-  return { ok: false, issues: schemaIssues(errors) };
+/**
+ * Runs a check and turns anything it throws into a structured failure. Input can
+ * be hostile, for example an object whose getter throws; the public contract is
+ * that invalid input never throws.
+ */
+export function guarded<R>(run: () => R, failure: (issue: ValidationIssue) => R): R {
+  try {
+    return run();
+  } catch (error) {
+    return failure({
+      path: "$",
+      code: "schema",
+      message: `input could not be read: ${error instanceof Error ? error.message : "unknown error"}`,
+    });
+  }
 }

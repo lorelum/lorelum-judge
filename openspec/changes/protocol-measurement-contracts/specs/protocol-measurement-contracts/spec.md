@@ -168,15 +168,22 @@ the key.
 
 ### Requirement: Validation returns values
 
-Every validation and identity function in this capability MUST return a result
-value and MUST NOT throw for invalid input, using the issue form `{ path, code,
-message }`.
+Every validation, identity, enforcement, and cache-key function in this
+capability, and the criterion functions it builds on, MUST return a result value
+and MUST NOT throw for invalid input, including input whose property access
+throws. Issues use the form `{ path, code, message }`. Enforcement MUST degrade
+to `indeterminate` rather than throw.
 
 #### Scenario: Non-object input
 
 - **WHEN** any function receives `null`, a number, or an array where an object is
   expected
 - **THEN** it returns issues and does not throw
+
+#### Scenario: Input whose property access throws
+
+- **WHEN** a function receives an object whose getter throws
+- **THEN** it returns a structured failure and does not throw
 
 ### Requirement: Referenced schemas resolve and generated types stay current
 
