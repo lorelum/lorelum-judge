@@ -8,7 +8,7 @@
 
 `identityOf(schema, value)` and `canonicalForm(value)` take `unknown` and call `snapshot`. Callers inside the package already pass snapshots, so copying twice costs time but does not change results. Doing it once in the public function means no exported path can skip the copy.
 
-The copy throws. The identity functions catch it and return `{ ok: false, error }`. The error reason is `unsupported` with the path where the copy stopped, which is what a rejected value is. A thrown getter, lone surrogate, cycle, and depth overflow all map to `unsupported`; the path is the closest location the copy reported, or `$` when it has none.
+The copy throws. The identity functions catch it and return `{ ok: false, error }`. The error carries the reason the copy gave: `undefined`, `not_finite`, `bigint`, or `unsupported`, with the path where the copy stopped. A getter that throws, a lone surrogate, a cycle, and a function all map to `unsupported` at the path where the copy stopped: a getter reports the path of the property it reads. Only a stack overflow, which has no location of its own, reports `$`.
 
 ### Keep undefined-valued properties
 

@@ -169,13 +169,30 @@ function copyArray(
         mode === "identity" ? "undefined" : "unsupported",
       );
     }
-    const element = copyValue(value[index], where, ancestors, mode);
+    const element = copyValue(
+      readAt(() => value[index], where),
+      where,
+      ancestors,
+      mode,
+    );
     if (element === undefined) {
       throw new CopyError(where, "undefined is not allowed in an array");
     }
     copy.push(element);
   }
   return copy;
+}
+
+/**
+ * Reads a property. A getter that throws becomes a `CopyError` at the property's path,
+ * keeping the original message, so identity can report where the read failed.
+ */
+function readAt(read: () => unknown, where: string): unknown {
+  try {
+    return read();
+  } catch (error) {
+    throw new CopyError(where, error instanceof Error ? error.message : String(error));
+  }
 }
 
 function isArrayIndex(key: string, length: number): boolean {
@@ -189,7 +206,10 @@ function copyObject(value: object, path: string, ancestors: Set<object>, mode: M
     throw new CopyError(path, "only plain objects and arrays are allowed");
   }
   const copy: Record<string, unknown> = {};
-  for (const key of Reflect.ownKeys(value)) {
+  // Structure first: every key is checked before any value is read, so a defect in this
+  // node's own keys is reported before a defect in one of its children.
+  const keys = Reflect.ownKeys(value);
+  for (const key of keys) {
     if (typeof key === "symbol") {
       throw new CopyError(path, "symbol keys are not allowed");
     }
@@ -200,10 +220,13 @@ function copyObject(value: object, path: string, ancestors: Set<object>, mode: M
     if (loneSurrogate.test(key)) {
       throw new CopyError(`${path}.${key}`, "a lone surrogate is not allowed in a key");
     }
+  }
+  for (const key of keys as string[]) {
+    const where = `${path}.${key}`;
     // The getter, if any, runs exactly once here.
     const copied = copyValue(
-      (value as Record<string, unknown>)[key],
-      `${path}.${key}`,
+      readAt(() => (value as Record<string, unknown>)[key], where),
+      where,
       ancestors,
       mode,
     );

@@ -3,7 +3,6 @@ import type { EvidenceBundle } from "./generated/evidence-bundle.js";
 import type { EvidenceItem } from "./generated/evidence-item.js";
 import type { Verdict } from "./generated/verdict.js";
 import { identityOf } from "./identity.js";
-import type { JsonValue } from "./json.js";
 import type { IdentityOutcome } from "./measurement.js";
 import evidenceBundleSchema from "./schemas/evidence-bundle.schema.json" with { type: "json" };
 import {
@@ -219,7 +218,7 @@ function identifyBundle(input: unknown): IdentityOutcome {
         : { ...item, conflictsWith: sortedBy(item.conflictsWith, (id) => id) },
     ),
   };
-  const result = identityOf(bundle.value.schema, normalized as unknown as JsonValue);
+  const result = identityOf(bundle.value.schema, normalized);
   return result.ok
     ? { ok: true, identity: result.identity }
     : {

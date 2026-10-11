@@ -8,7 +8,7 @@ The copy MUST reject, as a structured failure naming the path: symbol keys; non-
 
 An own property whose value is `undefined` MUST be kept in the copy, so that a validator and an identity function see the input as the caller wrote it.
 
-An identity function MUST report the first rejected value in traversal order, with its path and its reason: `undefined`, `not_finite`, `bigint`, or `unsupported`. Where the copy stops at a location, the path is that location; where a getter throws before any location is known, the path is `$`.
+An identity function MUST report the first rejected value in traversal order, with its path and its reason: `undefined`, `not_finite`, `bigint`, or `unsupported`. A node's own structural defects (a symbol key, a non-enumerable property, an extra array property) are reported before any defect in that node's children. Where the copy stops at a location, the path is that location; where a getter throws before any location is known, the path is `$`.
 
 Properties that exist only on the prototype MUST NOT be validated yet omitted from a hash, and a getter MUST NOT be able to return different data to the validation and to the hash.
 

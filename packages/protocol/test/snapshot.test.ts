@@ -414,6 +414,37 @@ describe("identity functions copy their input", () => {
     expect(measurementKey(definition, instrument, withSymbol).ok).toBe(false);
   });
 
+  test("a throwing getter is reported at the path of the property it reads", () => {
+    const nested = {
+      a: {
+        get b(): number {
+          throw new Error("boom");
+        },
+      },
+    };
+    const outcome = identityOf("x", nested);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error).toEqual({ path: "$.value.a.b", reason: "unsupported" });
+    }
+  });
+
+  test("an array's own extra property is reported before its NaN element", () => {
+    const outcome = identityOf("x", { a: Object.assign([Number.NaN], { note: 1 }) });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error).toEqual({ path: "$.value.a", reason: "unsupported" });
+    }
+  });
+
+  test("an object's symbol key is reported before its bigint child", () => {
+    const outcome = identityOf("x", { a: 1n, [Symbol("s")]: 1 });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error).toEqual({ path: "$.value", reason: "unsupported" });
+    }
+  });
+
   test("a deep input is a failed result", () => {
     let deep: unknown = 1;
     for (let depth = 0; depth < 40000; depth += 1) {
