@@ -109,7 +109,13 @@ function calibration(overrides: Record<string, unknown> = {}): Record<string, un
   };
 }
 
-function codes(result: { ok: boolean; issues?: readonly { code: string }[] }): string[] {
+/** The part of every failed outcome these tests read. */
+interface FailureShape {
+  readonly ok: boolean;
+  readonly issues?: readonly { readonly code: string; readonly message: string }[];
+}
+
+function codes(result: FailureShape): string[] {
   return result.ok ? [] : (result.issues ?? []).map((issue) => issue.code);
 }
 
@@ -137,8 +143,7 @@ describe("identity compatibility", () => {
 });
 
 describe("definition identity", () => {
-  test("is stable for equal content and well formed", () => {
-    expect(id(definitionIdentity(definition()))).toBe(id(definitionIdentity(definition())));
+  test("is well formed", () => {
     expect(id(definitionIdentity(definition()))).toMatch(/^sha256:[0-9a-f]{64}$/);
   });
 
@@ -492,9 +497,8 @@ describe("measurement key", () => {
     return result.key;
   };
 
-  test("is well formed and stable", () => {
+  test("is well formed", () => {
     expect(keyOf([hex("1")])).toMatch(/^sha256:[0-9a-f]{64}$/);
-    expect(keyOf([hex("1")])).toBe(keyOf([hex("1")]));
   });
 
   test("changes with the definition, the instrument, or one evidence identity", () => {
@@ -511,9 +515,9 @@ describe("measurement key", () => {
     expect(keyOf([hex("1"), hex("2")])).toBe(keyOf([hex("2"), hex("1"), hex("1")]));
   });
 
-  test("keeps the key apart from the identity of the same content", () => {
-    const definitionId = id(definitionIdentity(definition()));
-    expect(keyOf([])).not.toBe(definitionId);
+  test("is not the identity of the definition it was built from", () => {
+    expect(keyOf([])).not.toBe(id(definitionIdentity(definition())));
+    expect(keyOf([])).not.toBe(id(instrumentIdentity(instrument())));
   });
 
   test("rejects a malformed evidence identity and returns no key", () => {
@@ -528,8 +532,9 @@ describe("measurement key", () => {
   });
 
   test.each([null, undefined, 1, "x", {}])("rejects non-array evidence %p", (bad) => {
-    expect(() => measurementKey(definition(), instrument(), bad)).not.toThrow();
-    expect(measurementKey(definition(), instrument(), bad).ok).toBe(false);
+    const result = measurementKey(definition(), instrument(), bad);
+    expect(codes(result)).toEqual(["schema"]);
+    expect("key" in result).toBe(false);
   });
 
   test("rejects a non-string evidence entry", () => {
@@ -537,7 +542,7 @@ describe("measurement key", () => {
   });
 });
 
-describe("invalid input never throws", () => {
+describe("non-object input", () => {
   const inputs: readonly (readonly [string, unknown])[] = [
     ["null", null],
     ["undefined", undefined],
@@ -547,28 +552,30 @@ describe("invalid input never throws", () => {
     ["function", () => 1],
   ];
 
-  test.each(inputs)("for %s", (_name, bad) => {
-    for (const call of [
-      () => validateDefinition(bad),
-      () => validateInstrument(bad),
-      () => validateGatePolicy(bad),
-      () => validateCalibration(bad),
-      () => definitionIdentity(bad),
-      () => instrumentIdentity(bad),
-      () => gatePolicyIdentity(bad),
-      () => validateRun(bad, bad, bad),
-      () => validateRun(definition(), instrument(), bad),
-      () =>
-        evaluateEnforcement({
-          definition: bad,
-          instrument: bad,
-          gatePolicy: bad,
-          calibration: bad,
-        }),
-      () => measurementKey(bad, bad, []),
+  test.each(inputs)("%s is reported as a schema issue by every record validator", (_name, bad) => {
+    for (const outcome of [
+      validateDefinition(bad),
+      validateInstrument(bad),
+      validateGatePolicy(bad),
+      validateCalibration(bad),
+      definitionIdentity(bad),
+      instrumentIdentity(bad),
+      gatePolicyIdentity(bad),
     ]) {
-      expect(call).not.toThrow();
+      expect(codes(outcome)).toContain("schema");
+      expect("identity" in outcome).toBe(false);
     }
+  });
+
+  test.each(inputs)("%s is rejected by a run, a key, and enforcement", (_name, bad) => {
+    expect(codes(validateRun(bad, bad, bad))).toContain("schema");
+    expect(codes(validateRun(definition(), instrument(), bad))).toContain("schema");
+    const key = measurementKey(bad, bad, []);
+    expect(key.ok).toBe(false);
+    expect("key" in key).toBe(false);
+    expect(
+      evaluateEnforcement({ definition: bad, instrument: bad, gatePolicy: bad, calibration: bad }),
+    ).toEqual({ enforce: false, reasons: ["invalid_input"], degradeTo: "indeterminate" });
   });
 });
 
@@ -579,34 +586,95 @@ describe("hostile input", () => {
     },
   };
 
-  test("a throwing getter yields a structured failure from every entry point", () => {
-    const outcomes = [
-      validateDefinition(hostile),
-      validateInstrument(hostile),
-      validateGatePolicy(hostile),
-      validateCalibration(hostile),
-      definitionIdentity(hostile),
-      instrumentIdentity(hostile),
-      gatePolicyIdentity(hostile),
-      validateCriterion(hostile),
-      validateCriteria([hostile]),
-      validateVerdict(hostile, hostile),
-      validateRun(hostile, instrument(), run()),
-      validateRun(definition(), instrument(), hostile),
-      measurementKey(hostile, instrument(), []),
+  test("a throwing getter yields a failure carrying the cause from every entry point", () => {
+    const outcomes: readonly (readonly [string, FailureShape])[] = [
+      ["schema", validateDefinition(hostile)],
+      ["schema", validateInstrument(hostile)],
+      ["schema", validateGatePolicy(hostile)],
+      ["schema", validateCalibration(hostile)],
+      ["schema", definitionIdentity(hostile)],
+      ["schema", instrumentIdentity(hostile)],
+      ["schema", gatePolicyIdentity(hostile)],
+      ["schema", validateCriterion(hostile)],
+      ["schema", validateCriteria([hostile])],
+      // An unreadable criterion is reported against the criterion argument.
+      ["invalid_criterion", validateVerdict(hostile, hostile)],
+      ["schema", validateRun(hostile, instrument(), run())],
+      ["schema", validateRun(definition(), instrument(), hostile)],
+      ["schema", measurementKey(hostile, instrument(), [])],
     ];
-    for (const outcome of outcomes) {
+    for (const [code, outcome] of outcomes) {
       expect(outcome.ok).toBe(false);
+      expect(codes(outcome)).toContain(code);
+      expect((outcome.issues ?? []).some((issue) => issue.message.includes("boom"))).toBe(true);
     }
   });
 
-  test("enforcement degrades to indeterminate for hostile input instead of throwing", () => {
+  const policies: readonly (readonly [string, "diagnostic" | "shadow" | "indeterminate"])[] = [
+    ["diagnostic", "diagnostic"],
+    ["shadow", "shadow"],
+    ["indeterminate", "indeterminate"],
+  ];
+
+  test.each(policies)(
+    "enforcement degrades to the %s policy for unreadable and invalid input alike",
+    (onUncalibrated, expected) => {
+      const policy = gatePolicy({ onUncalibrated });
+      const unreadable = evaluateEnforcement({
+        definition: definition(),
+        instrument: instrument(),
+        gatePolicy: policy,
+        calibration: {
+          get status(): string {
+            throw new Error("boom");
+          },
+        },
+      });
+      const invalid = evaluateEnforcement({
+        definition: definition(),
+        instrument: instrument(),
+        gatePolicy: policy,
+        calibration: [],
+      });
+      expect(unreadable).toEqual({
+        enforce: false,
+        reasons: ["invalid_input"],
+        degradeTo: expected,
+      });
+      expect(invalid).toEqual(unreadable);
+    },
+  );
+
+  test.each(policies)(
+    "enforcement keeps the %s policy when the input object itself throws",
+    (onUncalibrated, expected) => {
+      const input = {
+        gatePolicy: gatePolicy({ onUncalibrated }),
+        get definition(): unknown {
+          throw new Error("boom");
+        },
+        instrument: instrument(),
+        calibration: calibration(),
+      };
+      expect(evaluateEnforcement(input)).toEqual({
+        enforce: false,
+        reasons: ["invalid_input"],
+        degradeTo: expected,
+      });
+    },
+  );
+
+  test("enforcement degrades to indeterminate when the gate policy itself is unreadable", () => {
     const decision = evaluateEnforcement({
-      definition: hostile,
+      definition: definition(),
       instrument: instrument(),
-      gatePolicy: gatePolicy(),
+      gatePolicy: hostile,
       calibration: calibration(),
     });
-    expect(decision).toMatchObject({ enforce: false, reasons: ["invalid_input"] });
+    expect(decision).toEqual({
+      enforce: false,
+      reasons: ["invalid_input"],
+      degradeTo: "indeterminate",
+    });
   });
 });

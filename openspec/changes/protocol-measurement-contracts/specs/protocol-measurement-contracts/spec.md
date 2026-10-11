@@ -129,7 +129,9 @@ policy's `onUncalibrated`. It MUST NOT throw.
 #### Scenario: Invalid input does not throw
 
 - **WHEN** a supplied record is not valid
-- **THEN** the result is `enforce: false` with reason `invalid_input`
+- **THEN** the result is `enforce: false` with reason `invalid_input`, and
+  `degradeTo` is the gate policy's `onUncalibrated` when that policy is readable and
+  valid, otherwise `indeterminate`, whether the input is invalid or unreadable
 
 ### Requirement: Gate policy and calibration are minimal shapes
 
@@ -137,7 +139,11 @@ A `GatePolicy` MUST declare `onUncalibrated` as `diagnostic`, `shadow`, or
 `indeterminate`. A `CalibrationArtifact` MUST declare a status of `diagnostic`,
 `shadow`, `provisional`, `enforced`, `expired`, or `revoked`, and the identities of
 the definition, instrument, and gate policy. Neither MUST carry thresholds,
-statistics, or confidence rules in this capability.
+statistics, or confidence rules in this capability. A calibration is bound to the
+definition (which declares evidence ownership through its selectors), the
+instrument, and the gate policy, and NOT to evidence content: a change in an
+evidence artifact does not by itself invalidate an enforced calibration here. That
+binding is deferred to #9 and MUST NOT be assumed by consumers of this capability.
 
 #### Scenario: Unknown status is rejected
 
@@ -148,7 +154,9 @@ statistics, or confidence rules in this capability.
 
 `measurementKey` MUST depend on the definition identity, the instrument identity,
 and the set of evidence identities. Evidence order and duplicates MUST NOT change
-the key.
+the key. The order of criteria, and of evidence selectors within a criterion,
+changes the definition identity and therefore the key; this is the safe direction,
+an extra recalibration rather than a missed one.
 
 #### Scenario: Definition, instrument, or evidence change changes the key
 

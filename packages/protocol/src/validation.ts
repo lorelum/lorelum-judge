@@ -17,8 +17,7 @@ export type IssueCode =
   | "missing_verdict"
   | "duplicate_verdict"
   | "unknown_criterion"
-  | "identity_mismatch"
-  | "invalid_verdict";
+  | "identity_mismatch";
 
 export interface ValidationIssue {
   readonly path: string;

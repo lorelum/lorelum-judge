@@ -38,19 +38,24 @@ export interface EnforcementInput {
 /**
  * Enforcement is allowed only for an `enforced` calibration whose definition,
  * instrument, and gate policy identities all match the ones in use. Every other
- * case degrades as the gate policy declares. Never throws.
+ * case, including invalid or unreadable input, degrades as the gate policy
+ * declares, or to `indeterminate` when no valid gate policy can be read. Never throws.
  */
 export function evaluateEnforcement(input: EnforcementInput): EnforcementDecision {
+  const degradeTo = guarded<Degradation>(
+    () => {
+      const policy = validateGatePolicy(input.gatePolicy);
+      return policy.ok ? policy.value.onUncalibrated : "indeterminate";
+    },
+    () => "indeterminate",
+  );
   return guarded<EnforcementDecision>(
-    () => decide(input),
-    () => ({ enforce: false, reasons: ["invalid_input"], degradeTo: "indeterminate" }),
+    () => decide(input, degradeTo),
+    () => ({ enforce: false, reasons: ["invalid_input"], degradeTo }),
   );
 }
 
-function decide(input: EnforcementInput): EnforcementDecision {
-  const policy = validateGatePolicy(input.gatePolicy);
-  const degradeTo: Degradation = policy.ok ? policy.value.onUncalibrated : "indeterminate";
-
+function decide(input: EnforcementInput, degradeTo: Degradation): EnforcementDecision {
   const definition = definitionIdentity(input.definition);
   const instrument = instrumentIdentity(input.instrument);
   const gate = gatePolicyIdentity(input.gatePolicy);

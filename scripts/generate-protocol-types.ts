@@ -39,12 +39,22 @@ function loadSchemas(): readonly LoadedSchema[] {
     });
 }
 
-/** The resolver is handed a file URL whose last segment is the URL-encoded URN. */
+/**
+ * The resolver is handed a file URL whose path is the URL-encoded URN, possibly
+ * with the working directory in front. Match the schema whose `$id` the path ends
+ * with, so identifiers containing "/" resolve too.
+ */
 function schemaForReference(
   byId: ReadonlyMap<string, Schema>,
   reference: { url: string },
 ): Schema | undefined {
-  return byId.get(decodeURIComponent(reference.url.split("/").pop() ?? ""));
+  const path = decodeURIComponent(reference.url);
+  for (const [id, schema] of byId) {
+    if (path.endsWith(`/${id}`) || path === id) {
+      return schema;
+    }
+  }
+  return undefined;
 }
 
 async function generate(): Promise<ReadonlyMap<string, string>> {
