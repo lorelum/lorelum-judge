@@ -13,8 +13,10 @@ import definitionSchema from "./schemas/measurement-definition.schema.json" with
 import runSchema from "./schemas/measurement-run.schema.json" with { type: "json" };
 import {
   compileSchema,
+  failed,
   guarded,
   schemaIssues,
+  snapshot,
   type ValidationIssue,
   type ValidationResult,
 } from "./validation.js";
@@ -37,12 +39,9 @@ const checkGatePolicy = compileSchema<GatePolicy>(gatePolicySchema);
 const checkCalibration = compileSchema<CalibrationArtifact>(calibrationSchema);
 const checkRun = compileSchema<MeasurementRun>(runSchema);
 
-function failed<T>(issue: ValidationIssue): ValidationResult<T> {
-  return { ok: false, issues: [issue] };
-}
-
-export function validateDefinition(input: unknown): ValidationResult<MeasurementDefinition> {
+export function validateDefinition(raw: unknown): ValidationResult<MeasurementDefinition> {
   return guarded<ValidationResult<MeasurementDefinition>>(() => {
+    const input = snapshot(raw);
     if (!checkDefinition(input)) {
       return { ok: false, issues: schemaIssues(checkDefinition.errors) };
     }
@@ -60,34 +59,31 @@ export function validateDefinition(input: unknown): ValidationResult<Measurement
   }, failed);
 }
 
-export function validateInstrument(input: unknown): ValidationResult<InstrumentProfile> {
-  return guarded<ValidationResult<InstrumentProfile>>(
-    () =>
-      checkInstrument(input)
-        ? { ok: true, value: input }
-        : { ok: false, issues: schemaIssues(checkInstrument.errors) },
-    failed,
-  );
+export function validateInstrument(raw: unknown): ValidationResult<InstrumentProfile> {
+  return guarded<ValidationResult<InstrumentProfile>>(() => {
+    const input = snapshot(raw);
+    return checkInstrument(input)
+      ? { ok: true, value: input }
+      : { ok: false, issues: schemaIssues(checkInstrument.errors) };
+  }, failed);
 }
 
-export function validateGatePolicy(input: unknown): ValidationResult<GatePolicy> {
-  return guarded<ValidationResult<GatePolicy>>(
-    () =>
-      checkGatePolicy(input)
-        ? { ok: true, value: input }
-        : { ok: false, issues: schemaIssues(checkGatePolicy.errors) },
-    failed,
-  );
+export function validateGatePolicy(raw: unknown): ValidationResult<GatePolicy> {
+  return guarded<ValidationResult<GatePolicy>>(() => {
+    const input = snapshot(raw);
+    return checkGatePolicy(input)
+      ? { ok: true, value: input }
+      : { ok: false, issues: schemaIssues(checkGatePolicy.errors) };
+  }, failed);
 }
 
-export function validateCalibration(input: unknown): ValidationResult<CalibrationArtifact> {
-  return guarded<ValidationResult<CalibrationArtifact>>(
-    () =>
-      checkCalibration(input)
-        ? { ok: true, value: input }
-        : { ok: false, issues: schemaIssues(checkCalibration.errors) },
-    failed,
-  );
+export function validateCalibration(raw: unknown): ValidationResult<CalibrationArtifact> {
+  return guarded<ValidationResult<CalibrationArtifact>>(() => {
+    const input = snapshot(raw);
+    return checkCalibration(input)
+      ? { ok: true, value: input }
+      : { ok: false, issues: schemaIssues(checkCalibration.errors) };
+  }, failed);
 }
 
 function identityIssue(path: string, reason: string): readonly ValidationIssue[] {
@@ -135,7 +131,7 @@ export function validateRun(
 function checkRunAgainst(
   definitionInput: unknown,
   instrumentInput: unknown,
-  input: unknown,
+  raw: unknown,
 ): ValidationResult<MeasurementRun> {
   const definition = validateDefinition(definitionInput);
   if (!definition.ok) {
@@ -157,6 +153,7 @@ function checkRunAgainst(
       })),
     };
   }
+  const input = snapshot(raw);
   if (!checkRun(input)) {
     return { ok: false, issues: schemaIssues(checkRun.errors) };
   }

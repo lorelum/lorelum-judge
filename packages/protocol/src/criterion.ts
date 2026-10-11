@@ -4,8 +4,10 @@ import criterionSchema from "./schemas/criterion.schema.json" with { type: "json
 import verdictSchema from "./schemas/verdict.schema.json" with { type: "json" };
 import {
   compileSchema,
+  failed,
   guarded,
   schemaIssues,
+  snapshot,
   type ValidationIssue,
   type ValidationResult,
 } from "./validation.js";
@@ -32,14 +34,20 @@ function isDecisive(kind: CriterionKind, verdict: VerdictValue): boolean {
 }
 
 export function validateCriterion(input: unknown): ValidationResult<Criterion> {
-  return guarded<ValidationResult<Criterion>>(() => checkCriterionShape(input), failedResult);
+  return guarded<ValidationResult<Criterion>>(() => checkCriterionShape(input, false), failed);
 }
 
-function failedResult<T>(issue: ValidationIssue): ValidationResult<T> {
-  return { ok: false, issues: [issue] };
+/**
+ * Validates a criterion that may still be a draft: everything in `validateCriterion`
+ * except that decisive verdicts may lack an anchor. A wrong or repeated anchor, a
+ * duplicate evidence selector, and a mandatory criterion without a source still fail.
+ */
+export function validateCriterionDraft(input: unknown): ValidationResult<Criterion> {
+  return guarded<ValidationResult<Criterion>>(() => checkCriterionShape(input, true), failed);
 }
 
-function checkCriterionShape(input: unknown): ValidationResult<Criterion> {
+function checkCriterionShape(raw: unknown, draft: boolean): ValidationResult<Criterion> {
+  const input = snapshot(raw);
   if (!checkCriterion(input)) {
     return { ok: false, issues: schemaIssues(checkCriterion.errors) };
   }
@@ -65,7 +73,7 @@ function checkCriterionShape(input: unknown): ValidationResult<Criterion> {
     seen.add(anchor.verdict);
   }
   for (const verdict of expected) {
-    if (!seen.has(verdict)) {
+    if (!draft && !seen.has(verdict)) {
       issues.push({
         path: "$.anchors",
         code: "anchor_mismatch",
@@ -90,13 +98,11 @@ function checkCriterionShape(input: unknown): ValidationResult<Criterion> {
 }
 
 export function validateCriteria(input: unknown): ValidationResult<readonly Criterion[]> {
-  return guarded<ValidationResult<readonly Criterion[]>>(
-    () => checkCriteriaSet(input),
-    failedResult,
-  );
+  return guarded<ValidationResult<readonly Criterion[]>>(() => checkCriteriaSet(input), failed);
 }
 
-function checkCriteriaSet(input: unknown): ValidationResult<readonly Criterion[]> {
+function checkCriteriaSet(raw: unknown): ValidationResult<readonly Criterion[]> {
+  const input = snapshot(raw);
   if (!Array.isArray(input)) {
     return {
       ok: false,
@@ -154,11 +160,11 @@ export function validateVerdict(
 ): ValidationResult<Verdict> {
   return guarded<ValidationResult<Verdict>>(
     () => checkVerdictAgainst(criterionInput, input),
-    failedResult,
+    failed,
   );
 }
 
-function checkVerdictAgainst(criterionInput: unknown, input: unknown): ValidationResult<Verdict> {
+function checkVerdictAgainst(criterionInput: unknown, raw: unknown): ValidationResult<Verdict> {
   const checkedCriterion = validateCriterion(criterionInput);
   if (!checkedCriterion.ok) {
     return {
@@ -171,6 +177,7 @@ function checkVerdictAgainst(criterionInput: unknown, input: unknown): Validatio
     };
   }
   const criterion = checkedCriterion.value;
+  const input = snapshot(raw);
 
   if (!checkVerdict(input)) {
     return { ok: false, issues: schemaIssues(checkVerdict.errors) };

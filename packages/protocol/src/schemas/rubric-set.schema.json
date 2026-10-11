@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:rubric-set:v1",
+  "title": "RubricSet",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "status", "contractIdentity", "entries"],
+  "properties": {
+    "schema": { "const": "lorelum.judge.rubric-set/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["proposal", "frozen"] },
+    "contractIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["criterion", "covers", "appliesTo", "role"],
+        "properties": {
+          "criterion": { "$ref": "urn:lorelum:judge:criterion:v1" },
+          "covers": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "appliesTo": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "role": { "enum": ["decisive", "advisory"] }
+        }
+      }
+    }
+  }
+}

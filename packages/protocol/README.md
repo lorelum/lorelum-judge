@@ -75,6 +75,42 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
 - `evidenceBundleIdentity` ignores item order and changes with any content, status,
   or render change. `contentIdentity` is supplied by the caller and is not verified.
 
+## Task contract and rubric
+
+- A `TaskContract` has a `taskClass` (an open string, never `*`), the task `text`, and
+  acceptance items, each with a unique `id`, a `text`, and a `source` that uses the same
+  origins as a criterion. `taskContractIdentity` ignores acceptance order.
+- A `RubricSet` is a `proposal` or `frozen` set of entries. Each entry has a #6
+  `criterion`, the acceptance ids it `covers`, the task classes it `appliesTo` (or `*`
+  alone), and a `role` of `decisive` or `advisory`. `role` is a declaration; it has no
+  gate meaning until #9.
+- A `proposal` may omit anchors but not contradict itself: anchors must be verdicts the kind
+  allows and must not repeat, and evidence ids must not repeat within a criterion. A
+  `frozen` set must also pass every criterion rule, including one primary owner per
+  evidence id. A mandatory criterion needs a source in both states.
+- `validateRubricAgainstContract(rubric, contract)` requires the rubric's
+  `contractIdentity` to match, every covered id to exist, and every entry to apply to the
+  contract's task class. An entry that does not apply is an error, not skipped.
+- A `CompilationReport` is derived, so it is checked:
+  `validateCompilationReport(report, rubric, contract)` requires each acceptance id in
+  exactly one of `covered`, `uncovered`, `unsupported`, `covered` to list exactly the
+  covering criteria, and `merged` to name a criterion that exists and absorbed ids that
+  no longer do. A survivor has one merged record, and an absorbed id goes to one survivor.
+  A gap's `reason` must contain a non-whitespace character. `merged` records are caller
+  supplied and not verified against the proposals, which this package never receives.
+- Input is copied once before it is validated and hashed, so inherited fields and stateful
+  getters cannot make the validated data differ from the hashed data. The copy accepts plain
+  objects and arrays only: own enumerable keys, each value read once, `toJSON` never called.
+  A `Date`, a boxed primitive, a class instance, a function, a bigint, a non-finite number, a
+  lone surrogate, an array hole, and a cycle are rejected, and an `undefined` property is
+  absent. `identityOf` takes already-plain `JsonValue` data and does not copy.
+- `rubricIdentity(rubric, { contract, contextIdentity, instrument, policyIdentity })`
+  changes with the rubric, the contract, the context, the instrument (model, decoding,
+  prompt, runtime, repetitions), or the policy. Entry order does not matter.
+  `contextIdentity` and `policyIdentity` are supplied by the caller and are not verified.
+- Merging is recorded here, not decided. Producing a rubric and a report from a contract
+  is #8b.
+
 It does not own model calls, runtime state, filesystem execution, provider SDK
 types, or benchmark fixture conventions. Prompt compilation, truncation, and
 untrusted-content marking follow in #7b; calibration and gate semantics in #9.
