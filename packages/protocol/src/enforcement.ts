@@ -6,7 +6,7 @@ import {
   validateCalibration,
   validateGatePolicy,
 } from "./measurement.js";
-import { guarded, snapshot, type ValidationIssue } from "./validation.js";
+import { CopyError, guarded, snapshot, type ValidationIssue } from "./validation.js";
 
 export type EnforcementReason =
   | "invalid_input"
@@ -151,12 +151,16 @@ function computeKey(
   try {
     evidenceCopy = snapshot(evidenceIdentities);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const path = error instanceof CopyError ? `evidence${error.path.slice(1)}` : "evidence";
+    const message =
+      error instanceof CopyError
+        ? error.detail
+        : error instanceof Error
+          ? error.message
+          : String(error);
     return {
       ok: false,
-      issues: [
-        { path: "evidence", code: "schema", message: `input could not be read: ${message}` },
-      ],
+      issues: [{ path, code: "schema", message: `input could not be read: ${message}` }],
     };
   }
   if (!Array.isArray(evidenceCopy)) {

@@ -409,6 +409,14 @@ describe("identity functions copy their input", () => {
     expect(measurementKey(definition, instrument, withExtra).ok).toBe(false);
   });
 
+  test("measurementKey names the index of a bad evidence entry", () => {
+    const outcome = measurementKey(definition, instrument, [hex("1"), new Date(0)]);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.issues[0]?.path).toBe("evidence[1]");
+    }
+  });
+
   test("measurementKey rejects an evidence list with a symbol key", () => {
     const withSymbol = Object.assign([hex("1")], { [Symbol("s")]: 1 });
     expect(measurementKey(definition, instrument, withSymbol).ok).toBe(false);
@@ -487,6 +495,17 @@ describe("identity functions copy their input", () => {
       expect(result.issues[0]?.path).toBe("$.text");
       expect(result.issues[0]?.message).toContain("boom");
     }
+  });
+
+  test("an array subclass is rejected by the copy", () => {
+    class Sub extends Array<number> {}
+    expect(() => snapshot(Sub.from([1]))).toThrow("only plain arrays are allowed");
+  });
+
+  test("an array with a null prototype is rejected by the copy", () => {
+    expect(() => snapshot(Object.setPrototypeOf([1], null))).toThrow(
+      "only plain arrays are allowed",
+    );
   });
 
   test("a symbol key is rejected by the copy", () => {

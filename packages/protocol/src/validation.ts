@@ -62,12 +62,15 @@ export type CopyReason = "undefined" | "not_finite" | "bigint" | "unsupported";
 export class CopyError extends Error {
   readonly path: string;
   readonly reason: CopyReason;
+  /** The message without the path, for callers that report the path separately. */
+  readonly detail: string;
 
   constructor(path: string, message: string, reason: CopyReason = "unsupported") {
     super(`${path}: ${message}`);
     this.name = "CopyError";
     this.path = path;
     this.reason = reason;
+    this.detail = message;
   }
 }
 
@@ -86,7 +89,8 @@ type Mode = "strict" | "identity";
  * functions, symbols, bigints, non-finite numbers, lone surrogates (in values and keys),
  * array holes, `undefined` array elements, extra own properties on arrays, symbol keys,
  * non-enumerable own properties, cycles, and any input whose reading throws. Throws
- * `CopyError` for the rejections; a thrown getter propagates as its own error.
+ * `CopyError` for the rejections, including a getter that throws (reported at the
+ * property it reads).
  */
 export function snapshot(input: unknown): unknown {
   return copyValue(input, "$", new Set(), "strict");
@@ -134,6 +138,9 @@ function copyValue(value: unknown, path: string, ancestors: Set<object>, mode: M
   if (ancestors.has(value)) {
     throw new CopyError(path, "a circular reference is not allowed");
   }
+  if (Array.isArray(value) && Object.getPrototypeOf(value) !== Array.prototype) {
+    throw new CopyError(path, "only plain arrays are allowed");
+  }
   ancestors.add(value);
   try {
     return Array.isArray(value)
@@ -157,11 +164,13 @@ function copyArray(
   ancestors: Set<object>,
   mode: Mode,
 ): unknown[] {
+  // The length is read once: the copy must not depend on how often it is asked for it.
+  const length = value.length;
   for (const key of Reflect.ownKeys(value)) {
     if (key === "length") {
       continue;
     }
-    if (typeof key === "symbol" || !isArrayIndex(key, value.length)) {
+    if (typeof key === "symbol" || !isArrayIndex(key, length)) {
       throw new CopyError(path, "an array may only have its elements as own properties");
     }
     if (!Object.getOwnPropertyDescriptor(value, key)?.enumerable) {
@@ -169,7 +178,7 @@ function copyArray(
     }
   }
   const copy: unknown[] = [];
-  for (let index = 0; index < value.length; index += 1) {
+  for (let index = 0; index < length; index += 1) {
     const where = `${path}[${index}]`;
     if (!Object.hasOwn(value, index)) {
       // A hole reads as `undefined` to the identity's traversal, so identity reports it so.
@@ -293,10 +302,16 @@ export function guarded<R>(run: () => R, failure: (issue: ValidationIssue) => R)
   try {
     return run();
   } catch (error) {
+    const detail =
+      error instanceof CopyError
+        ? error.detail
+        : error instanceof Error
+          ? error.message
+          : "unknown error";
     return failure({
       path: error instanceof CopyError ? error.path : "$",
       code: "schema",
-      message: `input could not be read: ${error instanceof Error ? error.message : "unknown error"}`,
+      message: `input could not be read: ${detail}`,
     });
   }
 }
