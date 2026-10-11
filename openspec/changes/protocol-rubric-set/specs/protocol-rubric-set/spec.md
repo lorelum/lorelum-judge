@@ -181,10 +181,16 @@ contract, the context identity, the instrument, or the policy identity changes.
 
 ### Requirement: Input is read once
 
-Each public function MUST read untrusted input into a plain-data snapshot once, using own
-enumerable properties only, and MUST validate, hash, and return that snapshot. Properties
-that exist only on the prototype MUST NOT be validated yet omitted from a hash, and a getter
-MUST NOT be able to return different data to the validation and to the hash.
+Every function in `packages/protocol` that takes untrusted input, namely each validator, each
+identity function, `evaluateEnforcement`, and `measurementKey`, MUST copy that input into plain
+data once and MUST validate, hash, and return the copy. `identityOf` and `canonicalForm` take
+typed `JsonValue` data and are the exception. The copy MUST accept only plain objects and
+arrays, MUST read own enumerable string keys and each value exactly once, and MUST NOT call
+`toJSON`. A property whose value is `undefined` MUST be absent from the copy. A function,
+symbol, bigint, non-finite number, lone surrogate, array hole, `undefined` array element,
+cycle, `Date`, boxed primitive, or class instance MUST be a structured failure naming the path.
+Properties that exist only on the prototype MUST NOT be validated yet omitted from a hash, and
+a getter MUST NOT be able to return different data to the validation and to the hash.
 
 #### Scenario: Inherited fields are rejected
 
@@ -195,6 +201,16 @@ MUST NOT be able to return different data to the validation and to the hash.
 
 - **WHEN** a field is a getter that returns a different value on each read
 - **THEN** the getter is read exactly once and the identity covers the value that was read
+
+#### Scenario: A value is not converted into another type
+
+- **WHEN** a string field holds a `Date` or a boxed `String`, or the input has a `toJSON` method
+- **THEN** validation fails and `toJSON` is not called
+
+#### Scenario: A lone surrogate is invalid everywhere
+
+- **WHEN** a text field contains a lone surrogate
+- **THEN** both validation and the identity function fail
 
 ### Requirement: Validation returns values
 

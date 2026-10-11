@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-
 import {
   definitionIdentity,
   evaluateEnforcement,
@@ -7,6 +6,7 @@ import {
   gatePolicyIdentity,
   instrumentIdentity,
   measurementKey,
+  taskContractIdentity,
   validateCalibration,
   validateCriteria,
   validateCriterion,
@@ -16,9 +16,11 @@ import {
   validateGatePolicy,
   validateInstrument,
   validateRun,
+  validateTaskContract,
   validateVerdict,
   validateVerdictEvidence,
 } from "../src/index.js";
+import { snapshot } from "../src/validation.js";
 
 const hex = (character: string) => `sha256:${character.repeat(64)}`;
 
@@ -182,7 +184,7 @@ describe("a getter is read once", () => {
     expect(outcome).toEqual(evidenceBundleIdentity(bundle));
   });
 
-  test("enforcement compares the calibration with the policy it degrades by", () => {
+  test("enforcement reads input.gatePolicy exactly once", () => {
     let reads = 0;
     const input = {
       definition,
@@ -218,5 +220,106 @@ describe("enforcement reads a policy object once", () => {
     });
     expect(decision).toEqual({ enforce: true });
     expect(reads).toBe(1);
+  });
+});
+
+describe("the copy accepts plain data only", () => {
+  const taskContract = (overrides: Record<string, unknown> = {}) => ({
+    schema: "lorelum.judge.task-contract/v1",
+    id: "t1",
+    taskClass: "cli",
+    text: "Add a --json option",
+    acceptance: [{ id: "a1", text: "requirement", source: { origin: "contract", ref: "AC-1" } }],
+    ...overrides,
+  });
+
+  test("the plain contract is accepted", () => {
+    expect(validateTaskContract(taskContract()).ok).toBe(true);
+  });
+
+  test.each([
+    ["a Date where a string is expected", () => taskContract({ text: new Date(0) })],
+    ["a boxed String", () => taskContract({ text: new String("boxed") })],
+    ["a boxed Number", () => taskContract({ id: new Number(1) })],
+    ["a class instance", () => new (class Holder {})()],
+    ["a Date as the whole input", () => new Date(0)],
+    [
+      "a toJSON that would change the content",
+      () => ({ ...taskContract(), toJSON: () => taskContract({ id: "other" }) }),
+    ],
+    ["an undefined array element", () => taskContract({ acceptance: [undefined] })],
+    ["a NaN", () => taskContract({ text: Number.NaN })],
+    ["a function", () => taskContract({ text: () => "x" })],
+    ["a symbol", () => taskContract({ text: Symbol("x") })],
+    [
+      "an array that only inherits its element",
+      () => {
+        const inherited = new Array(1);
+        Object.setPrototypeOf(inherited, [taskContract().acceptance[0]]);
+        return taskContract({ acceptance: inherited });
+      },
+    ],
+  ])("%s is rejected, not converted", (_name, build) => {
+    const result = validateTaskContract(build());
+    expect(result.ok).toBe(false);
+  });
+
+  test("a toJSON method is never called", () => {
+    let calls = 0;
+    const withToJson = {
+      ...taskContract(),
+      toJSON: () => {
+        calls += 1;
+        return taskContract();
+      },
+    };
+    validateTaskContract(withToJson);
+    expect(calls).toBe(0);
+  });
+
+  test("a lone surrogate is invalid for validation and for the identity alike", () => {
+    const input = taskContract({ text: "\ud800" });
+    expect(validateTaskContract(input).ok).toBe(false);
+    expect(taskContractIdentity(input).ok).toBe(false);
+  });
+
+  test("a key named __proto__ stays an own key and does not become a prototype", () => {
+    const copy = snapshot(JSON.parse('{"__proto__": {"polluted": true}, "id": "x"}')) as object;
+    expect(Object.getPrototypeOf(copy)).toBe(Object.prototype);
+    expect(Object.hasOwn(copy, "__proto__")).toBe(true);
+    expect((copy as { polluted?: boolean }).polluted).toBeUndefined();
+  });
+
+  test("a property that is undefined is absent from the copy", () => {
+    const copy = snapshot({ a: 1, b: undefined }) as object;
+    expect(Object.keys(copy)).toEqual(["a"]);
+  });
+});
+
+describe("snapshot rules that the schemas would not catch", () => {
+  class Holder {
+    a = 1;
+  }
+
+  test("a class instance with valid own fields is rejected", () => {
+    expect(() => snapshot(new Holder())).toThrow("only plain objects and arrays");
+  });
+
+  test("a null-prototype object is accepted and copied", () => {
+    const bare = Object.assign(Object.create(null), { a: 1 });
+    expect(snapshot(bare)).toEqual({ a: 1 });
+  });
+
+  test("an undefined array element is rejected rather than turned into null", () => {
+    expect(() => snapshot([1, undefined])).toThrow("undefined is not allowed in an array");
+  });
+
+  test("a valid class instance cannot pass a schema through its own fields", () => {
+    const instance = Object.assign(new Holder(), {
+      schema: "lorelum.judge.gate-policy/v1",
+      id: "g1",
+      onUncalibrated: "shadow",
+    });
+    expect(validateGatePolicy(instance).ok).toBe(false);
   });
 });

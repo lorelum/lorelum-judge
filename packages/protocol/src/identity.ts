@@ -70,6 +70,10 @@ export function canonicalForm(value: JsonValue): CanonicalResult {
  * Stable identity of a record: sha256 over the canonical form of
  * `{"schema": schema, "value": value}`. The schema identifier keeps different
  * record types from sharing an identity.
+ *
+ * `value` is trusted, already-plain data and is read twice (once to look for
+ * unsupported values, once to canonicalize), so it is not copied here. Untrusted
+ * input goes through `snapshot` first; every validator in this package does that.
  */
 export function identityOf(schema: string, value: JsonValue): IdentityResult {
   const canonical = canonicalForm({ schema, value });

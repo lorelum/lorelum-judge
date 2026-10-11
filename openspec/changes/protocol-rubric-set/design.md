@@ -102,9 +102,15 @@ Validators run on untrusted input, and `ajv` reads inherited properties while `{
 copies only own ones. Validating one view and hashing another lets a contract whose fields
 live on its prototype validate and then hash without them, so two different tasks share an
 identity. A getter that returns different data on each read has the same effect. Each public
-function therefore copies its input once with a JSON round trip (own enumerable properties,
-getters read once) and validates, hashes, and returns the copy. Input that cannot round trip,
-such as a cycle, a bigint, or a throwing `toJSON`, becomes a structured failure.
+function therefore copies its input once and validates, hashes, and returns the copy. The
+copy is a small recursive one, not a JSON round trip: `JSON.stringify` calls `toJSON` and
+turns a `Date` or a boxed primitive into a string, so two different inputs could collide and
+a type check could be bypassed. The copy accepts plain objects and arrays only, reads own
+enumerable string keys, reads each value once, and never calls `toJSON`. A property that is
+`undefined` is absent. A function, symbol, bigint, non-finite number, lone surrogate, array
+hole, `undefined` array element, cycle, `Date`, boxed primitive, or class instance becomes a
+structured failure naming the path. A lone surrogate is rejected here because it would
+otherwise validate and then fail to hash.
 
 ### Errors are values
 

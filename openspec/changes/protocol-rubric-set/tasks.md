@@ -57,4 +57,5 @@
 - [x] 8.10 Make the stateful-contract rubric test able to fail (exactly one read, unconditional identity comparison).
 - [x] 8.11 State that `merged` records are caller-supplied and unverified; verification needs the proposal set (#8b).
 - [x] 8.12 Re-run the independent review on the new commit and record it in the PR.
+- [x] 8.13 Replace the JSON round trip in `snapshot` with a strict plain-data copy (no `toJSON`, no `Date`/boxed/class laundering, no inherited array elements, no lone surrogates, `__proto__` safe); cover the two untested `rubric.ts` entry points; document `identityOf` as trusted-input.
 

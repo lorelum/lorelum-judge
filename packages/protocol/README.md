@@ -98,9 +98,12 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
   no longer do. A survivor has one merged record, and an absorbed id goes to one survivor.
   A gap's `reason` must contain a non-whitespace character. `merged` records are caller
   supplied and not verified against the proposals, which this package never receives.
-- Input is copied once (own properties, getters read once) before it is validated and
-  hashed, so inherited fields and stateful getters cannot make the validated data differ
-  from the hashed data.
+- Input is copied once before it is validated and hashed, so inherited fields and stateful
+  getters cannot make the validated data differ from the hashed data. The copy accepts plain
+  objects and arrays only: own enumerable keys, each value read once, `toJSON` never called.
+  A `Date`, a boxed primitive, a class instance, a function, a bigint, a non-finite number, a
+  lone surrogate, an array hole, and a cycle are rejected, and an `undefined` property is
+  absent. `identityOf` takes already-plain `JsonValue` data and does not copy.
 - `rubricIdentity(rubric, { contract, contextIdentity, instrument, policyIdentity })`
   changes with the rubric, the contract, the context, the instrument (model, decoding,
   prompt, runtime, repetitions), or the policy. Entry order does not matter.

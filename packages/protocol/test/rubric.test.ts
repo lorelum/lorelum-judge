@@ -896,3 +896,52 @@ describe("applicability edge cases", () => {
     ]);
   });
 });
+
+describe("every rubric entry point copies its own argument", () => {
+  const inherit = (value: object): object => Object.create(value);
+  type Wrap = (value: object) => object;
+  const plain: Wrap = (value) => value;
+
+  const cases: readonly (readonly [string, (wrap: Wrap) => Outcome])[] = [
+    ["validateRubricSet", (w) => validateRubricSet(w(rubric(goodEntries())))],
+    [
+      "validateRubricAgainstContract (rubric)",
+      (w) => validateRubricAgainstContract(w(rubric(goodEntries())), contract()),
+    ],
+    [
+      "validateRubricAgainstContract (contract)",
+      (w) => validateRubricAgainstContract(rubric(goodEntries()), w(contract())),
+    ],
+    [
+      "validateCompilationReport (report)",
+      (w) => validateCompilationReport(w(report()), rubric(goodEntries()), contract()),
+    ],
+    [
+      "validateCompilationReport (rubric)",
+      (w) => validateCompilationReport(report(), w(rubric(goodEntries())), contract()),
+    ],
+    ["rubricIdentity (rubric)", (w) => rubricIdentity(w(rubric(goodEntries())), binding())],
+  ];
+
+  test.each(cases)("%s accepts the plain input", (_name, call) => {
+    expect(call(plain).ok).toBe(true);
+  });
+
+  test.each(cases)("%s rejects the same input when its fields are inherited", (_name, call) => {
+    expect(call(inherit).ok).toBe(false);
+  });
+
+  test("a getter on a rubric is read once", () => {
+    let reads = 0;
+    const stateful = {
+      ...rubric(goodEntries()),
+      get id(): string {
+        reads += 1;
+        return reads === 1 ? "first" : "later";
+      },
+    };
+    const result = validateRubricSet(stateful);
+    expect(reads).toBe(1);
+    expect(result.ok && result.value.id).toBe("first");
+  });
+});
