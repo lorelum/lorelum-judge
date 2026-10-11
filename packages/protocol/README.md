@@ -96,11 +96,12 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
   exactly one of `covered`, `uncovered`, `unsupported`, `covered` to list exactly the
   covering criteria, and `merged` to name a criterion that exists and absorbed ids that
   no longer do. A survivor has one merged record, and an absorbed id goes to one survivor.
-  A gap's `reason` must contain a non-whitespace character. `merged` records are caller
+  A gap's `reason` must contain a character that is not white space, control, or format. `merged` records are caller
   supplied and not verified against the proposals, which this package never receives.
 - `excluded` lists proposals the compiler kept out of the rubric, each with `code`
   `not_applicable` or `conflict` and a non-blank `reason`. Its `criterionId`s must be unique,
-  must not be a criterion in the rubric, and must not be absorbed by a `merged` record.
+  must not be a criterion in the rubric, and must not be absorbed by a `merged` record. Ids
+  are compared exactly.
   Like `merged`, it is caller-supplied and not checked against the proposals. A report
   is complete when `uncovered` and `unsupported` are both empty; that is not stored.
 - Input is copied once before it is validated and hashed, so inherited fields and stateful

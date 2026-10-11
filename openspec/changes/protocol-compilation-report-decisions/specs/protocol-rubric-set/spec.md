@@ -2,7 +2,7 @@
 
 ### Requirement: A compilation report agrees with the rubric
 
-A `CompilationReport` MUST have a `contractIdentity` and the lists `covered`, `uncovered`, `unsupported`, `merged`, and `excluded`. `validateCompilationReport` MUST require that: every acceptance id of the contract appears in exactly one of `covered`, `uncovered`, and `unsupported`; an id with covering entries is in `covered` and lists exactly those criterion ids; an id with none is in `uncovered` or `unsupported` with a non-empty `reason`; each `merged` record names a `criterionId` present in the rubric and `mergedFrom` ids absent from it; a criterion id has at most one `merged` record; an absorbed id is not merged into two criteria; and each `excluded` item satisfies the rules in the Excluded requirement below. A `reason` MUST contain a non-whitespace character. A report whose `contractIdentity` differs from the contract's MUST fail with `identity_mismatch`.
+A `CompilationReport` MUST have a `contractIdentity` and the lists `covered`, `uncovered`, `unsupported`, `merged`, and `excluded`. `validateCompilationReport` MUST require that: every acceptance id of the contract appears in exactly one of `covered`, `uncovered`, and `unsupported`; an id with covering entries is in `covered` and lists exactly those criterion ids; an id with none is in `uncovered` or `unsupported` with a non-empty `reason`; each `merged` record names a `criterionId` present in the rubric and `mergedFrom` ids absent from it; a criterion id has at most one `merged` record; an absorbed id is not merged into two criteria; and each `excluded` item satisfies the rules in the Excluded requirement below. A `reason` MUST contain at least one character that is not white space, a control character, or a format character; a reason made only of zero-width or control characters is blank. A report whose `contractIdentity` differs from the contract's MUST fail with `identity_mismatch`.
 
 `merged` and `excluded` records are supplied by the caller and are NOT verified against the proposals they describe: the validator receives only the frozen rubric and the contract. It checks that the records are coherent with the rubric and with each other, and no more.
 
@@ -35,7 +35,7 @@ A `CompilationReport` MUST have a `contractIdentity` and the lists `covered`, `u
 
 ### Requirement: Excluded proposals are recorded
 
-Each `excluded` item MUST have a `criterionId`, a `code` of `not_applicable` or `conflict`, and a non-blank `reason`. The `criterionId` values in `excluded` MUST be unique. A report without an `excluded` field MUST fail schema validation.
+Each `excluded` item MUST have a `criterionId`, a `code` of `not_applicable` or `conflict`, and a non-blank `reason`. The `criterionId` values in `excluded` MUST be unique. Ids are compared exactly, with no trimming or case folding, as elsewhere in the rubric: `c1 ` is a different id from `c1`. A report without an `excluded` field MUST fail schema validation.
 
 #### Scenario: A criterion in the rubric cannot also be excluded
 

@@ -61,7 +61,11 @@
         "properties": {
           "criterionId": { "type": "string", "minLength": 1 },
           "code": { "enum": ["not_applicable", "conflict"] },
-          "reason": { "type": "string", "minLength": 1, "pattern": "\\S" }
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "[^\\p{White_Space}\\p{Cc}\\p{Cf}]"
+          }
         }
       }
     }
@@ -73,7 +77,11 @@
       "required": ["acceptanceId", "reason"],
       "properties": {
         "acceptanceId": { "type": "string", "minLength": 1 },
-        "reason": { "type": "string", "minLength": 1, "pattern": "\\S" }
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "[^\\p{White_Space}\\p{Cc}\\p{Cf}]"
+        }
       }
     }
   }

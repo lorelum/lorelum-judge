@@ -1003,4 +1003,47 @@ describe("compilation report: excluded proposals", () => {
     expect(codes(result)).toEqual(["report_mismatch"]);
     expect(paths(result)).toEqual(["$.excluded[0].criterionId"]);
   });
+
+  test.each([
+    ["a NEL", "\u0085"],
+    ["a zero-width space", "\u200B"],
+    ["a NUL", "\u0000"],
+    ["a BOM", "\uFEFF"],
+    ["a no-break space", "\u00A0"],
+  ])("rejects a reason that is %s only", (_name, reason) => {
+    expect(codes(check(report({ excluded: [excluded("c8", "not_applicable", reason)] })))).toEqual([
+      "schema",
+    ]);
+  });
+
+  test("rejects a blank reason on an uncovered gap with the same rule", () => {
+    const r = report({
+      covered: [{ acceptanceId: "a1", criterionIds: ["c1"] }],
+      uncovered: [{ acceptanceId: "a2", reason: "\u200B" }],
+    });
+    expect(codes(check(r, [entry("c1", ["a1"])]))).toEqual(["schema"]);
+  });
+
+  test("the missing-field rejection comes from the schema, not from a thrown TypeError", () => {
+    const { excluded: _omitted, ...withoutField } = report();
+    const result = check(withoutField);
+    expect(result.ok).toBe(false);
+    expect(
+      result.ok ? "" : (result.issues ?? []).map((issue) => issue.message).join(" "),
+    ).toContain("must have required property 'excluded'");
+  });
+
+  test("rejects an extra property on an excluded item", () => {
+    const result = check(report({ excluded: [{ ...excluded("c8"), note: "extra" }] }));
+    expect(codes(result)).toEqual(["schema"]);
+  });
+
+  test("rejects an empty criterionId", () => {
+    expect(codes(check(report({ excluded: [excluded("")] })))).toEqual(["schema"]);
+  });
+
+  test("compares excluded ids exactly, as the rest of the rubric does", () => {
+    // "c1 " is not the rubric's "c1", so it is not rejected as in-rubric. That is the rule.
+    expect(check(report({ excluded: [excluded("c1 ")] })).ok).toBe(true);
+  });
 });
