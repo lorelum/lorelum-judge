@@ -2,10 +2,11 @@
 
 ### Requirement: The model is told the task class and the matching rule
 
-The system message MUST name the contract's exact `taskClass`, written as a JSON string, and
-MUST state that `appliesTo` must list that class exactly, or `*`, and that matching is exact
-and case-sensitive. Two contracts that differ only in `taskClass` MUST produce different
-system messages.
+The system message MUST name the contract's exact `taskClass`, written as a JSON string with
+every non-ASCII code unit escaped as `\uXXXX`, and MUST state that `appliesTo` must list that
+class exactly, or `*`, and that matching is exact and case-sensitive. Because the escaped text
+is pure ASCII, NFC normalization of the system message cannot change it. Two contracts that
+differ only in `taskClass` MUST produce different system messages.
 
 #### Scenario: Custom task class is named to the model
 
@@ -16,6 +17,12 @@ system messages.
 
 - **WHEN** the `taskClass` contains quotes or newlines
 - **THEN** it appears only as a JSON string literal in the system message
+
+#### Scenario: Non-NFC task class round-trips
+
+- **WHEN** the `taskClass` is not in NFC form (for example `cafe\u0301-cli`)
+- **THEN** a model that echoes the class from the final system message produces an `appliesTo`
+  that matches the contract exactly, and the rubric compiles
 
 ### Requirement: Acceptance criteria are rendered as evidence
 

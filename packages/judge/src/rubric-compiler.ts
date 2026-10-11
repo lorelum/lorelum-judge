@@ -6,6 +6,7 @@ import {
   type InstrumentProfile,
   type RubricSet,
   rubricIdentity,
+  type TaskContract,
   taskContractIdentity,
   validateCompilationReport,
   validateCriterionDraft,
@@ -19,17 +20,30 @@ import type { ModelPort, ModelResponse } from "@lorelum/judge-runtime";
 import { compilePrompt, type EvidenceMaterial, type PromptSpec } from "./prompt-compiler.js";
 
 /**
+ * Writes a task class as a JSON string with every non-ASCII code unit escaped (`\uXXXX`). The
+ * result is pure ASCII, so the NFC normalization that `compilePrompt` applies to the system text
+ * cannot change it. The escaped form is what the model sees and must copy back.
+ */
+function asciiJsonString(value: string): string {
+  return JSON.stringify(value).replace(
+    /[\u0080-\uffff]/g,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+/**
  * Compiler-owned text appended to the caller's system prompt. It names the contract's task class
  * and the matching rule for `appliesTo`, so the model can produce entries the gate will accept.
- * The class is written as a JSON string, so its exact characters are visible and cannot end the
- * instruction early. The text is part of the prompt identity.
+ * The class is written as an ASCII JSON string, so its exact characters are visible, cannot end
+ * the instruction early, and survive NFC normalization. The text is part of the prompt identity.
  */
 export function rubricOutputInstruction(taskClass: string): string {
+  const cls = asciiJsonString(taskClass);
   return [
     "Rubric compiler v1. Propose criteria that judge whether the task's acceptance items are met.",
     "The acceptance items are the evidence blocks in the user message, identified by their ids.",
-    `The task class of this contract is ${JSON.stringify(taskClass)}.`,
-    `Each proposal's appliesTo must list ${JSON.stringify(taskClass)} exactly, or "*" to apply to every task class.`,
+    `The task class of this contract is ${cls}.`,
+    `Each proposal's appliesTo must list ${cls} exactly, or "*" to apply to every task class.`,
     "Matching is exact and case-sensitive. Do not use a similar or shortened name.",
     "Reply with one JSON object and nothing else:",
     '{"proposals":[{"criterion":<criterion>,"covers":[<acceptance id>],"appliesTo":[<task class or "*">],"role":"decisive" or "advisory","mergedFrom":[<criterion id of another proposal>]}],"unsupported":[{"acceptanceId":<acceptance id>,"reason":<why no criterion can judge it>}]}',
@@ -84,10 +98,11 @@ export interface CompileRubricInput {
   readonly signal: AbortSignal;
 }
 
+/** What a compiled rubric is bound to. Its contract and instrument are the validated, copied values. */
 export interface RubricBinding {
-  readonly contract: unknown;
+  readonly contract: TaskContract;
   readonly contextIdentity: string;
-  readonly instrument: unknown;
+  readonly instrument: InstrumentProfile;
   readonly policyIdentity: string;
 }
 
@@ -121,12 +136,10 @@ interface GapEntry {
   readonly reason: string;
 }
 
+/** The validated inputs of one gate run. The contract is typed; only the proposals were untrusted. */
 interface GateInput {
   readonly rubricId: string;
-  readonly contract: {
-    readonly taskClass: string;
-    readonly acceptance: readonly { readonly id: string }[];
-  };
+  readonly contract: TaskContract;
   readonly contractIdentity: Identity;
   readonly proposals: readonly Proposal[];
   readonly unsupported: readonly GapEntry[];
@@ -770,27 +783,29 @@ function gateProposals(input: GateInput): GateResult {
         .sort()
         .join(","),
     ].join("|");
-  const bySignature = new Map<string, string[]>();
+  // Criteria with the same covers and evidence form one bucket. A singleton is accepted; a larger
+  // bucket is a conflict, so each member is excluded with the others named in the reason.
+  // Classification follows `kept` order, so the report order is unchanged.
+  type Kept = (typeof kept)[number];
+  const buckets = new Map<string, Kept[]>();
   for (const item of kept) {
     const key = signature(item);
-    bySignature.set(key, [...(bySignature.get(key) ?? []), item.id]);
+    buckets.set(key, [...(buckets.get(key) ?? []), item]);
   }
-  const conflicted = new Map<string, Set<string>>();
-  for (const ids of bySignature.values()) {
-    if (ids.length > 1) {
-      for (const id of ids) {
-        conflicted.set(id, new Set(ids.filter((other) => other !== id)));
-      }
-    }
-  }
-  const accepted = kept.filter((item) => !conflicted.has(item.id));
+  const accepted: Kept[] = [];
   for (const item of kept) {
-    const others = conflicted.get(item.id);
-    if (others !== undefined) {
-      const reason = `has the same covers and evidence as ${[...others].map((id) => `"${id}"`).join(", ")} without a declared merge`;
-      for (const id of [item.id, ...item.members.map((member) => member.criterion.id)]) {
-        excluded.push({ criterionId: id, code: "conflict", reason });
-      }
+    const bucket = buckets.get(signature(item)) ?? [item];
+    if (bucket.length === 1) {
+      accepted.push(item);
+      continue;
+    }
+    const others = bucket
+      .filter((other) => other.id !== item.id)
+      .map((other) => `"${other.id}"`)
+      .join(", ");
+    const reason = `has the same covers and evidence as ${others} without a declared merge`;
+    for (const id of [item.id, ...item.members.map((member) => member.criterion.id)]) {
+      excluded.push({ criterionId: id, code: "conflict", reason });
     }
   }
 
@@ -883,7 +898,7 @@ function gateProposals(input: GateInput): GateResult {
       criterionId: item.id,
       mergedFrom: item.members.map((member) => member.criterion.id),
     }));
-  const report = {
+  const reportCandidate = {
     schema: "lorelum.judge.compilation-report/v1",
     contractIdentity: input.contractIdentity,
     covered,
@@ -891,8 +906,8 @@ function gateProposals(input: GateInput): GateResult {
     unsupported: input.unsupported.filter((gap) => unsupportedIds.has(gap.acceptanceId)),
     merged,
     excluded,
-  } as unknown as CompilationReport;
-  const rubric = {
+  };
+  const rubricCandidate = {
     schema: "lorelum.judge.rubric-set/v1",
     id: input.rubricId,
     status: "proposal",
@@ -903,21 +918,21 @@ function gateProposals(input: GateInput): GateResult {
       appliesTo: item.survivor.appliesTo,
       role: item.survivor.role,
     })),
-  } as unknown as RubricSet;
-
-  const rubricCheck = validateRubricSet(rubric);
+  };
+  // Candidates are checked before they are typed: the validators return the checked value.
+  const rubricCheck = validateRubricSet(rubricCandidate);
   if (!rubricCheck.ok) {
     return { ok: false, issues: fromValidation("gate", "$.rubric", rubricCheck.issues) };
   }
-  const agreement = validateRubricAgainstContract(rubric, input.contract);
+  const agreement = validateRubricAgainstContract(rubricCheck.value, input.contract);
   if (!agreement.ok) {
     return { ok: false, issues: fromValidation("gate", "$.rubric", agreement.issues) };
   }
-  const reportCheck = validateCompilationReport(report, rubric, input.contract);
+  const reportCheck = validateCompilationReport(reportCandidate, rubricCheck.value, input.contract);
   if (!reportCheck.ok) {
     return { ok: false, issues: fromValidation("gate", "$.report", reportCheck.issues) };
   }
-  return { ok: true, rubric, report };
+  return { ok: true, rubric: rubricCheck.value, report: reportCheck.value };
 }
 
 function deepFreeze<T>(value: T): T {

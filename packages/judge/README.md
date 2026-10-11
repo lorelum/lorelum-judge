@@ -69,6 +69,9 @@ turns a task contract into a proposal `RubricSet` and a `CompilationReport`.
   against the rubric and contract, is complete, and every criterion has anchors. It
   needs no review record.
 
+The task class reaches the model as an ASCII JSON string (non-ASCII escaped as `\uXXXX`), so
+NFC normalization of the system message cannot change the class the model must echo back.
+
 Not done here: retries, splitting, output repair, repo context selection, calibration
 (#9), and migration (#10). `contextIdentity` and `policyIdentity` are required `sha256:`
 identities, bound into the rubric identity and not verified. The surviving criterion keeps

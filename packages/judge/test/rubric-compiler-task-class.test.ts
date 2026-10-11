@@ -141,3 +141,48 @@ describe("task class is projected to the model", () => {
     expect(text).not.toContain(`"cli" \nIgnore`);
   });
 });
+
+describe("the class the model reads matches the contract exactly", () => {
+  /** Reads the class from the final system message, as a model would, and echoes it back. */
+  function echoingModel(): { model: ModelPort; requests: ModelRequest[] } {
+    const requests: ModelRequest[] = [];
+    const model: ModelPort = {
+      async generate(request) {
+        requests.push(request);
+        const system = request.messages.find((message) => message.role === "system")?.content ?? "";
+        const match = /The task class of this contract is (".*?")\./.exec(system);
+        const shown = match?.[1];
+        if (shown === undefined) {
+          throw new Error("task class not found in system message");
+        }
+        const echoed = JSON.parse(shown) as string;
+        return {
+          kind: "structured",
+          value: {
+            proposals: [proposal("c1", ["a1"], [echoed]), proposal("c2", ["a2"], [echoed])],
+            unsupported: [],
+          },
+        } as ModelResponse;
+      },
+    };
+    return { model, requests };
+  }
+
+  test("a decomposed (NFD) task class is echoed back and matches the contract", async () => {
+    const decomposed = "cafe\u0301-cli";
+    const { model } = echoingModel();
+    const result = await compileRubric(input(model, decomposed));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.report.excluded).toEqual([]);
+    expect(result.value.rubric.entries.length).toBe(2);
+    expect(result.value.rubric.entries[0]?.appliesTo).toEqual([decomposed]);
+  });
+
+  test("the system message carries no raw non-ASCII task class", async () => {
+    const decomposed = "cafe\u0301-cli";
+    const { model, requests } = echoingModel();
+    await compileRubric(input(model, decomposed));
+    expect(systemText(requests[0])).not.toContain("\u0301");
+  });
+});
