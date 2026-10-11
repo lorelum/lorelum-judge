@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  canonicalForm,
   definitionIdentity,
   evaluateEnforcement,
   evidenceBundleIdentity,
   gatePolicyIdentity,
+  identityOf,
   instrumentIdentity,
   measurementKey,
   taskContractIdentity,
@@ -290,9 +292,9 @@ describe("the copy accepts plain data only", () => {
     expect((copy as { polluted?: boolean }).polluted).toBeUndefined();
   });
 
-  test("a property that is undefined is absent from the copy", () => {
+  test("a property that is undefined is kept in the copy, as the caller wrote it", () => {
     const copy = snapshot({ a: 1, b: undefined }) as object;
-    expect(Object.keys(copy)).toEqual(["a"]);
+    expect(Object.keys(copy)).toEqual(["a", "b"]);
   });
 });
 
@@ -321,5 +323,86 @@ describe("snapshot rules that the schemas would not catch", () => {
       onUncalibrated: "shadow",
     });
     expect(validateGatePolicy(instance).ok).toBe(false);
+  });
+});
+
+describe("identity functions copy their input", () => {
+  test("a Date is not hashed as its ISO string", () => {
+    const asDate = identityOf("x", new Date(0));
+    expect(asDate.ok).toBe(false);
+    if (!asDate.ok) {
+      expect(asDate.error.reason).toBe("unsupported");
+    }
+  });
+
+  test("a class instance is not hashed as a plain object", () => {
+    class Holder {
+      a = 1;
+    }
+    expect(identityOf("x", new Holder()).ok).toBe(false);
+  });
+
+  test("canonicalForm of a Date is a failed result", () => {
+    expect(canonicalForm(new Date(0)).ok).toBe(false);
+  });
+
+  test("canonicalForm of a throwing getter is a failed result", () => {
+    const hostile = {
+      get a(): number {
+        throw new Error("boom");
+      },
+    };
+    expect(canonicalForm(hostile).ok).toBe(false);
+  });
+
+  test("a throwing getter is a failed result, not a throw", () => {
+    const hostile = {
+      get a(): number {
+        throw new Error("boom");
+      },
+    };
+    expect(identityOf("x", hostile).ok).toBe(false);
+  });
+
+  test("a lone surrogate is a failed result", () => {
+    expect(identityOf("x", { a: "\ud800" }).ok).toBe(false);
+  });
+
+  test("a deep input is a failed result", () => {
+    let deep: unknown = 1;
+    for (let depth = 0; depth < 40000; depth += 1) {
+      deep = [deep];
+    }
+    expect(identityOf("x", deep).ok).toBe(false);
+  });
+
+  test("an undefined property is reported with reason undefined", () => {
+    const outcome = identityOf("x", { a: 1, b: undefined });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error).toEqual({ path: "$.value.b", reason: "undefined" });
+    }
+  });
+
+  test("a schema with an extra undefined key is rejected by the validator", () => {
+    expect(validateGatePolicy({ ...gatePolicy, extra: undefined }).ok).toBe(false);
+  });
+
+  test("a symbol key is rejected by the copy", () => {
+    expect(() => snapshot({ [Symbol("s")]: 1 })).toThrow("symbol keys are not allowed");
+  });
+
+  test("a non-enumerable own property is rejected by the copy", () => {
+    const hidden = Object.defineProperty({ a: 1 }, "b", { value: 2, enumerable: false });
+    expect(() => snapshot(hidden)).toThrow("only own enumerable properties");
+  });
+
+  test("a lone-surrogate key is rejected by the copy", () => {
+    expect(() => snapshot({ "\ud800": 1 })).toThrow("a lone surrogate is not allowed in a key");
+  });
+
+  test("an extra own property on an array is rejected by the copy", () => {
+    const withExtra = Object.assign([1, 2], { note: "x" });
+    expect(() => snapshot(withExtra)).toThrow("an array may only have its elements");
   });
 });

@@ -55,6 +55,17 @@ export function prefixIssues(
 
 const loneSurrogate = /\p{Cs}/u;
 
+/** A value the copy cannot represent exactly, with the path where it stopped. */
+export class CopyError extends Error {
+  readonly path: string;
+
+  constructor(path: string, message: string) {
+    super(`${path}: ${message}`);
+    this.name = "CopyError";
+    this.path = path;
+  }
+}
+
 /**
  * Reads untrusted input once into plain data and returns the copy. Everything after
  * this works on the copy, so validation and hashing see the same data, and inherited
@@ -63,84 +74,138 @@ const loneSurrogate = /\p{Cs}/u;
  * Only plain objects (prototype `Object.prototype` or `null`) and arrays are accepted.
  * Own enumerable string keys are copied and each value is read exactly once; `toJSON`
  * is never called, so a `Date`, a boxed primitive, or a class instance is rejected
- * rather than turned into something else. A property whose value is `undefined` is
- * absent from the copy. Functions, symbols, bigints, non-finite numbers, lone
- * surrogates, array holes, `undefined` array elements and cycles are rejected.
- * Throws an error naming the path; callers run it inside `guarded`.
+ * rather than turned into something else. An own property whose value is `undefined`
+ * is kept, so validators and identity see the input as written. Rejected, each with
+ * the path: functions, symbols, bigints, non-finite numbers, lone surrogates (in values
+ * and keys), array holes, `undefined` array elements, extra own properties on arrays,
+ * symbol keys, non-enumerable own properties, cycles, and any input whose reading throws.
+ * Throws `CopyError` for the rejections; a thrown getter propagates as its own error.
  */
 export function snapshot(input: unknown): unknown {
-  return copyValue(input, "$", new Set());
+  return copyValue(input, "$", new Set(), false);
 }
 
-function copyValue(value: unknown, path: string, ancestors: Set<object>): unknown {
+/**
+ * The copy used before identity. It is `snapshot` except that `undefined`, `bigint`,
+ * non-finite numbers and `undefined` array elements pass through unchanged, so the
+ * identity function can report each with its exact path and reason. Everything else
+ * `snapshot` rejects is still rejected here.
+ */
+export function snapshotForIdentity(input: unknown): unknown {
+  return copyValue(input, "$", new Set(), true);
+}
+
+function copyValue(
+  value: unknown,
+  path: string,
+  ancestors: Set<object>,
+  lenient: boolean,
+): unknown {
   switch (typeof value) {
     case "string":
       if (loneSurrogate.test(value)) {
-        throw new Error(`${path}: a lone surrogate is not allowed`);
+        throw new CopyError(path, "a lone surrogate is not allowed");
       }
       return value;
     case "boolean":
     case "undefined":
       return value;
+    case "bigint":
+      if (lenient) {
+        return value;
+      }
+      throw new CopyError(path, "a bigint is not allowed");
     case "number":
-      if (!Number.isFinite(value)) {
-        throw new Error(`${path}: ${value} is not allowed`);
+      if (!Number.isFinite(value) && !lenient) {
+        throw new CopyError(path, `${value} is not allowed`);
       }
       return value;
     case "object":
       break;
     default:
-      throw new Error(`${path}: a ${typeof value} is not allowed`);
+      throw new CopyError(path, `a ${typeof value} is not allowed`);
   }
   if (value === null) {
     return null;
   }
   if (ancestors.has(value)) {
-    throw new Error(`${path}: a circular reference is not allowed`);
+    throw new CopyError(path, "a circular reference is not allowed");
   }
   ancestors.add(value);
   try {
     return Array.isArray(value)
-      ? copyArray(value, path, ancestors)
-      : copyObject(value, path, ancestors);
+      ? copyArray(value, path, ancestors, lenient)
+      : copyObject(value, path, ancestors, lenient);
   } finally {
     ancestors.delete(value);
   }
 }
 
-function copyArray(value: readonly unknown[], path: string, ancestors: Set<object>): unknown[] {
+function copyArray(
+  value: readonly unknown[],
+  path: string,
+  ancestors: Set<object>,
+  lenient: boolean,
+): unknown[] {
+  for (const key of Reflect.ownKeys(value)) {
+    if (key === "length") {
+      continue;
+    }
+    if (typeof key === "symbol" || !isArrayIndex(key, value.length)) {
+      throw new CopyError(path, `an array may only have its elements as own properties`);
+    }
+  }
   const copy: unknown[] = [];
   for (let index = 0; index < value.length; index += 1) {
     const where = `${path}[${index}]`;
     if (!Object.hasOwn(value, index)) {
-      throw new Error(`${where}: an array hole is not allowed`);
+      throw new CopyError(where, "an array hole is not allowed");
     }
-    const element = copyValue(value[index], where, ancestors);
-    if (element === undefined) {
-      throw new Error(`${where}: undefined is not allowed in an array`);
+    const element = copyValue(value[index], where, ancestors, lenient);
+    if (element === undefined && !lenient) {
+      throw new CopyError(where, "undefined is not allowed in an array");
     }
     copy.push(element);
   }
   return copy;
 }
 
-function copyObject(value: object, path: string, ancestors: Set<object>): object {
+function isArrayIndex(key: string, length: number): boolean {
+  const index = Number(key);
+  return Number.isInteger(index) && index >= 0 && index < length && String(index) === key;
+}
+
+function copyObject(value: object, path: string, ancestors: Set<object>, lenient: boolean): object {
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) {
-    throw new Error(`${path}: only plain objects and arrays are allowed`);
+    throw new CopyError(path, "only plain objects and arrays are allowed");
   }
   const copy: Record<string, unknown> = {};
-  for (const key of Object.keys(value)) {
-    const copied = copyValue((value as Record<string, unknown>)[key], `${path}.${key}`, ancestors);
-    if (copied !== undefined) {
-      // defineProperty, not assignment: a key named `__proto__` must stay an own key.
-      Object.defineProperty(copy, key, {
-        value: copied,
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      });
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key === "symbol") {
+      throw new CopyError(path, "symbol keys are not allowed");
     }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !descriptor.enumerable) {
+      throw new CopyError(`${path}.${key}`, "only own enumerable properties are allowed");
+    }
+    if (loneSurrogate.test(key)) {
+      throw new CopyError(`${path}.${key}`, "a lone surrogate is not allowed in a key");
+    }
+    // The getter, if any, runs exactly once here.
+    const copied = copyValue(
+      (value as Record<string, unknown>)[key],
+      `${path}.${key}`,
+      ancestors,
+      lenient,
+    );
+    // defineProperty, not assignment: a key named `__proto__` must stay an own key.
+    Object.defineProperty(copy, key, {
+      value: copied,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   return copy;
 }

@@ -107,12 +107,17 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
   are compared exactly. Like `merged`, it is caller-supplied and not checked against the
   proposals. A report is complete when `uncovered` and `unsupported` are both empty; that is
   not stored.
-- Input is copied once before it is validated and hashed, so inherited fields and stateful
-  getters cannot make the validated data differ from the hashed data. The copy accepts plain
-  objects and arrays only: own enumerable keys, each value read once, `toJSON` never called.
-  A `Date`, a boxed primitive, a class instance, a function, a bigint, a non-finite number, a
-  lone surrogate, an array hole, and a cycle are rejected, and an `undefined` property is
-  absent. `identityOf` takes already-plain `JsonValue` data and does not copy.
+- Input is copied once before it is validated, hashed, or returned, so inherited fields and
+  stateful getters cannot make the validated data differ from the hashed data. This covers
+  every validator and every identity function, including the exported `identityOf` and
+  `canonicalForm`, which accept `unknown`. The copy accepts plain objects and arrays only:
+  own enumerable string keys, each value read once, `toJSON` never called. It rejects a
+  `Date`, a boxed primitive, a class instance, a function, a symbol, a bigint, a non-finite
+  number, a lone surrogate (in a value or a key), an array hole, a cycle, an extra own
+  property on an array, a symbol key, and a non-enumerable own property. An own property
+  whose value is `undefined` is kept, so the schema and the identity see it as written: a
+  validator treats it as absent for `required` and rejects it as an extra key, and identity
+  fails with reason `undefined`. A throwing getter becomes a structured failure.
 - `rubricIdentity(rubric, { contract, contextIdentity, instrument, policyIdentity })`
   changes with the rubric, the contract, the context, the instrument (model, decoding,
   prompt, runtime, repetitions), or the policy. Entry order does not matter.
