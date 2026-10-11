@@ -27,9 +27,7 @@ need a field, which this change does not add.
 ### Lengths are Unicode code points
 
 `originalLength` and `renderedLength` count code points (`Array.from(text).length`), so
-truncation never splits a surrogate pair. This is a stated unit, not tokens. #7a's
-README says characters; the two agree for the cases this change produces, and #7a's
-text is updated to say code points.
+truncation never splits a surrogate pair. This is a stated unit, not tokens. The protocol README (#7a) now says code points too; no #7a schema changes are needed.
 
 ### Mechanical normalization happens before any hashing
 

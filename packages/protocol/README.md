@@ -64,7 +64,7 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
   it. Each item has a `status` (`present`, `no_evidence`, `unavailable`,
   `contradiction`). `present` and `contradiction` items also carry a
   `contentIdentity` and a `render` state (`rendered`, `withheld`, `truncated`) with
-  `originalLength` and `renderedLength`, in characters. Truncation is recorded, never
+  `originalLength` and `renderedLength`, in Unicode code points. Truncation is recorded, never
   implied. Missing evidence is a status, not an error and not a score.
 - A `contradiction` names the items it conflicts with, all in the same bundle.
 - `validateVerdictEvidence(criterion, verdict, bundle)` requires every cited id to be
