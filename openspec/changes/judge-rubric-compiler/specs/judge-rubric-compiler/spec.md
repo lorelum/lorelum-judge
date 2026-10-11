@@ -104,11 +104,13 @@ A mandatory proposal MUST carry a `source` with origin `user`, `policy`, or `con
 
 Two proposals MUST merge only when a proposal names the surviving id in `mergedFrom`. The
 surviving criterion's description, kind, anchors, role, and evidence are the ones kept. The
-absorbed criteria's content is discarded, and the report records only their ids.
+absorbed criteria's content is discarded, and the report records only their ids. The absorbed
+criteria's acceptance ids transfer to the survivor, which MUST select evidence for each of them.
 
 A conflict follows #41: two proposals that cover the same acceptance ids and select the same
 evidence (ids and roles), without a declared merge, MUST both be excluded with code
-`conflict`. Partial overlap, where the covered ids or the evidence differ, is not a conflict.
+`conflict`. Identical duplicates fall under the same rule; they are reported, never merged
+silently. Partial overlap, where the covered ids or the evidence differ, is not a conflict.
 A second primary owner of one evidence across kept criteria is a `gate` failure.
 
 #### Scenario: Declared merge
