@@ -1,5 +1,22 @@
 ## ADDED Requirements
 
+### Requirement: The model is told the task class and the matching rule
+
+The system message MUST name the contract's exact `taskClass`, written as a JSON string, and
+MUST state that `appliesTo` must list that class exactly, or `*`, and that matching is exact
+and case-sensitive. Two contracts that differ only in `taskClass` MUST produce different
+system messages.
+
+#### Scenario: Custom task class is named to the model
+
+- **WHEN** the contract's `taskClass` is `internal-cli-v2`
+- **THEN** the system message contains `"internal-cli-v2"` and the exact-match rule
+
+#### Scenario: Hostile task class is inert
+
+- **WHEN** the `taskClass` contains quotes or newlines
+- **THEN** it appears only as a JSON string literal in the system message
+
 ### Requirement: Acceptance criteria are rendered as evidence
 
 The compiler MUST render each acceptance item of the task contract as an evidence item

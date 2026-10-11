@@ -18,15 +18,25 @@ import type { ModelPort, ModelResponse } from "@lorelum/judge-runtime";
 
 import { compilePrompt, type EvidenceMaterial, type PromptSpec } from "./prompt-compiler.js";
 
-/** Compiler-owned text appended to the caller's system prompt. It is part of the prompt identity. */
-export const RUBRIC_OUTPUT_INSTRUCTION = [
-  "Rubric compiler v1. Propose criteria that judge whether the task's acceptance items are met.",
-  "The acceptance items are the evidence blocks in the user message, identified by their ids.",
-  "Reply with one JSON object and nothing else:",
-  '{"proposals":[{"criterion":<criterion>,"covers":[<acceptance id>],"appliesTo":[<task class or "*">],"role":"decisive" or "advisory","mergedFrom":[<criterion id of another proposal>]}],"unsupported":[{"acceptanceId":<acceptance id>,"reason":<why no criterion can judge it>}]}',
-  '"mergedFrom" is optional. A criterion is {"schema":"lorelum.judge.criterion/v1","id","kind":"contract" or "quality" or "comparison","description","mandatory","source":{"origin":"user" or "policy" or "contract","ref"},"anchors":[{"verdict","description"}],"evidence":[{"evidenceId","role":"primary" or "reference"}]}.',
-  "Cover only acceptance ids that appear in the evidence. Each covered id needs an evidence entry with the same id.",
-].join("\n");
+/**
+ * Compiler-owned text appended to the caller's system prompt. It names the contract's task class
+ * and the matching rule for `appliesTo`, so the model can produce entries the gate will accept.
+ * The class is written as a JSON string, so its exact characters are visible and cannot end the
+ * instruction early. The text is part of the prompt identity.
+ */
+export function rubricOutputInstruction(taskClass: string): string {
+  return [
+    "Rubric compiler v1. Propose criteria that judge whether the task's acceptance items are met.",
+    "The acceptance items are the evidence blocks in the user message, identified by their ids.",
+    `The task class of this contract is ${JSON.stringify(taskClass)}.`,
+    `Each proposal's appliesTo must list ${JSON.stringify(taskClass)} exactly, or "*" to apply to every task class.`,
+    "Matching is exact and case-sensitive. Do not use a similar or shortened name.",
+    "Reply with one JSON object and nothing else:",
+    '{"proposals":[{"criterion":<criterion>,"covers":[<acceptance id>],"appliesTo":[<task class or "*">],"role":"decisive" or "advisory","mergedFrom":[<criterion id of another proposal>]}],"unsupported":[{"acceptanceId":<acceptance id>,"reason":<why no criterion can judge it>}]}',
+    '"mergedFrom" is optional. A criterion is {"schema":"lorelum.judge.criterion/v1","id","kind":"contract" or "quality" or "comparison","description","mandatory","source":{"origin":"user" or "policy" or "contract","ref"},"anchors":[{"verdict","description"}],"evidence":[{"evidenceId","role":"primary" or "reference"}]}.',
+    "Cover only acceptance ids that appear in the evidence. Each covered id needs an evidence entry with the same id.",
+  ].join("\n");
+}
 
 const TRUSTED_ORIGINS: ReadonlySet<string> = new Set(["user", "policy", "contract"]);
 const PROPOSAL_KEYS: ReadonlySet<string> = new Set([
@@ -304,7 +314,7 @@ async function run(raw: CompileRubricInput): Promise<CompileRubricResult> {
   }));
   const prompt: PromptSpec = {
     ...input.prompt,
-    system: `${input.prompt.system}\n\n${RUBRIC_OUTPUT_INSTRUCTION}`,
+    system: `${input.prompt.system}\n\n${rubricOutputInstruction(contract.taskClass)}`,
   };
   const compiled = compilePrompt({ prompt, evidence });
   if (!compiled.ok) {
