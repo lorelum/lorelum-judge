@@ -181,7 +181,7 @@ verdict.
 
 ### Requirement: The budget covers evidence text only
 
-Headers, unavailable and no-evidence lines, and the untrusted notice are not counted
+Headers, unavailable and no-evidence lines, and the untrusted notice MUST NOT be counted
 against the budget. Prompt size therefore grows with the number of items, and the spec
 does not cap item count.
 
