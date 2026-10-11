@@ -4,7 +4,7 @@
 - [x] 1.2 Add the OpenSpec proposal, design, tasks, and specification.
 - [x] 1.3 Validate the change with OpenSpec strict validation.
 - [x] 1.4 Create the change PR with only OpenSpec artifacts first.
-- [ ] 1.5 Revise the OpenSpec change to the generation-plus-gate design; validate and push.
+- [x] 1.5 Revise the OpenSpec change to the generation-plus-gate design; validate and push.
 
 ## 2. Generation
 
