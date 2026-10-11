@@ -1,0 +1,29 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:evidence-item:v1",
+  "title": "EvidenceItem",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "status"],
+  "properties": {
+    "schema": { "const": "lorelum.judge.evidence-item/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["present", "no_evidence", "unavailable", "contradiction"] },
+    "contentIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "render": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "originalLength", "renderedLength"],
+      "properties": {
+        "state": { "enum": ["rendered", "withheld", "truncated"] },
+        "originalLength": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "renderedLength": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+      }
+    },
+    "conflictsWith": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

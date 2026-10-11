@@ -58,6 +58,21 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
 - `measurementKey(definition, instrument, evidenceIdentities)` is a cache key.
   Evidence order and duplicates do not change it.
 
+## Evidence
+
+- An `EvidenceBundle` records what evidence existed and what the judge was shown of
+  it. Each item has a `status` (`present`, `no_evidence`, `unavailable`,
+  `contradiction`). `present` and `contradiction` items also carry a
+  `contentIdentity` and a `render` state (`rendered`, `withheld`, `truncated`) with
+  `originalLength` and `renderedLength`, in characters. Truncation is recorded, never
+  implied. Missing evidence is a status, not an error and not a score.
+- A `contradiction` names the items it conflicts with, all in the same bundle.
+- `validateVerdictEvidence(criterion, verdict, bundle)` requires every cited id to be
+  in the bundle. A decisive verdict must cite at least one `present` item that was
+  `rendered` or `truncated`; `unknown` and `insufficient` may cite nothing.
+- `evidenceBundleIdentity` ignores item order and changes with any content, status,
+  or render change. `contentIdentity` is supplied by the caller and is not verified.
+
 It does not own model calls, runtime state, filesystem execution, provider SDK
-types, or benchmark fixture conventions. Evidence bundles, evidence status, and
-prompt compilation follow in #7; calibration and gate semantics in #9.
+types, or benchmark fixture conventions. Prompt compilation, truncation, and
+untrusted-content marking follow in #7b; calibration and gate semantics in #9.
