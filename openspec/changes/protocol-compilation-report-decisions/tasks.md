@@ -7,27 +7,27 @@
 
 ## 2. Schema and Types
 
-- [ ] 2.1 Add the required `excluded` array to `compilation-report.schema.json`, with `criterionId`, `code` (`not_applicable` | `conflict`), and `reason`, and `additionalProperties: false`.
-- [ ] 2.2 Regenerate the protocol types with `bun run generate:protocol` and confirm `check:protocol-types` is clean.
+- [x] 2.1 Add the required `excluded` array to `compilation-report.schema.json`, with `criterionId`, `code` (`not_applicable` | `conflict`), and `reason`, and `additionalProperties: false`.
+- [x] 2.2 Regenerate the protocol types with `bun run generate:protocol` and confirm `check:protocol-types` is clean.
 
 ## 3. Validation
 
-- [ ] 3.1 Reject duplicate `criterionId` values in `excluded`.
-- [ ] 3.2 Reject an `excluded` id that is a criterion in the rubric.
-- [ ] 3.3 Reject an `excluded` id that appears in any `mergedFrom`.
-- [ ] 3.4 Reject a blank `reason` in `excluded`, using the same rule as gaps.
-- [ ] 3.5 Reject a report that omits `excluded`.
+- [x] 3.1 Reject duplicate `criterionId` values in `excluded`.
+- [x] 3.2 Reject an `excluded` id that is a criterion in the rubric.
+- [x] 3.3 Reject an `excluded` id that appears in any `mergedFrom`.
+- [x] 3.4 Reject a blank `reason` in `excluded`, using the same rule as gaps.
+- [x] 3.5 Reject a report that omits `excluded`.
 
 ## 4. Tests
 
-- [ ] 4.1 Accept a report with one `not_applicable` and one `conflict` item.
-- [ ] 4.2 Reject each rule in 3.1 to 3.5 with its own test.
-- [ ] 4.3 Update every report fixture to include `excluded`.
-- [ ] 4.4 Mutation-check 3.1 to 3.5: each removed check must cause at least one failing test.
+- [x] 4.1 Accept a report with one `not_applicable` and one `conflict` item.
+- [x] 4.2 Reject each rule in 3.1 to 3.5 with its own test.
+- [x] 4.3 Update every report fixture to include `excluded`.
+- [x] 4.4 Mutation-check 3.1 to 3.5: each removed check must cause at least one failing test.
 
 ## 5. Documentation
 
-- [ ] 5.1 Update the protocol README and the report requirement in the spec to describe `excluded` and the verification limits.
+- [x] 5.1 Update the protocol README and the report requirement in the spec to describe `excluded` and the verification limits.
 
 ## 6. Verification and Review
 

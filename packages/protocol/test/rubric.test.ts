@@ -111,6 +111,7 @@ function report(overrides: Record<string, unknown> = {}): Record<string, unknown
     uncovered: [],
     unsupported: [],
     merged: [],
+    excluded: [],
     ...overrides,
   };
 }
@@ -943,5 +944,63 @@ describe("every rubric entry point copies its own argument", () => {
     const result = validateRubricSet(stateful);
     expect(reads).toBe(1);
     expect(result.ok && result.value.id).toBe("first");
+  });
+});
+
+describe("compilation report: excluded proposals", () => {
+  const check = (r: Record<string, unknown>, entries = goodEntries()) =>
+    validateCompilationReport(r, rubric(entries), contract());
+  const excluded = (
+    criterionId: string,
+    code = "not_applicable",
+    reason = "not for this class",
+  ) => ({
+    criterionId,
+    code,
+    reason,
+  });
+
+  test("accepts not_applicable and conflict items with reasons", () => {
+    const r = report({
+      excluded: [excluded("c8"), excluded("c9", "conflict", "same evidence, different anchors")],
+    });
+    expect(check(r).ok).toBe(true);
+  });
+
+  test("rejects a code outside the two defined values", () => {
+    const result = check(report({ excluded: [excluded("c8", "dropped")] }));
+    expect(codes(result)).toEqual(["schema"]);
+  });
+
+  test("rejects a blank reason", () => {
+    const result = check(report({ excluded: [excluded("c8", "not_applicable", "  ")] }));
+    expect(codes(result)).toEqual(["schema"]);
+  });
+
+  test("rejects a report without the excluded field", () => {
+    const { excluded: _omitted, ...withoutField } = report();
+    expect(codes(check(withoutField))).toEqual(["schema"]);
+  });
+
+  test("rejects the same criterion excluded twice", () => {
+    const result = check(report({ excluded: [excluded("c8"), excluded("c8", "conflict")] }));
+    expect(codes(result)).toEqual(["report_mismatch"]);
+    expect(paths(result)).toEqual(["$.excluded[1].criterionId"]);
+  });
+
+  test("rejects excluding a criterion that is in the rubric", () => {
+    const result = check(report({ excluded: [excluded("c1")] }));
+    expect(codes(result)).toEqual(["report_mismatch"]);
+    expect(paths(result)).toEqual(["$.excluded[0].criterionId"]);
+  });
+
+  test("rejects excluding a proposal that was absorbed by a merge", () => {
+    const r = report({
+      merged: [{ criterionId: "c1", mergedFrom: ["c7"] }],
+      excluded: [excluded("c7")],
+    });
+    const result = check(r, [entry("c1", ["a1"]), entry("c2", ["a2"])]);
+    expect(codes(result)).toEqual(["report_mismatch"]);
+    expect(paths(result)).toEqual(["$.excluded[0].criterionId"]);
   });
 });
