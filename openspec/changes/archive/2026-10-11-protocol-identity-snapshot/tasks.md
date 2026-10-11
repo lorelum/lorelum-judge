@@ -3,7 +3,7 @@
 - [x] 1.1 Confirm issue #42 owns the identity functions and the copy's four holes, and nothing else.
 - [x] 1.2 Add the OpenSpec proposal, design, tasks, and specification.
 - [x] 1.3 Validate the change with `openspec validate protocol-identity-snapshot --type change --strict`.
-- [ ] 1.4 Create the change PR on `codex/protocol-identity-snapshot`. It also carries the archive of `protocol-compilation-report-decisions`, which was not archived before #41 merged.
+- [x] 1.4 Create the change PR on `codex/protocol-identity-snapshot`. It also carries the archive of `protocol-compilation-report-decisions`, which was not archived before #41 merged.
 
 ## 2. Copy
 
@@ -40,9 +40,9 @@
 - [x] 6.1 Run `bun run validate`, including the Node ESM smoke test.
 - [x] 6.2 Run `openspec validate protocol-identity-snapshot --type change --strict`.
 - [x] 6.3 Smoke the built `dist` in Node ESM with `identityOf(new Date(0))`, a class instance, and a valid contract.
-- [ ] 6.4 Independent review pinned to the final SHA, recorded in the PR.
+- [x] 6.4 Independent review pinned to the final SHA, recorded in the PR.
 
 ## 7. Final Gate
 
-- [ ] 7.1 Update the PR body with commands, results, review rounds, and deferred work.
-- [ ] 7.2 Confirm every item of #42's acceptance criteria has evidence.
+- [x] 7.1 Update the PR body with commands, results, review rounds, and deferred work.
+- [x] 7.2 Confirm every item of #42's acceptance criteria has evidence.
