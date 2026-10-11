@@ -263,3 +263,85 @@ describe("optional fields", () => {
     expect(result.value.rubric.entries.length).toBe(2);
   });
 });
+
+describe("single reads", () => {
+  test("a role getter that changes on later reads cannot drop a proposal silently", async () => {
+    let reads = 0;
+    const flipping = proposal("c1", ["a1"]);
+    Object.defineProperty(flipping, "role", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return reads === 1 ? "decisive" : "bogus";
+      },
+    });
+    const result = await compileRubric(
+      input(
+        modelWith(structured({ proposals: [flipping, proposal("c2", ["a2"])], unsupported: [] })),
+      ),
+    );
+    if (result.ok) {
+      expect(result.value.rubric.entries.map((entry) => entry.criterion.id)).toContain("c1");
+    } else {
+      expect(result.issues.some((issue) => issue.category === "output")).toBe(true);
+    }
+    expect(reads).toBe(1);
+  });
+});
+
+describe("conflict follows #41", () => {
+  test("partial overlap is kept, and the covered acceptance lists both criteria", async () => {
+    const c1 = proposal("c1", ["a1"]);
+    const c2 = proposal("c2", ["a1", "a2"], {
+      evidence: [
+        { evidenceId: "a1", role: "reference" },
+        { evidenceId: "a2", role: "primary" },
+      ],
+    });
+    const result = await compileRubric(
+      input(modelWith(structured({ proposals: [c1, c2], unsupported: [] }))),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.report.excluded).toEqual([]);
+    expect(result.value.report.covered).toContainEqual({
+      acceptanceId: "a1",
+      criterionIds: ["c1", "c2"],
+    });
+  });
+});
+
+describe("freeze accepts only compiled results", () => {
+  test("a hand-built compiled object is refused", async () => {
+    const result = await compileRubric(
+      input(
+        modelWith(
+          structured({
+            proposals: [proposal("c1", ["a1"]), proposal("c2", ["a2"])],
+            unsupported: [],
+          }),
+        ),
+      ),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const copy = { ...result.value };
+    const refused = freezeRubric(copy);
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.issues.map((issue) => issue.code)).toEqual(["not_compiled"]);
+  });
+
+  test("an in-place change to a compiled result is refused by the report check", async () => {
+    const result = await compileRubric(
+      input(modelWith(structured({ proposals: [proposal("c1", ["a1"])], unsupported: [] }))),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    (result.value as { report: unknown }).report = { ...result.value.report, uncovered: [] };
+    const refused = freezeRubric(result.value);
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.issues.some((issue) => issue.category === "gate")).toBe(true);
+  });
+});

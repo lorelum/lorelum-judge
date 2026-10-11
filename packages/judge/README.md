@@ -58,7 +58,9 @@ turns a task contract into a proposal `RubricSet` and a `CompilationReport`.
   compilation; each covered acceptance needs its own evidence selector; one primary owner
   per evidence; a mandatory criterion needs a user, policy, or contract source and cannot
   be merged into a non-mandatory one; applicability is by `appliesTo` and task class;
-  merges are only the declared `mergedFrom`; undeclared overlap is a `conflict`.
+  merges are only the declared `mergedFrom`, and the absorbed criteria's content is discarded.
+  An undeclared conflict (same covers and same evidence, as #41 defines it) excludes both
+  criteria; partial overlap is kept.
 - Result: `{ ok: true, value }` with `rubric` (status `proposal`), `report`,
   `rubricIdentity`, and `binding`; or `{ ok: false, issues }`. Each issue has a
   `category`: `model`, `output`, `gate`, or `prompt`.
@@ -70,7 +72,8 @@ turns a task contract into a proposal `RubricSet` and a `CompilationReport`.
 Not done here: retries, splitting, output repair, repo context selection, calibration
 (#9), and migration (#10). `contextIdentity` and `policyIdentity` are required `sha256:`
 identities, bound into the rubric identity and not verified. The surviving criterion keeps
-its own role, anchors, and evidence; criteria merged into it leave the rubric, and the
-survivor must select evidence for every acceptance id they cover. `freezeRubric` checks
-the report against the rubric and contract, not the proposal-time merge rules, so
-`compileRubric` is the only supported producer of a compiled rubric.
+its own role, anchors, and evidence. Criteria merged into it leave the rubric, and their
+descriptions and anchors are discarded, not recorded; the report lists only their ids. The
+survivor must select evidence for every acceptance id they cover. `freezeRubric` accepts only
+a result that `compileRubric` returned, and checks the report against the rubric and contract.
+Copies and hand-built objects are refused.

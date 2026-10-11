@@ -102,18 +102,29 @@ A mandatory proposal MUST carry a `source` with origin `user`, `policy`, or `con
 
 ### Requirement: Merge is declared, not inferred
 
-Two proposals MUST merge only when a proposal names the surviving id in `mergedFrom`.
-Undeclared overlap of covered acceptance ids MUST be reported as a conflict.
+Two proposals MUST merge only when a proposal names the surviving id in `mergedFrom`. The
+surviving criterion's description, kind, anchors, role, and evidence are the ones kept. The
+absorbed criteria's content is discarded, and the report records only their ids.
+
+A conflict follows #41: two proposals that cover the same acceptance ids and select the same
+evidence (ids and roles), without a declared merge, MUST both be excluded with code
+`conflict`. Partial overlap, where the covered ids or the evidence differ, is not a conflict.
+A second primary owner of one evidence across kept criteria is a `gate` failure.
 
 #### Scenario: Declared merge
 
 - **WHEN** proposal `c7` names `mergedFrom: ["c3"]`
-- **THEN** the report lists `c3` as merged into `c7`
+- **THEN** the report lists `c3` as merged into `c7`, and `c3`'s description and anchors are not in the rubric
 
-#### Scenario: Undeclared overlap
+#### Scenario: Same covers and evidence without a merge
 
-- **WHEN** two proposals cover the same acceptance id and neither declares a merge
-- **THEN** the report lists a conflict and `complete` is false
+- **WHEN** two proposals cover `a1` and select evidence `a1` as primary, and neither declares a merge
+- **THEN** both are excluded with code `conflict` and `complete` is false
+
+#### Scenario: Partial overlap is kept
+
+- **WHEN** `c1` covers `a1` and `c2` covers `a1` and `a2`, with different evidence
+- **THEN** both are kept, and `a1` is covered by both
 
 ### Requirement: Report derivation
 

@@ -38,6 +38,8 @@ const PROPOSAL_KEYS: ReadonlySet<string> = new Set([
 const OUTPUT_KEYS: ReadonlySet<string> = new Set(["proposals", "unsupported"]);
 const GAP_KEYS: ReadonlySet<string> = new Set(["acceptanceId", "reason"]);
 const IDENTITY = /^sha256:[0-9a-f]{64}$/;
+/** Results that compileRubric itself returned. Only these can be frozen. */
+const compiledResults = new WeakSet<CompiledRubric>();
 
 /**
  * `model`: the port threw, or the signal aborted. `output`: the response is not a valid
@@ -123,6 +125,20 @@ export async function compileRubric(input: CompileRubricInput): Promise<CompileR
 
 /** Freezes a complete proposal whose criteria all have anchors. Recomputes identity for the frozen status. */
 export function freezeRubric(compiled: CompiledRubric): FreezeResult {
+  if (!compiledResults.has(compiled)) {
+    return {
+      ok: false,
+      issues: [
+        {
+          category: "gate",
+          path: "$",
+          code: "not_compiled",
+          message:
+            "only a result returned by compileRubric can be frozen; copies and hand-built objects cannot",
+        },
+      ],
+    };
+  }
   const issues: CompileIssue[] = [];
   const reportCheck = validateCompilationReport(
     compiled.report,
@@ -370,15 +386,14 @@ async function run(input: CompileRubricInput): Promise<CompileRubricResult> {
   if (!identity.ok) {
     return failure(fromValidation("gate", "$", identity.issues));
   }
-  return {
-    ok: true,
-    value: {
-      rubric: gated.rubric,
-      report: gated.report,
-      rubricIdentity: identity.identity,
-      binding,
-    },
+  const compiledRubric: CompiledRubric = {
+    rubric: gated.rubric,
+    report: gated.report,
+    rubricIdentity: identity.identity,
+    binding,
   };
+  compiledResults.add(compiledRubric);
+  return { ok: true, value: compiledRubric };
 }
 
 function readOutput(
@@ -441,15 +456,23 @@ function readOutput(
             report(`${path}.${key}`, "unknown_field", `unknown field "${key}"`);
           }
         }
-        const criterion = validateCriterionDraft(raw.criterion);
+        // Each field is read once. A getter that returns different values on later reads
+        // cannot make the checked value differ from the kept value.
+        const criterionRaw = raw.criterion;
+        const coversRaw = raw.covers;
+        const appliesToRaw = raw.appliesTo;
+        const mergedRaw = raw.mergedFrom;
+        const role = raw.role;
+        const criterion = validateCriterionDraft(criterionRaw);
         if (!criterion.ok) {
           issues.push(...fromValidation("output", `${path}.criterion`, criterion.issues));
         }
-        const covers = readList(raw.covers, `${path}.covers`);
-        const appliesTo = readList(raw.appliesTo, `${path}.appliesTo`);
+        const covers = readList(coversRaw, `${path}.covers`);
+        const appliesTo = readList(appliesToRaw, `${path}.appliesTo`);
         const mergedFrom =
-          raw.mergedFrom === undefined ? [] : readList(raw.mergedFrom, `${path}.mergedFrom`, true);
-        if (raw.role !== "decisive" && raw.role !== "advisory") {
+          mergedRaw === undefined ? [] : readList(mergedRaw, `${path}.mergedFrom`, true);
+        const validRole = role === "decisive" || role === "advisory";
+        if (!validRole) {
           report(`${path}.role`, "invalid_role", 'role must be "decisive" or "advisory"');
         }
         if (
@@ -457,16 +480,9 @@ function readOutput(
           covers &&
           appliesTo &&
           mergedFrom &&
-          (raw.role === "decisive" || raw.role === "advisory")
+          (role === "decisive" || role === "advisory")
         ) {
-          proposals.push({
-            path,
-            criterion: criterion.value,
-            covers,
-            appliesTo,
-            role: raw.role,
-            mergedFrom,
-          });
+          proposals.push({ path, criterion: criterion.value, covers, appliesTo, role, mergedFrom });
         }
       });
     }
@@ -485,12 +501,15 @@ function readOutput(
             report(`${path}.${key}`, "unknown_field", `unknown field "${key}"`);
           }
         }
-        if (!isNonEmpty(raw.acceptanceId)) {
+        // Each field is read once, so the value that is checked is the value that is kept.
+        const acceptanceId = raw.acceptanceId;
+        const reason = raw.reason;
+        if (!isNonEmpty(acceptanceId)) {
           report(`${path}.acceptanceId`, "invalid_id", "must be a non-empty string");
-        } else if (!isNonEmpty(raw.reason)) {
+        } else if (!isNonEmpty(reason)) {
           report(`${path}.reason`, "invalid_reason", "must be a non-blank string");
         } else {
-          unsupported.push({ acceptanceId: raw.acceptanceId, reason: raw.reason });
+          unsupported.push({ acceptanceId, reason });
         }
       });
     }
@@ -674,24 +693,30 @@ function gateProposals(input: GateInput): GateResult {
     });
   }
 
-  // Undeclared overlap: two kept groups covering the same acceptance id.
-  const owners = new Map<string, string[]>();
+  // Undeclared conflict, as #41 defines it: two kept groups cover the same acceptance ids
+  // with the same evidence selectors (id and role). Neither is kept; the report says why.
+  // Partial overlap is not a conflict; a second primary owner of one evidence is a gate failure.
+  const signature = (item: {
+    readonly covers: readonly string[];
+    readonly survivor: Proposal;
+  }): string =>
+    [
+      [...item.covers].sort().join(","),
+      item.survivor.criterion.evidence
+        .map((selector) => `${selector.evidenceId}:${selector.role}`)
+        .sort()
+        .join(","),
+    ].join("|");
+  const bySignature = new Map<string, string[]>();
   for (const item of kept) {
-    for (const acceptanceId of item.covers) {
-      owners.set(acceptanceId, [...(owners.get(acceptanceId) ?? []), item.id]);
-    }
+    const key = signature(item);
+    bySignature.set(key, [...(bySignature.get(key) ?? []), item.id]);
   }
   const conflicted = new Map<string, Set<string>>();
-  for (const ids of owners.values()) {
+  for (const ids of bySignature.values()) {
     if (ids.length > 1) {
       for (const id of ids) {
-        const others = conflicted.get(id) ?? new Set<string>();
-        for (const other of ids) {
-          if (other !== id) {
-            others.add(other);
-          }
-        }
-        conflicted.set(id, others);
+        conflicted.set(id, new Set(ids.filter((other) => other !== id)));
       }
     }
   }
@@ -699,7 +724,7 @@ function gateProposals(input: GateInput): GateResult {
   for (const item of kept) {
     const others = conflicted.get(item.id);
     if (others !== undefined) {
-      const reason = `shares acceptance coverage with ${[...others].map((id) => `"${id}"`).join(", ")} without a declared merge`;
+      const reason = `has the same covers and evidence as ${[...others].map((id) => `"${id}"`).join(", ")} without a declared merge`;
       for (const id of [item.id, ...item.members.map((member) => member.criterion.id)]) {
         excluded.push({ criterionId: id, code: "conflict", reason });
       }

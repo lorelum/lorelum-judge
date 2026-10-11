@@ -36,7 +36,9 @@ provider SDK or a framework.
      compilation, because it means the model did not read the contract;
    - `mergedFrom` names only existing proposal ids, and a merge is recorded only when
      declared;
-   - undeclared overlap of covered acceptance ids is a conflict and blocks `complete`.
+   - an undeclared conflict (same covered ids and same evidence selectors, as #41 defines
+     it) excludes both criteria and blocks `complete`. Partial overlap is kept. A second
+     primary owner of one evidence is a gate failure.
 8. Report: covered, uncovered, merged, not_applicable, unsupported, conflict, and
    `complete`. `complete` is derived from those lists only.
 9. Freeze: `freezeRubric` refuses unless the report is complete and every criterion has
