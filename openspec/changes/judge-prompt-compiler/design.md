@@ -19,6 +19,8 @@ and any change to `protocol`.
 Materials sort by id, then consume a character budget in that order. The first item
 that fits is `rendered`; the first that does not fit is `truncated` to the remaining
 characters if any remain, and every later one is `withheld`. Rules are governed separately by `ruleBudget` and never count against the evidence budget.
+An empty item is rendered only while budget remains; once the budget is spent it is
+withheld like any other present item.
 
 ### Rule overflow is an error, not truncation
 
@@ -47,9 +49,10 @@ treats every such change as significant.
 - **Prompt identity** (`lorelum.judge.prompt/v1`): normalized system text, normalized
   template, sorted variable names, render version, and evidence budget. Written into
   `InstrumentProfile.promptIdentity`. Changing any of these invalidates calibration.
-  Variable values are excluded; they are covered by the render identity.
+  Variable values are included, because rubric text is part of the prompt (`AGENTS.md`
+  4.2). `ruleBudget` is included because it decides which rule sets are accepted.
 - **Content identity** per evidence item (`lorelum.judge.evidence-content/v1`): hash of
-  the normalized full text. Stored in the manifest's `contentIdentity`. Because the
+  the normalized text before escaping. Stored in the manifest's `contentIdentity`. Because the
   compiler computes it, #7a's caller-supplied limitation does not apply to this path.
 - **Render identity** (`lorelum.judge.render/v1`): hash of the final messages. This is
   the record of exactly what the model received.
@@ -69,7 +72,7 @@ must appear exactly once. Unclosed or malformed braces are literal text.
 
 Each block's header carries the id, status, render state, and exact lengths. Ids are
 restricted to `^[A-Za-z0-9_.:-]+$`, so they cannot break the attribute syntax. Content
-is not escaped; the header's declared length says how much text the block should hold,
+is escaped only for the `evidence` marker; the header's declared length says how much text the block should hold,
 which lets a reader detect an injected closing tag. The model is not guaranteed to
 honor this.
 
@@ -94,6 +97,13 @@ Bindings are a `Map` built from own entries, and lookups use `Map.has` and `Map.
 Object prototype names such as `constructor` therefore cannot resolve to inherited
 values.
 
+### Content identity covers the raw candidate, lengths cover the escaped text
+
+Two candidate texts that differ only in `</evidence>` against `&lt;/evidence>` render
+identically, so the model sees the same prompt and the render identity is equal. The
+content identity differs, because the record should show what each candidate said. The
+manifest lengths count what was shown.
+
 ## Risks / Trade-offs
 
 - A truncated item keeps a prefix, which may hide the decisive part of the evidence.
@@ -102,6 +112,8 @@ values.
   Makefile or Markdown with hard line breaks. This is accepted for the judge's purpose
   and documented.
 - Headers and unavailable lines are outside the budget, so item count is uncapped.
+- A rendering change must bump `PROMPT_RENDER_VERSION`; the pinned-output test forces the
+  question but does not bump it automatically.
 - Id ordering means the same material can be truncated differently after an id rename.
   The prompt identity changes only with the budget, not with ids, so this is captured
   by the manifest, not the prompt identity.

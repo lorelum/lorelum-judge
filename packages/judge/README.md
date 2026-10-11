@@ -14,7 +14,7 @@ provider SDKs, framework orchestration, or the engineering implementation workfl
 - `manifest`: an `EvidenceBundle` (see `@lorelum/judge-protocol`) recording which
   evidence was rendered, truncated, or withheld, with exact lengths.
 - `promptIdentity`: for `InstrumentProfile.promptIdentity`. Covers the normalized system
-  text, template, variable names, render version, and budget. Not variable values.
+  text, template, variable bindings, render version, evidence budget, and rule budget.
 - `renderIdentity`: covers the exact messages sent to the model.
 
 Behavior:
@@ -25,6 +25,9 @@ Behavior:
   fails with `rules_over_budget`; rules are never truncated.
 - Text is normalized first (NFC, LF line endings, no trailing spaces or tabs). Content
   identities are computed here from the normalized text, not supplied by the caller.
+  Content identity covers the text before escaping; lengths count the escaped text.
+- Candidate `<evidence` and `</evidence` markers are escaped, case-insensitively, so
+  candidate text cannot open or close a block. Only the `evidence` marker is escaped.
 - Template placeholders are `{{name}}`. Every placeholder must be bound, every binding
   must be used, names match `^[a-z][a-z0-9_]*$`, and `{{evidence}}` is reserved and
   appears exactly once. Substitution is single pass; values are never re-expanded.

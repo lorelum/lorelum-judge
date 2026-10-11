@@ -307,38 +307,52 @@ function headerAttributes(
 }
 
 /**
- * Renders evidence in id order under the budget. The budget counts evidence text only;
- * headers and unavailable/no-evidence lines are not counted and grow with item count. Returns the manifest items and the
- * text blocks in the same order, or the manifest-level issues.
+ * Renders evidence in id order under the evidence budget. The budget counts evidence
+ * text only; headers and unavailable/no-evidence lines are not counted and grow with
+ * item count. `sources[i]` is the caller's index of `items[i]`.
  */
 function renderEvidence(
   materials: readonly EvidenceMaterial[],
   budget: number,
-): { items: EvidenceItem[]; blocks: string[] } | { issues: PromptIssue[] } {
-  const sorted = [...materials].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+): { items: EvidenceItem[]; blocks: string[]; sources: number[] } | { issues: PromptIssue[] } {
+  const order = materials
+    .map((material, index) => ({ material, index }))
+    .sort((a, b) => (a.material.id < b.material.id ? -1 : a.material.id > b.material.id ? 1 : 0));
   const items: EvidenceItem[] = [];
   const blocks: string[] = [];
+  const sources: number[] = [];
   let remaining = budget;
 
-  for (const material of sorted) {
-    const conflicts = material.conflictsWith;
+  for (const { material, index } of order) {
+    const conflicts =
+      material.conflictsWith === undefined ? undefined : [...material.conflictsWith].sort();
+    sources.push(index);
+
     if (material.text === undefined) {
       items.push({
         schema: ITEM_SCHEMA,
         id: material.id,
         status: material.status,
-        ...(conflicts !== undefined ? { conflictsWith: [...conflicts] } : {}),
+        ...(conflicts !== undefined ? { conflictsWith: conflicts } : {}),
       });
       blocks.push(`<evidence ${headerAttributes(material.id, material.status, conflicts)}/>`);
       continue;
     }
 
-    const text = escapeEvidenceText(normalizeText(material.text));
+    // The content identity covers the normalized text before escaping: it records what
+    // the candidate said. Lengths and rendering use the escaped text the model sees.
+    const raw = normalizeText(material.text);
+    const contentIdentity = identityOrIssue(CONTENT_SCHEMA, raw);
+    if (typeof contentIdentity !== "string") {
+      return { issues: [contentIdentity] };
+    }
+
+    const text = escapeEvidenceText(raw);
     const characters = codePoints(text);
     const originalLength = characters.length;
     let state: "rendered" | "truncated" | "withheld";
     let kept: string;
-    if (originalLength <= remaining) {
+    if (remaining > 0 && originalLength <= remaining) {
       state = "rendered";
       kept = text;
       remaining -= originalLength;
@@ -347,14 +361,11 @@ function renderEvidence(
       kept = characters.slice(0, remaining).join("");
       remaining = 0;
     } else {
+      // Budget already spent: every later present item is withheld, even an empty one.
       state = "withheld";
       kept = "";
     }
     const renderedLength = codePoints(kept).length;
-    const contentIdentity = identityOrIssue(CONTENT_SCHEMA, text);
-    if (typeof contentIdentity !== "string") {
-      return { issues: [contentIdentity] };
-    }
 
     items.push({
       schema: ITEM_SCHEMA,
@@ -362,13 +373,32 @@ function renderEvidence(
       status: material.status,
       contentIdentity,
       render: { state, originalLength, renderedLength },
-      ...(conflicts !== undefined ? { conflictsWith: [...conflicts] } : {}),
+      ...(conflicts !== undefined ? { conflictsWith: conflicts } : {}),
     });
 
     const header = `<evidence ${headerAttributes(material.id, material.status, conflicts)} render="${state}" original="${originalLength}" rendered="${renderedLength}"`;
     blocks.push(state === "withheld" ? `${header}/>` : `${header}>\n${kept}\n</evidence>`);
   }
-  return { items, blocks };
+  return { items, blocks, sources };
+}
+
+/** Bindings as an object with sorted keys, so identity does not depend on insertion order. */
+function sortedBindings(variables: ReadonlyMap<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const name of [...variables.keys()].sort()) {
+    out[name] = variables.get(name) ?? "";
+  }
+  return out;
+}
+
+/** Maps a manifest path `$.items[i]...` back to the caller's `$.evidence[j]...`. */
+function remapItemPath(path: string, sources: readonly number[]): string {
+  const match = /^\$\.items\[(\d+)\](.*)$/.exec(path);
+  if (match === null) {
+    return path;
+  }
+  const source = sources[Number(match[1])];
+  return source === undefined ? path : `$.evidence[${source}]${match[2] ?? ""}`;
 }
 
 function compile(raw: unknown): CompileResult {
@@ -405,14 +435,14 @@ function compile(raw: unknown): CompileResult {
   if ("issues" in rendered) {
     return { ok: false, issues: rendered.issues };
   }
-  const { items, blocks } = rendered;
+  const { items, blocks, sources } = rendered;
   const manifest: EvidenceBundle = { schema: BUNDLE_SCHEMA, items };
   const checked = validateEvidenceBundle(manifest);
   if (!checked.ok) {
     return {
       ok: false,
       issues: checked.issues.map((issue) => ({
-        path: issue.path,
+        path: remapItemPath(issue.path, sources),
         code: "invalid_evidence",
         message: `${issue.code}: ${issue.message}`,
       })),
@@ -433,7 +463,7 @@ function compile(raw: unknown): CompileResult {
     renderVersion: PROMPT_RENDER_VERSION,
     system,
     template: prompt.template,
-    variableNames: [...prompt.variables.keys()].sort(),
+    variables: sortedBindings(prompt.variables),
     evidenceBudget: prompt.evidenceBudget,
     ruleBudget: prompt.ruleBudget,
   });

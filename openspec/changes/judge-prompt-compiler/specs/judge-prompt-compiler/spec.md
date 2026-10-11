@@ -108,15 +108,16 @@ least the identity of the text that contains it.
 ### Requirement: Identities have distinct scopes
 
 The prompt identity MUST depend on the normalized system text, normalized template,
-sorted variable names, render version, and evidence budget, and MUST NOT depend on
-variable values. The render identity MUST depend on the final messages. Changing a
-variable value MUST change the render identity and MUST NOT change the prompt identity.
-Changing the budget or the template MUST change the prompt identity.
+normalized variable bindings (names and values, sorted by name), render version,
+evidence budget, and rule budget. A variable value is rubric material and therefore part
+of the prompt, as `AGENTS.md` 4.2 requires. The render identity MUST depend on the final
+messages. Changing a variable value MUST change both identities. Changing the budget,
+the rule budget, or the template MUST change the prompt identity.
 
-#### Scenario: Value change affects only the render identity
+#### Scenario: Value change affects both identities
 
 - **WHEN** a bound variable value changes
-- **THEN** the render identity differs and the prompt identity is equal
+- **THEN** the prompt identity and the render identity both differ
 
 ### Requirement: Untrusted-content notice is present
 
@@ -153,8 +154,9 @@ fail with `unbound_variable`; it MUST NOT render the inherited value.
 
 Before lengths and identities are computed, `<evidence` and `</evidence` in evidence
 text MUST be escaped to `&lt;evidence` and `&lt;/evidence`, case-insensitively. The
-manifest's lengths and `contentIdentity` MUST cover the escaped text, so the record
-matches what the model sees. Only the compiler writes headers and closing markers.
+manifest's lengths MUST count the escaped text the model sees. `contentIdentity` MUST be
+computed from the normalized text before escaping, so two different candidate texts
+that render identically are still distinguishable in the record. Only the compiler writes headers and closing markers.
 
 #### Scenario: Forged closing and opening markers are inert
 
@@ -164,7 +166,8 @@ matches what the model sees. Only the compiler writes headers and closing marker
 
 #### Scenario: Known limitation
 
-Escaping covers only the `evidence` marker. Other content is not escaped. A reader that
+Escaping covers only the `evidence` marker, matched case-insensitively. Other content
+is not escaped. A reader that
 does not respect headers can still be misled by text in an evidence block; the spec does
 not claim otherwise.
 
@@ -213,3 +216,34 @@ count toward `ruleBudget`.
 
 - **WHEN** a long variable value pushes the rules over `ruleBudget`
 - **THEN** compilation fails with code `rules_over_budget`
+
+### Requirement: Empty present evidence follows the budget
+
+An empty `present` item MUST be `rendered` only while budget remains. Once the budget is
+spent, or when it is zero, an empty `present` item MUST be `withheld` with lengths 0.
+An empty `present` item MUST NOT support a decisive verdict under #7a.
+
+#### Scenario: Empty item after the budget is spent
+
+- **WHEN** the budget is spent and a later item is empty
+- **THEN** that item is `withheld` with `originalLength` 0
+
+### Requirement: Manifest issues point at the caller's input
+
+When the manifest fails validation, each issue path MUST refer to the caller's
+`$.evidence[i]` position, not to the manifest's sorted `$.items[i]` position.
+
+#### Scenario: Conflict path maps to the input position
+
+- **WHEN** a contradiction at input position 0 names an id absent from the bundle
+- **THEN** the issue path is `$.evidence[0].conflictsWith[0]`
+
+### Requirement: Rendered output format is pinned
+
+The exact messages for a fixed input MUST match a pinned string in the test suite. Any
+change to the rendered format MUST be accompanied by a change to `PROMPT_RENDER_VERSION`.
+
+#### Scenario: Format change without a version bump
+
+- **WHEN** the header format changes and the pinned test is updated
+- **THEN** `PROMPT_RENDER_VERSION` MUST also change in the same commit
