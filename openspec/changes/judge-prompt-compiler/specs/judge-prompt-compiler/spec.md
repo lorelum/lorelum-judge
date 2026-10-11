@@ -179,13 +179,37 @@ verdict.
 - **WHEN** a decisive verdict cites only an empty `present` item
 - **THEN** `validateVerdictEvidence` fails with code `verdict_unsupported`
 
-### Requirement: The budget covers evidence text only
+### Requirement: Evidence budget covers evidence text only
 
-Headers, unavailable and no-evidence lines, and the untrusted notice MUST NOT be counted
-against the budget. Prompt size therefore grows with the number of items, and the spec
-does not cap item count.
+The evidence budget MUST count only the code points of evidence text. Headers,
+unavailable and no-evidence lines, and the untrusted notice MUST NOT be counted against
+it. Prompt size therefore grows with the number of items, and this capability does not
+cap item count.
 
 #### Scenario: Headers do not consume budget
 
-- **WHEN** the budget is 0 and several unavailable items exist
+- **WHEN** the evidence budget is 0 and several unavailable items exist
 - **THEN** every header is rendered and no item is truncated or withheld for that reason
+
+### Requirement: Rule length is capped and overflow is an error
+
+Rules are the normalized system text, the normalized template, and every variable value.
+Their total length in code points MUST NOT exceed `ruleBudget`. An overflow MUST fail
+with code `rules_over_budget` and MUST NOT truncate any rule. `ruleBudget` MUST be a
+non-negative safe integer, and it MUST be part of the prompt identity. Evidence MUST NOT
+count toward `ruleBudget`.
+
+#### Scenario: Rules at the limit compile
+
+- **WHEN** the rules total exactly `ruleBudget` code points
+- **THEN** compilation succeeds
+
+#### Scenario: One character over fails
+
+- **WHEN** the rules total `ruleBudget` plus one code point
+- **THEN** compilation fails with code `rules_over_budget` and the message names the limit
+
+#### Scenario: Variable values count
+
+- **WHEN** a long variable value pushes the rules over `ruleBudget`
+- **THEN** compilation fails with code `rules_over_budget`

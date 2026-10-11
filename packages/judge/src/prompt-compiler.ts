@@ -45,6 +45,12 @@ export interface PromptSpec {
   readonly variables: Readonly<Record<string, string>>;
   /** Characters (code points) of evidence text that may be shown. */
   readonly evidenceBudget: number;
+  /**
+   * Maximum characters (code points) of rules: normalized system text, normalized
+   * template, and every variable value. Exceeding it is an error. Rules are never
+   * truncated and never count against `evidenceBudget`.
+   */
+  readonly ruleBudget: number;
 }
 
 export interface PromptInput {
@@ -65,6 +71,7 @@ export interface CompiledPrompt {
 export type PromptIssueCode =
   | "invalid_input"
   | "invalid_budget"
+  | "rules_over_budget"
   | "invalid_variable_name"
   | "reserved_variable"
   | "unbound_variable"
@@ -130,13 +137,21 @@ interface ReadPrompt {
   readonly template: string;
   readonly variables: ReadonlyMap<string, string>;
   readonly evidenceBudget: number;
+  readonly ruleBudget: number;
 }
 
 function readPrompt(raw: unknown): ReadPrompt | CompileResult {
   if (!isRecord(raw)) {
     return fail("$.prompt", "invalid_input", "prompt must be an object");
   }
-  const { system, template, variables, evidenceBudget } = raw;
+  const { system, template, variables, evidenceBudget, ruleBudget } = raw;
+  if (typeof ruleBudget !== "number" || !Number.isSafeInteger(ruleBudget) || ruleBudget < 0) {
+    return fail(
+      "$.prompt.ruleBudget",
+      "invalid_budget",
+      "rule budget must be a non-negative safe integer",
+    );
+  }
   if (
     typeof evidenceBudget !== "number" ||
     !Number.isSafeInteger(evidenceBudget) ||
@@ -176,6 +191,7 @@ function readPrompt(raw: unknown): ReadPrompt | CompileResult {
     template: normalizeText(template),
     variables: bound,
     evidenceBudget,
+    ruleBudget,
   };
 }
 
@@ -368,6 +384,18 @@ function compile(raw: unknown): CompileResult {
     return materials;
   }
 
+  const ruleCharacters = [prompt.system, prompt.template, ...prompt.variables.values()].reduce(
+    (total, text) => total + codePoints(text).length,
+    0,
+  );
+  if (ruleCharacters > prompt.ruleBudget) {
+    return fail(
+      "$.prompt",
+      "rules_over_budget",
+      `rules are ${ruleCharacters} characters, over the limit of ${prompt.ruleBudget}; shorten them`,
+    );
+  }
+
   const placeholderIssues = checkPlaceholders(prompt.template, prompt.variables);
   if (placeholderIssues.length > 0) {
     return { ok: false, issues: placeholderIssues };
@@ -407,6 +435,7 @@ function compile(raw: unknown): CompileResult {
     template: prompt.template,
     variableNames: [...prompt.variables.keys()].sort(),
     evidenceBudget: prompt.evidenceBudget,
+    ruleBudget: prompt.ruleBudget,
   });
   if (typeof promptIdentity !== "string") {
     return { ok: false, issues: [promptIdentity] };

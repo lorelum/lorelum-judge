@@ -49,4 +49,5 @@
 - [x] 8.3 Empty present evidence: recorded, cannot support a decisive verdict, with test.
 - [x] 8.4 Identity failure returned as an issue instead of thrown.
 - [x] 8.5 Document that the budget covers evidence text only.
-- [ ] 8.6 Confirm the rule change (rules not counted) with the maintainer before merge.
+- [x] 8.6 Maintainer decision: rule overflow is an error, so a rule cap was added (see 8.7).
+- [x] 8.7 Add `ruleBudget` (required, non-negative safe integer) and `rules_over_budget` with tests, mutation-checked.

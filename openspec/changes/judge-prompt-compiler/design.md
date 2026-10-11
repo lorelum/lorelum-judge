@@ -10,7 +10,7 @@ computes the identities itself, and emits a manifest that #7a's validator accept
 deterministic output; explicit record of what was shown.
 
 **Non-Goals:** semantic equivalence, token counting, evidence priority, calibration,
-rule-length budgets, and any change to `protocol`.
+and any change to `protocol`.
 
 ## Decisions
 
@@ -18,11 +18,15 @@ rule-length budgets, and any change to `protocol`.
 
 Materials sort by id, then consume a character budget in that order. The first item
 that fits is `rendered`; the first that does not fit is `truncated` to the remaining
-characters if any remain, and every later one is `withheld`. Rules (system text and
-template) are never truncated and are not counted against the budget, so a long rule
-cannot cause evidence to vanish silently. Id order is arbitrary; it is chosen because it
-is deterministic and independent of caller order. A caller who needs priority will
-need a field, which this change does not add.
+characters if any remain, and every later one is `withheld`. Rules are governed separately by `ruleBudget` and never count against the evidence budget.
+
+### Rule overflow is an error, not truncation
+
+Rules are the normalized system text, template, and variable values. Their total is
+capped by `ruleBudget`, and an overflow fails with `rules_over_budget`. Truncating a
+rule would silently change what the model was asked to do, so the compiler refuses
+instead. The caller must shorten the rules. `ruleBudget` is part of the prompt identity
+because changing the cap changes which rule sets are accepted.
 
 ### Lengths are Unicode code points
 

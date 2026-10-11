@@ -19,9 +19,10 @@ provider SDKs, framework orchestration, or the engineering implementation workfl
 
 Behavior:
 
-- Evidence renders in id order. The budget counts code points of evidence only; the
-  first item that does not fit is truncated, later ones are withheld. Rules are never
-  truncated or counted.
+- Evidence renders in id order. `evidenceBudget` counts code points of evidence text
+  only; the first item that does not fit is truncated, later ones are withheld.
+- Rules (system text, template, variable values) are capped by `ruleBudget`. An overflow
+  fails with `rules_over_budget`; rules are never truncated.
 - Text is normalized first (NFC, LF line endings, no trailing spaces or tabs). Content
   identities are computed here from the normalized text, not supplied by the caller.
 - Template placeholders are `{{name}}`. Every placeholder must be bound, every binding

@@ -20,6 +20,7 @@ function spec(overrides: Partial<PromptSpec> = {}): PromptSpec {
     template: "Goal: {{goal}}\n\n{{evidence}}\n",
     variables: { goal: "Check the documented status codes" },
     evidenceBudget: 100,
+    ruleBudget: 1000,
     ...overrides,
   };
 }
@@ -64,6 +65,7 @@ describe("order independence", () => {
       evidence: [{ text: "alpha", status: "present", id: "e1" }],
       prompt: {
         evidenceBudget: 100,
+        ruleBudget: 1000,
         variables: { goal: "Check the documented status codes" },
         template: "Goal: {{goal}}\n\n{{evidence}}\n",
         system: "You assess evidence against the rule.",
@@ -435,5 +437,61 @@ describe("empty present evidence", () => {
     expect(verdict.ok ? [] : verdict.issues.map((issue) => issue.code)).toEqual([
       "verdict_unsupported",
     ]);
+  });
+});
+
+describe("rule budget", () => {
+  const template = "{{goal}}\n{{evidence}}";
+
+  test("rules at exactly the limit compile, one below fails", () => {
+    // system "abcd" + template + empty goal value
+    const total = "abcd".length + template.length;
+    const at = spec({ system: "abcd", template, variables: { goal: "" }, ruleBudget: total });
+    expect(codes(compile(at, []))).toEqual([]);
+    expect(codes(compile({ ...at, ruleBudget: total - 1 }, []))).toEqual(["rules_over_budget"]);
+  });
+
+  test("variable values count toward the rule limit", () => {
+    const withValue = spec({
+      template,
+      variables: { goal: "x".repeat(50) },
+      ruleBudget: 40,
+    });
+    expect(codes(compile(withValue, []))).toEqual(["rules_over_budget"]);
+  });
+
+  test("evidence does not count toward the rule limit", () => {
+    const value = must(
+      compile(spec({ ruleBudget: 1000, evidenceBudget: 10_000 }), [
+        present("e1", "y".repeat(5_000)),
+      ]),
+    );
+    expect(value.manifest.items[0]?.render?.state).toBe("rendered");
+  });
+
+  test("the overflow names the rule path and the limit", () => {
+    const result = compile(spec({ ruleBudget: 3 }), []);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues[0]?.path).toBe("$.prompt");
+      expect(result.issues[0]?.code).toBe("rules_over_budget");
+      expect(result.issues[0]?.message).toContain("over the limit of 3");
+    }
+  });
+
+  test("rules are not truncated: an overflow fails instead", () => {
+    expect(codes(compile(spec({ system: "s".repeat(200), ruleBudget: 100 }), []))).toEqual([
+      "rules_over_budget",
+    ]);
+  });
+
+  test.each([-1, 1.5, Number.NaN])("rejects rule budget %p", (ruleBudget) => {
+    expect(codes(compile(spec({ ruleBudget }), []))).toEqual(["invalid_budget"]);
+  });
+
+  test("the rule budget is part of the prompt identity", () => {
+    const a = must(compile(spec({ ruleBudget: 1000 }), []));
+    const b = must(compile(spec({ ruleBudget: 1001 }), []));
+    expect(b.promptIdentity).not.toBe(a.promptIdentity);
   });
 });
