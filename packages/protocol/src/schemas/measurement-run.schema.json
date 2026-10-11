@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:measurement-run:v1",
+  "title": "MeasurementRun",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "definitionIdentity",
+    "instrumentIdentity",
+    "instrumentSource",
+    "verdicts"
+  ],
+  "properties": {
+    "schema": { "const": "lorelum.judge.measurement-run/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "definitionIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "instrumentIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "instrumentSource": { "const": "declared" },
+    "verdicts": { "type": "array", "items": { "$ref": "urn:lorelum:judge:verdict:v1" } }
+  }
+}

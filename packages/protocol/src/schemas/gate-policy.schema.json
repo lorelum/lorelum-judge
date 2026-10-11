@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:gate-policy:v1",
+  "title": "GatePolicy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "onUncalibrated"],
+  "properties": {
+    "schema": { "const": "lorelum.judge.gate-policy/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "onUncalibrated": { "enum": ["diagnostic", "shadow", "indeterminate"] }
+  }
+}

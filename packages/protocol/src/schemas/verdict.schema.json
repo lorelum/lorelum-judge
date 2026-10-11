@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "lorelum.judge.verdict/v1",
+  "$id": "urn:lorelum:judge:verdict:v1",
   "title": "Verdict",
   "type": "object",
   "additionalProperties": false,

@@ -34,6 +34,30 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
   example `$.anchors[1].verdict`. `validateVerdict` validates its criterion first
   and reports problems with it as `invalid_criterion`.
 
+## Measurement
+
+- `MeasurementDefinition` is a set of criteria. `InstrumentProfile` declares the
+  model, decoding, prompt identity, runtime, and repetition count that produced a
+  measurement. **Instrument values are declared by the caller, not verified**:
+  the runtime contract does not report them, and a `MeasurementRun` records
+  `instrumentSource: "declared"`.
+- `definitionIdentity`, `instrumentIdentity`, and `gatePolicyIdentity` return an
+  identity only for a valid record. Changing any field changes the identity.
+  Criteria order is part of a definition's identity.
+- `validateRun(definition, instrument, run)` requires the run's identities to
+  match, and exactly one verdict per criterion. A criterion without a verdict is
+  `missing_verdict`; record `unknown` or `insufficient` explicitly instead. A run
+  carries no score or timestamp.
+- `GatePolicy` and `CalibrationArtifact` are minimal shapes: a degradation
+  (`diagnostic`, `shadow`, `indeterminate`) and a status plus three identities.
+  Thresholds, statistics, and confidence rules are not defined here.
+- `evaluateEnforcement({ definition, instrument, gatePolicy, calibration })`
+  allows enforcement only for an `enforced` calibration whose definition,
+  instrument, and gate policy identities all match. Otherwise it returns every
+  applicable reason and the policy's degradation.
+- `measurementKey(definition, instrument, evidenceIdentities)` is a cache key.
+  Evidence order and duplicates do not change it.
+
 It does not own model calls, runtime state, filesystem execution, provider SDK
-types, or benchmark fixture conventions. Measurement definitions follow in #6c;
-evidence bundles and status in #7.
+types, or benchmark fixture conventions. Evidence bundles, evidence status, and
+prompt compilation follow in #7; calibration and gate semantics in #9.

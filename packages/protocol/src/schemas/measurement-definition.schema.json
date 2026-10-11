@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:measurement-definition:v1",
+  "title": "MeasurementDefinition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "criteria"],
+  "properties": {
+    "schema": { "const": "lorelum.judge.measurement-definition/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "urn:lorelum:judge:criterion:v1" }
+    }
+  }
+}
