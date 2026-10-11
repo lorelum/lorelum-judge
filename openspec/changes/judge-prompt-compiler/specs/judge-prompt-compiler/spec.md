@@ -173,9 +173,9 @@ not claim otherwise.
 
 ### Requirement: Empty present evidence is recorded and cannot support a decision
 
-A `present` item whose normalized text is empty MUST render as `rendered` with lengths 0
-and MUST be accepted as a record. Under #7a's citation rule it cannot support a decisive
-verdict.
+A `present` item whose normalized text is empty MUST be accepted as a record. It renders
+as `rendered` with lengths 0 only while budget remains, and as `withheld` otherwise (see
+the budget requirement). Under #7a's citation rule it cannot support a decisive verdict.
 
 #### Scenario: Empty item does not support a decisive verdict
 

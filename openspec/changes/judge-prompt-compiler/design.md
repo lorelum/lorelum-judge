@@ -47,7 +47,8 @@ treats every such change as significant.
 ### Three identities, with distinct scopes
 
 - **Prompt identity** (`lorelum.judge.prompt/v1`): normalized system text, normalized
-  template, sorted variable names, render version, and evidence budget. Written into
+  template, normalized variable bindings, render version, evidence budget, and rule budget.
+  Written into
   `InstrumentProfile.promptIdentity`. Changing any of these invalidates calibration.
   Variable values are included, because rubric text is part of the prompt (`AGENTS.md`
   4.2). `ruleBudget` is included because it decides which rule sets are accepted.
@@ -103,6 +104,12 @@ Two candidate texts that differ only in `</evidence>` against `&lt;/evidence>` r
 identically, so the model sees the same prompt and the render identity is equal. The
 content identity differs, because the record should show what each candidate said. The
 manifest lengths count what was shown.
+
+### Known limitation: failure paths may depend on input order
+
+For a failed compilation, the reported path for a duplicate id can depend on input
+order, because equal ids keep their input order under the stable sort. Successful
+output is order independent, and the spec requires only that.
 
 ## Risks / Trade-offs
 

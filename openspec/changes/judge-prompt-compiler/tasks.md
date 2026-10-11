@@ -35,7 +35,8 @@
 - [x] 6.2 Run `bun run validate`.
 - [x] 6.3 Run `openspec validate judge-prompt-compiler --type change --strict`.
 - [x] 6.4 Import the built `judge` entrypoint in Node ESM and compile a sample.
-- [ ] 6.5 Read back the PR and record AI review findings and resolution.
+- [x] 6.5 Independent review in a separate context: round 1 at 234092c (9 findings),
+  round 2 at a1f4124 (A to D). All resolved or decided; see 8.x.
 
 ## 7. Final Gate
 
@@ -51,3 +52,7 @@
 - [x] 8.5 Document that the budget covers evidence text only.
 - [x] 8.6 Maintainer decision: rule overflow is an error, so a rule cap was added (see 8.7).
 - [x] 8.7 Add `ruleBudget` (required, non-negative safe integer) and `rules_over_budget` with tests, mutation-checked.
+- [x] 8.8 Bump `PROMPT_RENDER_VERSION` to v2 for the rendering changes in round 2.
+- [x] 8.9 Pin the full rendered output (all block shapes and the notice text) and add a mutation check.
+- [x] 8.10 Reject unpaired surrogates at the field path instead of throwing from identity.
+- [x] 8.11 Record independent review round 1 (9 findings) and round 2 (A to D) with resolutions in the PR.

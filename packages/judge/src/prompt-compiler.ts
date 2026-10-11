@@ -10,7 +10,7 @@ import type { RuntimeMessage } from "@lorelum/judge-runtime";
 
 import { isRecord } from "./type-guards.js";
 
-export const PROMPT_RENDER_VERSION = "lorelum.judge.prompt-render/v1";
+export const PROMPT_RENDER_VERSION = "lorelum.judge.prompt-render/v2";
 
 const PROMPT_SCHEMA = "lorelum.judge.prompt/v1";
 const RENDER_SCHEMA = "lorelum.judge.render/v1";
@@ -140,6 +140,11 @@ interface ReadPrompt {
   readonly ruleBudget: number;
 }
 
+/** True when the text has no unpaired surrogate; such text cannot be canonicalized. */
+function isWellFormed(text: string): boolean {
+  return !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text);
+}
+
 function readPrompt(raw: unknown): ReadPrompt | CompileResult {
   if (!isRecord(raw)) {
     return fail("$.prompt", "invalid_input", "prompt must be an object");
@@ -166,6 +171,9 @@ function readPrompt(raw: unknown): ReadPrompt | CompileResult {
   if (typeof system !== "string" || typeof template !== "string") {
     return fail("$.prompt", "invalid_input", "system and template must be strings");
   }
+  if (!isWellFormed(system) || !isWellFormed(template)) {
+    return fail("$.prompt", "invalid_input", "system and template must be well-formed Unicode");
+  }
   if (!isRecord(variables)) {
     return fail("$.prompt.variables", "invalid_input", "variables must be an object");
   }
@@ -183,6 +191,13 @@ function readPrompt(raw: unknown): ReadPrompt | CompileResult {
     }
     if (typeof value !== "string") {
       return fail(`$.prompt.variables.${name}`, "invalid_input", "variable values must be strings");
+    }
+    if (!isWellFormed(value)) {
+      return fail(
+        `$.prompt.variables.${name}`,
+        "invalid_input",
+        "value must be well-formed Unicode",
+      );
     }
     bound.set(name, normalizeText(value));
   }
@@ -266,6 +281,9 @@ function readEvidence(raw: unknown): EvidenceMaterial[] | CompileResult {
       status !== "contradiction"
     ) {
       return fail(`${path}.status`, "invalid_evidence", "unknown status");
+    }
+    if (typeof text === "string" && !isWellFormed(text)) {
+      return fail(`${path}.text`, "invalid_evidence", "text must be well-formed Unicode");
     }
     const hasText = status === "present" || status === "contradiction";
     if (hasText && typeof text !== "string") {

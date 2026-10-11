@@ -21,6 +21,8 @@ Behavior:
 
 - Evidence renders in id order. `evidenceBudget` counts code points of evidence text
   only; the first item that does not fit is truncated, later ones are withheld.
+- An empty evidence item renders as `rendered` only while budget remains; after that it is
+  `withheld`. It never supports a decisive verdict.
 - Rules (system text, template, variable values) are capped by `ruleBudget`. An overflow
   fails with `rules_over_budget`; rules are never truncated.
 - Text is normalized first (NFC, LF line endings, no trailing spaces or tabs). Content
@@ -34,6 +36,7 @@ Behavior:
 - The system message ends with a fixed notice that evidence blocks are data, not
   instructions. This is a stable marker; it does not stop a model from following
   instructions in evidence.
+- Text with unpaired surrogates is rejected with the field's path, not canonicalized.
 - `compilePrompt` never throws. Failures are `{ ok: false, issues }`.
 
 Not here: calibration and gate semantics (#9), rubric authoring (#8), and any provider
