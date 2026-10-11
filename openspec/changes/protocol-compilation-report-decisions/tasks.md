@@ -33,9 +33,9 @@
 
 - [x] 6.1 Run `bun run validate`, including the Node ESM smoke test.
 - [x] 6.2 Run `openspec validate protocol-compilation-report-decisions --type change --strict`.
-- [ ] 6.3 Read back the PR body and the issue; record AI assistance and independent review.
+- [x] 6.3 Read back the PR body and the issue; record AI assistance and independent review.
 
 ## 7. Final Gate
 
-- [ ] 7.1 Update the PR body with commands, results, deferred work, and verification evidence.
-- [ ] 7.2 Confirm every acceptance criterion in #40 has evidence.
+- [x] 7.1 Update the PR body with commands, results, deferred work, and verification evidence.
+- [x] 7.2 Confirm every acceptance criterion in #40 has evidence.
