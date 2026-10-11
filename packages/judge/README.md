@@ -39,5 +39,33 @@ Behavior:
 - Text with unpaired surrogates is rejected with the field's path, not canonicalized.
 - `compilePrompt` never throws. Failures are `{ ok: false, issues }`.
 
-Not here: calibration and gate semantics (#9), rubric authoring (#8), and any provider
-call.
+Not here: calibration and gate semantics (#9), and any provider call. The model call that
+uses this compiler is in the rubric compiler, through a caller-supplied `ModelPort`.
+
+## Rubric compiler
+
+`compileRubric({ rubricId, contract, prompt, instrument, contextIdentity, policyIdentity, model, runId, stepIndex, signal })`
+turns a task contract into a proposal `RubricSet` and a `CompilationReport`.
+
+- Acceptance items render as evidence with their ids, through `compilePrompt`. The
+  compiler appends its own output instruction to the caller's system text; that text is
+  part of the prompt identity.
+- One `ModelPort.generate` call per contract. The response must be `structured`.
+  `runId`, `stepIndex`, and `signal` come from the caller.
+- Model output is untrusted. Every criterion goes through `validateCriterionDraft`; any
+  failure fails the whole compilation. Nothing is repaired or dropped.
+- The gate is deterministic: an unknown `covers` or `mergedFrom` id fails the
+  compilation; a mandatory criterion needs a user, policy, or contract source;
+  applicability is by `appliesTo` and task class; merges are only the declared
+  `mergedFrom`; undeclared overlap is a `conflict`.
+- Result: `{ ok: true, value }` with `rubric` (status `proposal`), `report`,
+  `rubricIdentity`, and `binding`; or `{ ok: false, issues }`. Each issue has a
+  `category`: `model`, `output`, `gate`, or `prompt`.
+- `complete` is derived from the report: nothing uncovered, unsupported, or conflicting.
+- `freezeRubric(compiled)` produces a `frozen` rubric only when the report is complete
+  and every criterion has anchors. It needs no review record.
+
+Not done here: retries, splitting, output repair, repo context selection (only an
+optional `contextIdentity` is accepted and bound, not verified), calibration (#9), and
+migration (#10). Merged criteria's evidence selectors are not checked against the merged
+acceptance ids; the surviving criterion's own evidence is what the rubric records.
