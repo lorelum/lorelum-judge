@@ -142,32 +142,33 @@ describe("task class is projected to the model", () => {
   });
 });
 
-describe("the class the model reads matches the contract exactly", () => {
-  /** Reads the class from the final system message, as a model would, and echoes it back. */
-  function echoingModel(): { model: ModelPort; requests: ModelRequest[] } {
-    const requests: ModelRequest[] = [];
-    const model: ModelPort = {
-      async generate(request) {
-        requests.push(request);
-        const system = request.messages.find((message) => message.role === "system")?.content ?? "";
-        const match = /The task class of this contract is (".*?")\./.exec(system);
-        const shown = match?.[1];
-        if (shown === undefined) {
-          throw new Error("task class not found in system message");
-        }
-        const echoed = JSON.parse(shown) as string;
-        return {
-          kind: "structured",
-          value: {
-            proposals: [proposal("c1", ["a1"], [echoed]), proposal("c2", ["a2"], [echoed])],
-            unsupported: [],
-          },
-        } as ModelResponse;
-      },
-    };
-    return { model, requests };
-  }
+/** Reads the class from the final system message, as a model would, and echoes it back. */
+function echoingModel(): { model: ModelPort; requests: ModelRequest[] } {
+  const requests: ModelRequest[] = [];
+  const model: ModelPort = {
+    async generate(request) {
+      requests.push(request);
+      const system = request.messages.find((message) => message.role === "system")?.content ?? "";
+      // A JSON string token: escaped characters are allowed, so the match ends at the real closing quote.
+      const match = /The task class of this contract is ("(?:[^"\\]|\\.)*")\./.exec(system);
+      const shown = match?.[1];
+      if (shown === undefined) {
+        throw new Error("task class not found in system message");
+      }
+      const echoed = JSON.parse(shown) as string;
+      return {
+        kind: "structured",
+        value: {
+          proposals: [proposal("c1", ["a1"], [echoed]), proposal("c2", ["a2"], [echoed])],
+          unsupported: [],
+        },
+      } as ModelResponse;
+    },
+  };
+  return { model, requests };
+}
 
+describe("the class the model reads matches the contract exactly", () => {
   test("a decomposed (NFD) task class is echoed back and matches the contract", async () => {
     const decomposed = "cafe\u0301-cli";
     const { model } = echoingModel();
@@ -184,5 +185,16 @@ describe("the class the model reads matches the contract exactly", () => {
     const { model, requests } = echoingModel();
     await compileRubric(input(model, decomposed));
     expect(systemText(requests[0])).not.toContain("\u0301");
+  });
+});
+
+describe("class containing quote-period", () => {
+  test('a class with "." in it round-trips', async () => {
+    const tricky = 'cli"." x';
+    const { model } = echoingModel();
+    const result = await compileRubric(input(model, tricky));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.rubric.entries[0]?.appliesTo).toEqual([tricky]);
   });
 });

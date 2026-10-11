@@ -21,8 +21,10 @@ differ only in `taskClass` MUST produce different system messages.
 #### Scenario: Non-NFC task class round-trips
 
 - **WHEN** the `taskClass` is not in NFC form (for example `cafe\u0301-cli`)
-- **THEN** a model that echoes the class from the final system message produces an `appliesTo`
-  that matches the contract exactly, and the rubric compiles
+- **THEN** a model that copies the class from the final system message as the JSON string
+  shown (decoding the escapes) produces an `appliesTo` that matches the contract exactly, and
+  the rubric compiles. A model that writes the decoded form instead is not guaranteed to match;
+  its entries are excluded by the exact-match gate, and the compilation reports that.
 
 ### Requirement: Acceptance criteria are rendered as evidence
 

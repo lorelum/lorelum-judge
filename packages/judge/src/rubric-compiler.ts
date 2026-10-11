@@ -250,11 +250,12 @@ function freezeChecked(compiled: CompiledRubric): FreezeResult {
   if (issues.length > 0) {
     return { ok: false, issues };
   }
-  const frozen = deepFreeze({ ...compiled.rubric, status: "frozen" } as RubricSet);
-  const checked = validateRubricSet(frozen);
+  // Validate the frozen candidate; return the validator's typed value, not a cast.
+  const checked = validateRubricSet({ ...compiled.rubric, status: "frozen" });
   if (!checked.ok) {
     return { ok: false, issues: fromValidation("gate", "$", checked.issues) };
   }
+  const frozen = deepFreeze(checked.value);
   const identity = rubricIdentity(frozen, compiled.binding);
   if (!identity.ok) {
     return { ok: false, issues: fromValidation("gate", "$", identity.issues) };
@@ -325,9 +326,11 @@ async function run(raw: CompileRubricInput): Promise<CompileRubricResult> {
     status: "present",
     text: item.text,
   }));
+  // The caller's prompt is read once; every field used below comes from this single read.
+  const callerPrompt = input.prompt;
   const prompt: PromptSpec = {
-    ...input.prompt,
-    system: `${input.prompt.system}\n\n${rubricOutputInstruction(contract.taskClass)}`,
+    ...callerPrompt,
+    system: `${callerPrompt.system}\n\n${rubricOutputInstruction(contract.taskClass)}`,
   };
   const compiled = compilePrompt({ prompt, evidence });
   if (!compiled.ok) {
