@@ -539,6 +539,16 @@ describe("identity functions copy their input", () => {
     );
   });
 
+  test("a revoked proxy inside a property is reported at that property", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    const outcome = identityOf("x", { a: proxy });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error.path).toBe("$.value.a");
+    }
+  });
+
   test("a symbol key is rejected by the copy", () => {
     expect(() => snapshot({ [Symbol("s")]: 1 })).toThrow("symbol keys are not allowed");
   });

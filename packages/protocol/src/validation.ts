@@ -138,11 +138,11 @@ function copyValue(value: unknown, path: string, ancestors: Set<object>, mode: M
   if (ancestors.has(value)) {
     throw new CopyError(path, "a circular reference is not allowed");
   }
-  if (Array.isArray(value) && Object.getPrototypeOf(value) !== Array.prototype) {
-    throw new CopyError(path, "only plain arrays are allowed");
-  }
   ancestors.add(value);
   try {
+    if (Array.isArray(value) && Object.getPrototypeOf(value) !== Array.prototype) {
+      throw new CopyError(path, "only plain arrays are allowed");
+    }
     return Array.isArray(value)
       ? copyArray(value, path, ancestors, mode)
       : copyObject(value, path, ancestors, mode);
