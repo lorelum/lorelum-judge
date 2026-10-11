@@ -120,6 +120,11 @@ an absorbed id MUST NOT be merged into two criteria. A `reason` MUST contain a n
 character. A report whose `contractIdentity` differs from the contract's MUST fail with
 `identity_mismatch`.
 
+`merged` records are supplied by the caller and are NOT verified against the proposals they
+describe: the validator receives only the frozen rubric, so it cannot tell whether an absorbed
+id ever existed. It checks that the records are coherent with the frozen rubric and with each
+other, and no more. Verifying a merge needs the proposal set, which #8b owns.
+
 #### Scenario: Report claims coverage nothing provides
 
 - **WHEN** an acceptance id is `covered` but no entry covers it

@@ -11,6 +11,7 @@ import {
   failed,
   guarded,
   schemaIssues,
+  snapshot,
   type ValidationIssue,
   type ValidationResult,
 } from "./validation.js";
@@ -79,7 +80,8 @@ export function validateEvidenceBundle(input: unknown): ValidationResult<Evidenc
   return guarded<ValidationResult<EvidenceBundle>>(() => checkBundleShape(input), failed);
 }
 
-function checkBundleShape(input: unknown): ValidationResult<EvidenceBundle> {
+function checkBundleShape(raw: unknown): ValidationResult<EvidenceBundle> {
+  const input = snapshot(raw);
   if (!checkBundle(input)) {
     return { ok: false, issues: schemaIssues(checkBundle.errors) };
   }

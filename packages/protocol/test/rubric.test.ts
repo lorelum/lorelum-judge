@@ -677,13 +677,13 @@ describe("input is read once into a snapshot", () => {
       policyIdentity: hex("3"),
     };
     const result = rubricIdentity(rubric(goodEntries()), flipping);
-    // The contract is read at most once, so a flip cannot bind the identity to a
-    // contract the rubric was not validated against.
-    expect(reads).toBeLessThanOrEqual(1);
-    if (result.ok) {
-      const direct = rubricIdentity(rubric(goodEntries()), binding());
-      expect(direct.ok ? direct.identity : "").toBe(result.identity);
-    }
+    // The contract is read exactly once, so a flip cannot bind the identity to a contract
+    // the rubric was not validated against, and the identity is the one of the first read.
+    expect(reads).toBe(1);
+    expect(result.ok).toBe(true);
+    const direct = rubricIdentity(rubric(goodEntries()), binding());
+    expect(direct.ok).toBe(true);
+    expect(result.ok ? result.identity : "").toBe(direct.ok ? direct.identity : "unreachable");
   });
 
   test.each([

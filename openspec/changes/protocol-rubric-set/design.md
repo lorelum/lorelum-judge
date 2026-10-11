@@ -73,6 +73,12 @@ whose `covers` contains it. A report is valid only if it agrees:
 A report that says "covered" for an item nothing covers, or omits an item, fails. The
 report cannot be a free-form claim.
 
+The `merged` list is the exception. It is checked for coherence with the frozen rubric and
+with itself, but not against the proposals, because this capability never receives them. A
+report can therefore claim a merge of an id that never existed. It is documented as
+caller-supplied and unverified, like `contextIdentity`; #8b has the proposals and decides
+how a merge is verified.
+
 ### Merging is structural
 
 This change records merges but does not decide them. #8b merges two proposals only when

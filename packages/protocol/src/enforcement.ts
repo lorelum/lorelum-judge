@@ -6,7 +6,7 @@ import {
   validateCalibration,
   validateGatePolicy,
 } from "./measurement.js";
-import { guarded, type ValidationIssue } from "./validation.js";
+import { guarded, snapshot, type ValidationIssue } from "./validation.js";
 
 export type EnforcementReason =
   | "invalid_input"
@@ -42,31 +42,42 @@ export interface EnforcementInput {
  * declares, or to `indeterminate` when no valid gate policy can be read. Never throws.
  */
 export function evaluateEnforcement(input: EnforcementInput): EnforcementDecision {
+  // The policy is read once and copied, so the degradation and the identity that the
+  // calibration is compared with come from the same data.
+  const gatePolicy = guarded<unknown>(
+    () => snapshot(input.gatePolicy),
+    () => undefined,
+  );
   const degradeTo = guarded<Degradation>(
     () => {
-      const policy = validateGatePolicy(input.gatePolicy);
+      const policy = validateGatePolicy(gatePolicy);
       return policy.ok ? policy.value.onUncalibrated : "indeterminate";
     },
     () => "indeterminate",
   );
   return guarded<EnforcementDecision>(
-    () => decide(input, degradeTo),
+    () => decide(input, gatePolicy, degradeTo),
     () => ({ enforce: false, reasons: ["invalid_input"], degradeTo }),
   );
 }
 
-function decide(input: EnforcementInput, degradeTo: Degradation): EnforcementDecision {
+function decide(
+  input: EnforcementInput,
+  gatePolicy: unknown,
+  degradeTo: Degradation,
+): EnforcementDecision {
   const definition = definitionIdentity(input.definition);
   const instrument = instrumentIdentity(input.instrument);
-  const gate = gatePolicyIdentity(input.gatePolicy);
+  const gate = gatePolicyIdentity(gatePolicy);
   if (!definition.ok || !instrument.ok || !gate.ok) {
     return { enforce: false, reasons: ["invalid_input"], degradeTo };
   }
 
-  if (input.calibration === undefined) {
+  const calibrationInput = input.calibration;
+  if (calibrationInput === undefined) {
     return { enforce: false, reasons: ["no_calibration"], degradeTo };
   }
-  const calibration = validateCalibration(input.calibration);
+  const calibration = validateCalibration(calibrationInput);
   if (!calibration.ok) {
     return { enforce: false, reasons: ["invalid_input"], degradeTo };
   }

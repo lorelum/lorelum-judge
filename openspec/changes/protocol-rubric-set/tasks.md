@@ -53,3 +53,8 @@
 - [x] 8.6 Replace the three local `failed` helpers with the shared one.
 - [x] 8.7 Correct the dist-smoke requirement to the existing import check; keep the behavioural run as PR evidence.
 - [x] 8.8 Record the independent review (bbf7b3f) and its resolution in the PR.
+- [x] 8.9 Apply the snapshot to the earlier protocol APIs too (`criterion`, `evidence`, `measurement`, `enforcement`), so "each public function" is true; add an inherited-field case for each and a read-once case for definition, bundle, and enforcement.
+- [x] 8.10 Make the stateful-contract rubric test able to fail (exactly one read, unconditional identity comparison).
+- [x] 8.11 State that `merged` records are caller-supplied and unverified; verification needs the proposal set (#8b).
+- [x] 8.12 Re-run the independent review on the new commit and record it in the PR.
+

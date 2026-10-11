@@ -96,7 +96,8 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
   exactly one of `covered`, `uncovered`, `unsupported`, `covered` to list exactly the
   covering criteria, and `merged` to name a criterion that exists and absorbed ids that
   no longer do. A survivor has one merged record, and an absorbed id goes to one survivor.
-  A gap's `reason` must contain a non-whitespace character.
+  A gap's `reason` must contain a non-whitespace character. `merged` records are caller
+  supplied and not verified against the proposals, which this package never receives.
 - Input is copied once (own properties, getters read once) before it is validated and
   hashed, so inherited fields and stateful getters cannot make the validated data differ
   from the hashed data.

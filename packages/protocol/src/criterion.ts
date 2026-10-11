@@ -7,6 +7,7 @@ import {
   failed,
   guarded,
   schemaIssues,
+  snapshot,
   type ValidationIssue,
   type ValidationResult,
 } from "./validation.js";
@@ -45,7 +46,8 @@ export function validateCriterionDraft(input: unknown): ValidationResult<Criteri
   return guarded<ValidationResult<Criterion>>(() => checkCriterionShape(input, true), failed);
 }
 
-function checkCriterionShape(input: unknown, draft: boolean): ValidationResult<Criterion> {
+function checkCriterionShape(raw: unknown, draft: boolean): ValidationResult<Criterion> {
+  const input = snapshot(raw);
   if (!checkCriterion(input)) {
     return { ok: false, issues: schemaIssues(checkCriterion.errors) };
   }
@@ -99,7 +101,8 @@ export function validateCriteria(input: unknown): ValidationResult<readonly Crit
   return guarded<ValidationResult<readonly Criterion[]>>(() => checkCriteriaSet(input), failed);
 }
 
-function checkCriteriaSet(input: unknown): ValidationResult<readonly Criterion[]> {
+function checkCriteriaSet(raw: unknown): ValidationResult<readonly Criterion[]> {
+  const input = snapshot(raw);
   if (!Array.isArray(input)) {
     return {
       ok: false,
@@ -161,7 +164,7 @@ export function validateVerdict(
   );
 }
 
-function checkVerdictAgainst(criterionInput: unknown, input: unknown): ValidationResult<Verdict> {
+function checkVerdictAgainst(criterionInput: unknown, raw: unknown): ValidationResult<Verdict> {
   const checkedCriterion = validateCriterion(criterionInput);
   if (!checkedCriterion.ok) {
     return {
@@ -174,6 +177,7 @@ function checkVerdictAgainst(criterionInput: unknown, input: unknown): Validatio
     };
   }
   const criterion = checkedCriterion.value;
+  const input = snapshot(raw);
 
   if (!checkVerdict(input)) {
     return { ok: false, issues: schemaIssues(checkVerdict.errors) };
