@@ -1021,12 +1021,24 @@ describe("compilation report: excluded proposals", () => {
     ]);
   });
 
-  test("rejects a blank reason on an uncovered gap with the same rule", () => {
+  test.each([
+    ["a zero-width space", "\u200B"],
+    ["a Hangul filler", "\u3164"],
+    ["a Hangul choseong filler", "\u115F"],
+    ["a Hangul jungseong filler", "\u1160"],
+    ["a halfwidth Hangul filler", "\uFFA0"],
+    ["a braille blank", "\u2800"],
+    ["a lone combining mark", "\u0301"],
+  ])("rejects a blank reason on an uncovered gap: %s", (_name, reason) => {
     const r = report({
       covered: [{ acceptanceId: "a1", criterionIds: ["c1"] }],
-      uncovered: [{ acceptanceId: "a2", reason: "\u200B" }],
+      uncovered: [{ acceptanceId: "a2", reason }],
     });
     expect(codes(check(r, [entry("c1", ["a1"])]))).toEqual(["schema"]);
+  });
+
+  test("accepts a spacing combining mark, which is visible", () => {
+    expect(check(report({ excluded: [excluded("c8", "not_applicable", "\u0903")] })).ok).toBe(true);
   });
 
   test("the missing-field rejection comes from the schema, not from a thrown TypeError", () => {
