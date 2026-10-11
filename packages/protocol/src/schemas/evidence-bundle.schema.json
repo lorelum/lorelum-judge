@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:evidence-bundle:v1",
+  "title": "EvidenceBundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "items"],
+  "properties": {
+    "schema": { "const": "lorelum.judge.evidence-bundle/v1" },
+    "items": {
+      "type": "array",
+      "items": { "$ref": "urn:lorelum:judge:evidence-item:v1" }
+    }
+  }
+}

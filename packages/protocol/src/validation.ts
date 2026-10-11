@@ -1,6 +1,7 @@
 import { Ajv, type ErrorObject, type ValidateFunction } from "ajv";
 
 import criterionSchema from "./schemas/criterion.schema.json" with { type: "json" };
+import evidenceItemSchema from "./schemas/evidence-item.schema.json" with { type: "json" };
 import verdictSchema from "./schemas/verdict.schema.json" with { type: "json" };
 
 export type IssueCode =
@@ -17,7 +18,11 @@ export type IssueCode =
   | "missing_verdict"
   | "duplicate_verdict"
   | "unknown_criterion"
-  | "identity_mismatch";
+  | "identity_mismatch"
+  | "evidence_item_invalid"
+  | "duplicate_evidence_item"
+  | "evidence_not_in_bundle"
+  | "verdict_unsupported";
 
 export interface ValidationIssue {
   readonly path: string;
@@ -31,7 +36,7 @@ export type ValidationResult<T> =
 
 // One validator holds the schemas that others reference, so `$ref` resolves.
 const ajv = new Ajv({ allErrors: true, strict: true });
-ajv.addSchema([criterionSchema, verdictSchema]);
+ajv.addSchema([criterionSchema, verdictSchema, evidenceItemSchema]);
 
 /** Compiles a schema against the shared validator. */
 export function compileSchema<T>(schema: object): ValidateFunction<T> {
