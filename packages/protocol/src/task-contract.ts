@@ -1,6 +1,5 @@
 import type { TaskContract } from "./generated/task-contract.js";
 import { identityOf } from "./identity.js";
-import type { JsonValue } from "./json.js";
 import type { IdentityOutcome } from "./measurement.js";
 import taskContractSchema from "./schemas/task-contract.schema.json" with { type: "json" };
 import {
@@ -74,7 +73,7 @@ function identifyContract(input: unknown): IdentityOutcome {
       a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
     ),
   };
-  const result = identityOf(contract.value.schema, normalized as unknown as JsonValue);
+  const result = identityOf(contract.value.schema, normalized);
   return result.ok
     ? { ok: true, identity: result.identity }
     : {

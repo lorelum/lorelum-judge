@@ -11,9 +11,11 @@ validation. It targets Node and Bun because identity hashing uses `node:crypto`.
 
 `identityOf(schema, value)` returns `{ ok: true, identity }` with
 `sha256:<hex>` over the canonical form of `{"schema", "value"}`, or
-`{ ok: false, error }` for `undefined`, `NaN`, `Infinity`, and `bigint`, with the
-path of the offending value. Same content gives the same identity regardless of
-key order; the schema identifier keeps record types apart.
+`{ ok: false, error }` for a rejected input, with the path and reason of the first
+rejected value in traversal order (see the input rule below). A node's own structural
+defects (symbol keys, hidden properties, extra array properties) come before its children.
+Same content gives the same identity regardless of key order; the schema identifier keeps
+record types apart.
 
 ## Criterion and verdict
 
@@ -53,8 +55,9 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
   Thresholds, statistics, and confidence rules are not defined here.
 - `evaluateEnforcement({ definition, instrument, gatePolicy, calibration })`
   allows enforcement only for an `enforced` calibration whose definition,
-  instrument, and gate policy identities all match. Otherwise it returns every
-  applicable reason and the policy's degradation.
+  instrument, and gate policy identities all match. Otherwise it returns the
+  reasons that apply and the policy's degradation, or `invalid_input` when an input cannot
+  be read.
 - `measurementKey(definition, instrument, evidenceIdentities)` is a cache key.
   Evidence order and duplicates do not change it.
 
@@ -107,12 +110,30 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
   are compared exactly. Like `merged`, it is caller-supplied and not checked against the
   proposals. A report is complete when `uncovered` and `unsupported` are both empty; that is
   not stored.
-- Input is copied once before it is validated and hashed, so inherited fields and stateful
-  getters cannot make the validated data differ from the hashed data. The copy accepts plain
-  objects and arrays only: own enumerable keys, each value read once, `toJSON` never called.
-  A `Date`, a boxed primitive, a class instance, a function, a bigint, a non-finite number, a
-  lone surrogate, an array hole, and a cycle are rejected, and an `undefined` property is
-  absent. `identityOf` takes already-plain `JsonValue` data and does not copy.
+- Input is copied once before it is validated, hashed, or returned, so inherited fields and
+  stateful getters cannot make the validated data differ from the hashed data. This covers
+  every validator, every identity function (the exported `identityOf` and `canonicalForm`
+  accept `unknown`), and the evidence list that `measurementKey` receives.
+  `evaluateEnforcement` copies `gatePolicy` once, because both the degradation and the
+  identity read it; its other fields are copied, and read once, by the validator or identity
+  function that consumes them.
+- The copy accepts plain objects and plain arrays only (prototype `Object.prototype`, or
+  `null` for objects; `Array.prototype` for arrays): own enumerable keys, each value read
+  once, `toJSON` never called. It rejects a `Date`, a boxed primitive, a class instance, an
+  array subclass, a function, a symbol, a bigint, a non-finite number, a lone surrogate (in a
+  value or a key), an array hole, a cycle, an extra own property on an array, a symbol key,
+  a non-enumerable own property (including an array element), and any read that throws. A
+  getter that throws is reported at the property it reads. An own property whose value is
+  `undefined` is kept, so the schema and the identity see it as written: a validator treats
+  it as absent for `required` and rejects it as an extra key, and identity fails with reason
+  `undefined`.
+- An identity function reports the first rejected value in traversal order, with its path
+  and reason (`undefined`, `not_finite`, `bigint`, or `unsupported`). A node's own structural
+  defects (symbol keys, hidden properties, extra array properties) come before its children.
+  The validator-based identity functions (`definitionIdentity`, `instrumentIdentity`,
+  `gatePolicyIdentity`, `taskContractIdentity`, `rubricIdentity`, `evidenceBundleIdentity`)
+  run their validator first, so the validator's issues are reported; the reason codes are
+  what `identityOf` and `canonicalForm` report when called directly.
 - `rubricIdentity(rubric, { contract, contextIdentity, instrument, policyIdentity })`
   changes with the rubric, the contract, the context, the instrument (model, decoding,
   prompt, runtime, repetitions), or the policy. Entry order does not matter.
