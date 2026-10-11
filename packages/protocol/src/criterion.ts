@@ -1,9 +1,14 @@
-import { Ajv, type ErrorObject } from "ajv";
-
 import type { Criterion } from "./generated/criterion.js";
 import type { Verdict } from "./generated/verdict.js";
 import criterionSchema from "./schemas/criterion.schema.json" with { type: "json" };
 import verdictSchema from "./schemas/verdict.schema.json" with { type: "json" };
+import {
+  compileSchema,
+  guarded,
+  schemaIssues,
+  type ValidationIssue,
+  type ValidationResult,
+} from "./validation.js";
 
 export type { Anchor, Criterion, EvidenceSelector, Source } from "./generated/criterion.js";
 export type { Verdict } from "./generated/verdict.js";
@@ -19,57 +24,22 @@ export const decisiveVerdicts: Readonly<Record<CriterionKind, readonly VerdictVa
 
 export const nonDecisiveVerdicts: readonly VerdictValue[] = ["unknown", "insufficient"];
 
-export type IssueCode =
-  | "schema"
-  | "anchor_mismatch"
-  | "duplicate_criterion"
-  | "duplicate_primary_evidence"
-  | "criterion_mismatch"
-  | "verdict_not_allowed"
-  | "verdict_without_evidence"
-  | "evidence_not_declared"
-  | "duplicate_evidence"
-  | "invalid_criterion";
-
-export interface ValidationIssue {
-  readonly path: string;
-  readonly code: IssueCode;
-  readonly message: string;
-}
-
-export type ValidationResult<T> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly issues: readonly ValidationIssue[] };
-
-const ajv = new Ajv({ allErrors: true, strict: true });
-const checkCriterion = ajv.compile<Criterion>(criterionSchema);
-const checkVerdict = ajv.compile<Verdict>(verdictSchema);
-
-/** Converts an RFC 6901 JSON pointer (as reported by ajv) to `$.a[0].b` form. */
-function pointerToPath(pointer: string): string {
-  if (pointer === "") {
-    return "$";
-  }
-  const segments = pointer
-    .slice(1)
-    .split("/")
-    .map((segment) => segment.replaceAll("~1", "/").replaceAll("~0", "~"));
-  return `$${segments.map((segment) => (/^\d+$/.test(segment) ? `[${segment}]` : `.${segment}`)).join("")}`;
-}
-
-function schemaIssues(errors: readonly ErrorObject[] | null | undefined): ValidationIssue[] {
-  return (errors ?? []).map((error) => ({
-    path: pointerToPath(error.instancePath),
-    code: "schema",
-    message: `${error.keyword}: ${error.message ?? "invalid"}`,
-  }));
-}
+const checkCriterion = compileSchema<Criterion>(criterionSchema);
+const checkVerdict = compileSchema<Verdict>(verdictSchema);
 
 function isDecisive(kind: CriterionKind, verdict: VerdictValue): boolean {
   return decisiveVerdicts[kind].includes(verdict);
 }
 
 export function validateCriterion(input: unknown): ValidationResult<Criterion> {
+  return guarded<ValidationResult<Criterion>>(() => checkCriterionShape(input), failedResult);
+}
+
+function failedResult<T>(issue: ValidationIssue): ValidationResult<T> {
+  return { ok: false, issues: [issue] };
+}
+
+function checkCriterionShape(input: unknown): ValidationResult<Criterion> {
   if (!checkCriterion(input)) {
     return { ok: false, issues: schemaIssues(checkCriterion.errors) };
   }
@@ -120,6 +90,13 @@ export function validateCriterion(input: unknown): ValidationResult<Criterion> {
 }
 
 export function validateCriteria(input: unknown): ValidationResult<readonly Criterion[]> {
+  return guarded<ValidationResult<readonly Criterion[]>>(
+    () => checkCriteriaSet(input),
+    failedResult,
+  );
+}
+
+function checkCriteriaSet(input: unknown): ValidationResult<readonly Criterion[]> {
   if (!Array.isArray(input)) {
     return {
       ok: false,
@@ -175,6 +152,13 @@ export function validateVerdict(
   criterionInput: unknown,
   input: unknown,
 ): ValidationResult<Verdict> {
+  return guarded<ValidationResult<Verdict>>(
+    () => checkVerdictAgainst(criterionInput, input),
+    failedResult,
+  );
+}
+
+function checkVerdictAgainst(criterionInput: unknown, input: unknown): ValidationResult<Verdict> {
   const checkedCriterion = validateCriterion(criterionInput);
   if (!checkedCriterion.ok) {
     return {
