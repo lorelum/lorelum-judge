@@ -13,8 +13,9 @@ validation. It targets Node and Bun because identity hashing uses `node:crypto`.
 `sha256:<hex>` over the canonical form of `{"schema", "value"}`, or
 `{ ok: false, error }` for a rejected input, with the path and reason of the first
 rejected value in traversal order (see the input rule below). A node's own structural
-  defects (symbol keys, hidden properties, extra array properties) come before its children. Same content gives the same identity regardless of
-key order; the schema identifier keeps record types apart.
+defects (symbol keys, hidden properties, extra array properties) come before its children.
+Same content gives the same identity regardless of key order; the schema identifier keeps
+record types apart.
 
 ## Criterion and verdict
 
@@ -54,8 +55,9 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
   Thresholds, statistics, and confidence rules are not defined here.
 - `evaluateEnforcement({ definition, instrument, gatePolicy, calibration })`
   allows enforcement only for an `enforced` calibration whose definition,
-  instrument, and gate policy identities all match. Otherwise it returns every
-  applicable reason and the policy's degradation.
+  instrument, and gate policy identities all match. Otherwise it returns the
+  reasons that apply and the policy's degradation, or `invalid_input` when an input cannot
+  be read.
 - `measurementKey(definition, instrument, evidenceIdentities)` is a cache key.
   Evidence order and duplicates do not change it.
 
@@ -112,8 +114,9 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
   stateful getters cannot make the validated data differ from the hashed data. This covers
   every validator, every identity function (the exported `identityOf` and `canonicalForm`
   accept `unknown`), and the evidence list that `measurementKey` receives.
-  `evaluateEnforcement` takes an object of fields; each field is copied, and read once, by
-  the validator or identity function that consumes it.
+  `evaluateEnforcement` copies `gatePolicy` once, because both the degradation and the
+  identity read it; its other fields are copied, and read once, by the validator or identity
+  function that consumes them.
 - The copy accepts plain objects and plain arrays only (prototype `Object.prototype`, or
   `null` for objects; `Array.prototype` for arrays): own enumerable keys, each value read
   once, `toJSON` never called. It rejects a `Date`, a boxed primitive, a class instance, an
@@ -127,6 +130,10 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
 - An identity function reports the first rejected value in traversal order, with its path
   and reason (`undefined`, `not_finite`, `bigint`, or `unsupported`). A node's own structural
   defects (symbol keys, hidden properties, extra array properties) come before its children.
+  The validator-based identity functions (`definitionIdentity`, `instrumentIdentity`,
+  `gatePolicyIdentity`, `taskContractIdentity`, `rubricIdentity`, `evidenceBundleIdentity`)
+  run their validator first, so the validator's issues are reported; the reason codes are
+  what `identityOf` and `canonicalForm` report when called directly.
 - `rubricIdentity(rubric, { contract, contextIdentity, instrument, policyIdentity })`
   changes with the rubric, the contract, the context, the instrument (model, decoding,
   prompt, runtime, repetitions), or the policy. Entry order does not matter.

@@ -479,6 +479,37 @@ describe("identity functions copy their input", () => {
     expect(() => snapshot(array)).toThrow("only own enumerable properties are allowed");
   });
 
+  test("the array length is read once when the array is copied", () => {
+    let reads = 0;
+    const counted = new Proxy([1, 2, 3], {
+      get(target, key, receiver) {
+        if (key === "length") {
+          reads += 1;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    snapshot(counted);
+    expect(reads).toBe(1);
+  });
+
+  test("a validator reports a throwing getter's message without repeating the path", () => {
+    const contract = {
+      schema: "lorelum.judge.task-contract/v1",
+      id: "t1",
+      taskClass: "cli",
+      get text(): string {
+        throw new Error("boom");
+      },
+      acceptance: [{ id: "a1", text: "r", source: { origin: "contract", ref: "AC-1" } }],
+    };
+    const result = validateTaskContract(contract);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues[0]?.message).toBe("input could not be read: boom");
+    }
+  });
+
   test("a validator names the path of a throwing getter", () => {
     const contract = {
       schema: "lorelum.judge.task-contract/v1",
