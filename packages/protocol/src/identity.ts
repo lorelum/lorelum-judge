@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import canonicalize from "canonicalize";
 
-import type { JsonValue } from "./json.js";
+import { CopyError, snapshotForIdentity } from "./validation.js";
 
 export type Identity = `sha256:${string}`;
 
@@ -19,47 +19,16 @@ export type CanonicalResult =
   | { readonly ok: true; readonly text: string }
   | { readonly ok: false; readonly error: IdentityError };
 
-function findUnsupported(value: unknown, path: string): IdentityError | undefined {
-  if (value === undefined) {
-    return { path, reason: "undefined" };
+function reasonFor(error: unknown): IdentityError {
+  if (error instanceof CopyError) {
+    return { path: error.path, reason: error.reason };
   }
-  if (typeof value === "bigint") {
-    return { path, reason: "bigint" };
-  }
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? undefined : { path, reason: "not_finite" };
-  }
-  if (value === null || typeof value === "string" || typeof value === "boolean") {
-    return undefined;
-  }
-  if (Array.isArray(value)) {
-    for (const [index, element] of value.entries()) {
-      const error = findUnsupported(element, `${path}[${index}]`);
-      if (error !== undefined) {
-        return error;
-      }
-    }
-    return undefined;
-  }
-  if (typeof value === "object") {
-    for (const [key, member] of Object.entries(value)) {
-      const error = findUnsupported(member, `${path}.${key}`);
-      if (error !== undefined) {
-        return error;
-      }
-    }
-    return undefined;
-  }
-  return { path, reason: "unsupported" };
+  return { path: "$", reason: "unsupported" };
 }
 
-/** RFC 8785 canonical form of a value, or the first unsupported value found. */
-export function canonicalForm(value: JsonValue): CanonicalResult {
-  const error = findUnsupported(value, "$");
-  if (error !== undefined) {
-    return { ok: false, error };
-  }
-  const text = canonicalize(value);
+/** Canonical form of an already-copied value. */
+function canonicalOfCopy(copy: unknown): CanonicalResult {
+  const text = canonicalize(copy);
   if (text === undefined) {
     return { ok: false, error: { path: "$", reason: "unsupported" } };
   }
@@ -67,16 +36,33 @@ export function canonicalForm(value: JsonValue): CanonicalResult {
 }
 
 /**
+ * RFC 8785 canonical form of a value. The input is copied first, so a `Date`, a class
+ * instance, a throwing getter, or any other input the copy rejects is a failed result.
+ */
+export function canonicalForm(value: unknown): CanonicalResult {
+  let copy: unknown;
+  try {
+    copy = snapshotForIdentity(value);
+  } catch (error) {
+    return { ok: false, error: reasonFor(error) };
+  }
+  return canonicalOfCopy(copy);
+}
+
+/**
  * Stable identity of a record: sha256 over the canonical form of
  * `{"schema": schema, "value": value}`. The schema identifier keeps different
- * record types from sharing an identity.
- *
- * `value` is trusted, already-plain data and is read twice (once to look for
- * unsupported values, once to canonicalize), so it is not copied here. Untrusted
- * input goes through `snapshot` first; every validator in this package does that.
+ * record types from sharing an identity. The input is copied once, here, before
+ * it is hashed, so the identity covers exactly what was read.
  */
-export function identityOf(schema: string, value: JsonValue): IdentityResult {
-  const canonical = canonicalForm({ schema, value });
+export function identityOf(schema: string, value: unknown): IdentityResult {
+  let copy: unknown;
+  try {
+    copy = snapshotForIdentity({ schema, value });
+  } catch (error) {
+    return { ok: false, error: reasonFor(error) };
+  }
+  const canonical = canonicalOfCopy(copy);
   if (!canonical.ok) {
     return canonical;
   }

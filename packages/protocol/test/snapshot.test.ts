@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  canonicalForm,
   definitionIdentity,
   evaluateEnforcement,
   evidenceBundleIdentity,
   gatePolicyIdentity,
+  identityOf,
   instrumentIdentity,
   measurementKey,
   taskContractIdentity,
@@ -290,9 +292,9 @@ describe("the copy accepts plain data only", () => {
     expect((copy as { polluted?: boolean }).polluted).toBeUndefined();
   });
 
-  test("a property that is undefined is absent from the copy", () => {
+  test("a property that is undefined is kept in the copy, as the caller wrote it", () => {
     const copy = snapshot({ a: 1, b: undefined }) as object;
-    expect(Object.keys(copy)).toEqual(["a"]);
+    expect(Object.keys(copy)).toEqual(["a", "b"]);
   });
 });
 
@@ -321,5 +323,247 @@ describe("snapshot rules that the schemas would not catch", () => {
       onUncalibrated: "shadow",
     });
     expect(validateGatePolicy(instance).ok).toBe(false);
+  });
+});
+
+describe("identity functions copy their input", () => {
+  test("a Date is not hashed as its ISO string", () => {
+    const asDate = identityOf("x", new Date(0));
+    expect(asDate.ok).toBe(false);
+    if (!asDate.ok) {
+      expect(asDate.error.reason).toBe("unsupported");
+    }
+  });
+
+  test("a class instance is not hashed as a plain object", () => {
+    class Holder {
+      a = 1;
+    }
+    expect(identityOf("x", new Holder()).ok).toBe(false);
+  });
+
+  test("canonicalForm of a Date is a failed result", () => {
+    expect(canonicalForm(new Date(0)).ok).toBe(false);
+  });
+
+  test("canonicalForm of a throwing getter is a failed result", () => {
+    const hostile = {
+      get a(): number {
+        throw new Error("boom");
+      },
+    };
+    expect(canonicalForm(hostile).ok).toBe(false);
+  });
+
+  test("a throwing getter is a failed result, not a throw", () => {
+    const hostile = {
+      get a(): number {
+        throw new Error("boom");
+      },
+    };
+    expect(identityOf("x", hostile).ok).toBe(false);
+  });
+
+  test("a lone surrogate is a failed result", () => {
+    expect(identityOf("x", { a: "\ud800" }).ok).toBe(false);
+  });
+
+  const holeArray = (): unknown[] => {
+    const array: unknown[] = [1, 2, 3];
+    delete array[1];
+    return array;
+  };
+
+  test.each([
+    [
+      "a bigint before a function",
+      { a: 1n, f: () => 1 },
+      { path: "$.value.a", reason: "bigint" as const },
+    ],
+    [
+      "NaN before a lone surrogate",
+      { a: Number.NaN, s: "\ud800" },
+      { path: "$.value.a", reason: "not_finite" as const },
+    ],
+    [
+      "a bigint before a Date",
+      { a: 1n, d: new Date(0) },
+      { path: "$.value.a", reason: "bigint" as const },
+    ],
+    [
+      "an undefined before a bigint",
+      { a: undefined, b: 1n },
+      { path: "$.value.a", reason: "undefined" as const },
+    ],
+    ["an array hole", { a: holeArray() }, { path: "$.value.a[1]", reason: "undefined" as const }],
+  ])("reports the first defect in order: %s", (_name, value, expected) => {
+    const outcome = identityOf("x", value);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error).toEqual(expected);
+    }
+  });
+
+  test("measurementKey rejects an evidence list with an extra own property", () => {
+    const withExtra = Object.assign([hex("1")], { note: "x" });
+    expect(measurementKey(definition, instrument, withExtra).ok).toBe(false);
+  });
+
+  test("measurementKey names the index of a bad evidence entry", () => {
+    const outcome = measurementKey(definition, instrument, [hex("1"), new Date(0)]);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.issues[0]?.path).toBe("evidence[1]");
+    }
+  });
+
+  test("measurementKey rejects an evidence list with a symbol key", () => {
+    const withSymbol = Object.assign([hex("1")], { [Symbol("s")]: 1 });
+    expect(measurementKey(definition, instrument, withSymbol).ok).toBe(false);
+  });
+
+  test("a throwing getter is reported at the path of the property it reads", () => {
+    const nested = {
+      a: {
+        get b(): number {
+          throw new Error("boom");
+        },
+      },
+    };
+    const outcome = identityOf("x", nested);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error).toEqual({ path: "$.value.a.b", reason: "unsupported" });
+    }
+  });
+
+  test("an array's own extra property is reported before its NaN element", () => {
+    const outcome = identityOf("x", { a: Object.assign([Number.NaN], { note: 1 }) });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error).toEqual({ path: "$.value.a", reason: "unsupported" });
+    }
+  });
+
+  test("an object's symbol key is reported before its bigint child", () => {
+    const outcome = identityOf("x", { a: 1n, [Symbol("s")]: 1 });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error).toEqual({ path: "$.value", reason: "unsupported" });
+    }
+  });
+
+  test("a deep input is a failed result", () => {
+    let deep: unknown = 1;
+    for (let depth = 0; depth < 40000; depth += 1) {
+      deep = [deep];
+    }
+    expect(identityOf("x", deep).ok).toBe(false);
+  });
+
+  test("an undefined property is reported with reason undefined", () => {
+    const outcome = identityOf("x", { a: 1, b: undefined });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error).toEqual({ path: "$.value.b", reason: "undefined" });
+    }
+  });
+
+  test("a schema with an extra undefined key is rejected by the validator", () => {
+    expect(validateGatePolicy({ ...gatePolicy, extra: undefined }).ok).toBe(false);
+  });
+
+  test("a non-enumerable array element is rejected by the copy", () => {
+    const array: unknown[] = [1, 2];
+    Object.defineProperty(array, 0, { value: 1, enumerable: false });
+    expect(() => snapshot(array)).toThrow("only own enumerable properties are allowed");
+  });
+
+  test("the array length is read once when the array is copied", () => {
+    let reads = 0;
+    const counted = new Proxy([1, 2, 3], {
+      get(target, key, receiver) {
+        if (key === "length") {
+          reads += 1;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    snapshot(counted);
+    expect(reads).toBe(1);
+  });
+
+  test("a validator reports a throwing getter's message without repeating the path", () => {
+    const contract = {
+      schema: "lorelum.judge.task-contract/v1",
+      id: "t1",
+      taskClass: "cli",
+      get text(): string {
+        throw new Error("boom");
+      },
+      acceptance: [{ id: "a1", text: "r", source: { origin: "contract", ref: "AC-1" } }],
+    };
+    const result = validateTaskContract(contract);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues[0]?.message).toBe("input could not be read: boom");
+    }
+  });
+
+  test("a validator names the path of a throwing getter", () => {
+    const contract = {
+      schema: "lorelum.judge.task-contract/v1",
+      id: "t1",
+      taskClass: "cli",
+      get text(): string {
+        throw new Error("boom");
+      },
+      acceptance: [{ id: "a1", text: "r", source: { origin: "contract", ref: "AC-1" } }],
+    };
+    const result = validateTaskContract(contract);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues[0]?.path).toBe("$.text");
+      expect(result.issues[0]?.message).toContain("boom");
+    }
+  });
+
+  test("an array subclass is rejected by the copy", () => {
+    class Sub extends Array<number> {}
+    expect(() => snapshot(Sub.from([1]))).toThrow("only plain arrays are allowed");
+  });
+
+  test("an array with a null prototype is rejected by the copy", () => {
+    expect(() => snapshot(Object.setPrototypeOf([1], null))).toThrow(
+      "only plain arrays are allowed",
+    );
+  });
+
+  test("a revoked proxy inside a property is reported at that property", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    const outcome = identityOf("x", { a: proxy });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error.path).toBe("$.value.a");
+    }
+  });
+
+  test("a symbol key is rejected by the copy", () => {
+    expect(() => snapshot({ [Symbol("s")]: 1 })).toThrow("symbol keys are not allowed");
+  });
+
+  test("a non-enumerable own property is rejected by the copy", () => {
+    const hidden = Object.defineProperty({ a: 1 }, "b", { value: 2, enumerable: false });
+    expect(() => snapshot(hidden)).toThrow("only own enumerable properties");
+  });
+
+  test("a lone-surrogate key is rejected by the copy", () => {
+    expect(() => snapshot({ "\ud800": 1 })).toThrow("a lone surrogate is not allowed in a key");
+  });
+
+  test("an extra own property on an array is rejected by the copy", () => {
+    const withExtra = Object.assign([1, 2], { note: "x" });
+    expect(() => snapshot(withExtra)).toThrow("an array may only have its elements");
   });
 });

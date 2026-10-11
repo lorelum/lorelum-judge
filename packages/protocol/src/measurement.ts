@@ -5,7 +5,6 @@ import type { InstrumentProfile } from "./generated/instrument-profile.js";
 import type { MeasurementDefinition } from "./generated/measurement-definition.js";
 import type { MeasurementRun } from "./generated/measurement-run.js";
 import { type Identity, identityOf } from "./identity.js";
-import type { JsonValue } from "./json.js";
 import calibrationSchema from "./schemas/calibration-artifact.schema.json" with { type: "json" };
 import gatePolicySchema from "./schemas/gate-policy.schema.json" with { type: "json" };
 import instrumentSchema from "./schemas/instrument-profile.schema.json" with { type: "json" };
@@ -94,7 +93,7 @@ function identify(validated: ValidationResult<{ readonly schema: string }>): Ide
   if (!validated.ok) {
     return validated;
   }
-  const result = identityOf(validated.value.schema, validated.value as unknown as JsonValue);
+  const result = identityOf(validated.value.schema, validated.value);
   return result.ok
     ? result
     : { ok: false, issues: identityIssue(result.error.path, result.error.reason) };

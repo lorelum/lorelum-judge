@@ -108,21 +108,9 @@ with `not_applicable` when an entry's `appliesTo` includes neither the contract'
 
 ### Requirement: A compilation report agrees with the rubric
 
-A `CompilationReport` MUST have a `contractIdentity` and the lists `covered`, `uncovered`,
-`unsupported`, and `merged`. `validateCompilationReport` MUST require that: every
-acceptance id of the contract appears in exactly one of `covered`, `uncovered`, and
-`unsupported`; an id with covering entries is in `covered` and lists exactly those
-criterion ids; an id with none is in `uncovered` or `unsupported` with a non-empty
-`reason`; and each `merged` record names a `criterionId` present in the rubric and
-`mergedFrom` ids absent from it. A criterion id MUST have at most one `merged` record, and
-an absorbed id MUST NOT be merged into two criteria. A `reason` MUST contain a non-whitespace
-character. A report whose `contractIdentity` differs from the contract's MUST fail with
-`identity_mismatch`.
+A `CompilationReport` MUST have a `contractIdentity` and the lists `covered`, `uncovered`, `unsupported`, `merged`, and `excluded`. `validateCompilationReport` MUST require that: every acceptance id of the contract appears in exactly one of `covered`, `uncovered`, and `unsupported`; an id with covering entries is in `covered` and lists exactly those criterion ids; an id with none is in `uncovered` or `unsupported` with a non-blank `reason`; each `merged` record names a `criterionId` present in the rubric and `mergedFrom` ids absent from it; a criterion id has at most one `merged` record; an absorbed id is not merged into two criteria; and each `excluded` item satisfies the rules in the Excluded requirement below. A `reason` is blank when it has no character other than white space, control characters, format characters, nonspacing and enclosing combining marks, and the fixed glyphs U+115F, U+1160, U+3164, U+FFA0, and U+2800. The list of glyphs is fixed; it is not a complete table of invisible characters, and a reason made only of combining marks is blank. Spacing combining marks (category Mc) are visible and are not blank. A report whose `contractIdentity` differs from the contract's MUST fail with `identity_mismatch`.
 
-`merged` records are supplied by the caller and are NOT verified against the proposals they
-describe: the validator receives only the frozen rubric, so it cannot tell whether an absorbed
-id ever existed. It checks that the records are coherent with the frozen rubric and with each
-other, and no more. Verifying a merge needs the proposal set, which #8b owns.
+`merged` and `excluded` records are supplied by the caller and are NOT verified against the proposals they describe: the validator receives only the rubric and the contract. It checks that the records are coherent with the rubric and with each other, and no more.
 
 #### Scenario: Report claims coverage nothing provides
 
@@ -180,16 +168,15 @@ contract, the context identity, the instrument, or the policy identity changes.
 
 ### Requirement: Input is read once
 
-Every function in `packages/protocol` that takes untrusted input, namely each validator, each
-identity function, `evaluateEnforcement`, and `measurementKey`, MUST copy that input into plain
-data once and MUST validate, hash, and return the copy. `identityOf` and `canonicalForm` take
-typed `JsonValue` data and are the exception. The copy MUST accept only plain objects and
-arrays, MUST read own enumerable string keys and each value exactly once, and MUST NOT call
-`toJSON`. A property whose value is `undefined` MUST be absent from the copy. A function,
-symbol, bigint, non-finite number, lone surrogate, array hole, `undefined` array element,
-cycle, `Date`, boxed primitive, or class instance MUST be a structured failure naming the path.
-Properties that exist only on the prototype MUST NOT be validated yet omitted from a hash, and
-a getter MUST NOT be able to return different data to the validation and to the hash.
+Every function in `packages/protocol` that takes untrusted input MUST copy that input into plain data once and MUST validate, hash, and return the copy. This covers each validator, each identity function (including `identityOf` and `canonicalForm`), `evaluateEnforcement`, and `measurementKey`, including the evidence list that `measurementKey` receives. `evaluateEnforcement` takes an object of fields; each field MUST be copied, and read once, by the validator or identity function that consumes it, except `gatePolicy`, which `evaluateEnforcement` copies once itself because both the degradation and the identity read it. The copy MUST accept only plain objects (prototype `Object.prototype` or `null`) and plain arrays (prototype `Array.prototype`), MUST read own enumerable string keys and each value exactly once, and MUST NOT call `toJSON`.
+
+The copy MUST reject, as a structured failure naming the path: symbol keys; non-enumerable own properties; string keys that are lone surrogates; extra own properties on arrays; array holes; `undefined` array elements; functions, symbols, bigints, and non-finite numbers; lone-surrogate strings; cycles; `Date`; boxed primitives; class instances; and any input whose reading throws.
+
+An own property whose value is `undefined` MUST be kept in the copy, so that a validator and an identity function see the input as the caller wrote it.
+
+An identity function MUST report the first rejected value in traversal order, with its path and its reason: `undefined`, `not_finite`, `bigint`, or `unsupported`. A node's own structural defects (a symbol key, a non-enumerable property, an extra array property) are reported before any defect in that node's children. The validator-based identity functions run their validator first and report its issues; the reason codes apply to `identityOf` and `canonicalForm` called directly. The path is the location where the copy stopped: a getter that throws is reported at the property it reads, and any other error raised while reading a node is reported at that node.
+
+Properties that exist only on the prototype MUST NOT be validated yet omitted from a hash, and a getter MUST NOT be able to return different data to the validation and to the hash.
 
 #### Scenario: Inherited fields are rejected
 
@@ -210,6 +197,26 @@ a getter MUST NOT be able to return different data to the validation and to the 
 
 - **WHEN** a text field contains a lone surrogate
 - **THEN** both validation and the identity function fail
+
+#### Scenario: Identity of an untrusted date fails
+
+- **WHEN** `identityOf` is called with a `Date` as the value
+- **THEN** it returns a failed result and does not hash the date's string form
+
+#### Scenario: Identity of an untrusted throwing getter fails
+
+- **WHEN** `identityOf` is called with an object whose getter throws
+- **THEN** it returns a failed result and does not throw
+
+#### Scenario: An undefined property is not hashed as absent
+
+- **WHEN** a validated record has an own property whose value is `undefined`
+- **THEN** its identity fails with reason `undefined`
+
+#### Scenario: A symbol-keyed or hidden property is rejected
+
+- **WHEN** an input has a symbol key, a non-enumerable own property, or a non-enumerable array element
+- **THEN** the copy rejects it with a structured failure naming the path
 
 ### Requirement: Validation returns values
 
@@ -237,3 +244,27 @@ and the built entrypoint MUST load in Node ESM through the existing dist check.
   report during verification
 - **THEN** every validator succeeds; this is recorded as evidence in the PR, not as a
   repository script, because the dist check is shared by every package
+
+### Requirement: Excluded proposals are recorded
+
+Each `excluded` item MUST have a `criterionId`, a `code` of `not_applicable` or `conflict`, and a non-blank `reason`. The `criterionId` values in `excluded` MUST be unique. Ids are compared exactly, with no trimming or case folding, as elsewhere in the rubric: `c1 ` is a different id from `c1`. A report without an `excluded` field MUST fail schema validation.
+
+#### Scenario: A criterion in the rubric cannot also be excluded
+
+- **WHEN** an `excluded` item names a criterion that is in the rubric
+- **THEN** validation fails with code `report_mismatch`
+
+#### Scenario: An absorbed proposal cannot also be excluded
+
+- **WHEN** an `excluded` item names an id that appears in a `merged` record's `mergedFrom`
+- **THEN** validation fails with code `report_mismatch`
+
+#### Scenario: Repeated excluded id
+
+- **WHEN** two `excluded` items name the same `criterionId`
+- **THEN** validation fails with code `report_mismatch`
+
+#### Scenario: Blank reason
+
+- **WHEN** an `excluded` item has a `reason` of only whitespace
+- **THEN** validation fails with code `schema`

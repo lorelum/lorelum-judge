@@ -2,7 +2,6 @@ import { validateCriteria, validateCriterionDraft } from "./criterion.js";
 import type { CompilationReport } from "./generated/compilation-report.js";
 import type { RubricSet } from "./generated/rubric-set.js";
 import { identityOf } from "./identity.js";
-import type { JsonValue } from "./json.js";
 import { type IdentityOutcome, instrumentIdentity } from "./measurement.js";
 import compilationReportSchema from "./schemas/compilation-report.schema.json" with {
   type: "json",
@@ -405,7 +404,7 @@ function identifyRubric(rubricRaw: unknown, bindingRaw: unknown): IdentityOutcom
     instrument: instrument.identity,
     policy: binding.policyIdentity,
   };
-  const result = identityOf(rubric.value.schema, value as unknown as JsonValue);
+  const result = identityOf(rubric.value.schema, value);
   return result.ok
     ? { ok: true, identity: result.identity }
     : {
