@@ -91,6 +91,7 @@ describe("render lengths", () => {
   });
 
   test.each([
+    ["truncated that kept nothing", render("truncated", 10, 0)],
     ["truncated that kept everything", render("truncated", 10, 10)],
     ["truncated that kept more than the original", render("truncated", 10, 12)],
     ["withheld that kept text", render("withheld", 10, 3)],
@@ -245,6 +246,10 @@ describe("verdict citations", () => {
       "withheld",
       item({ id: "e1", render: { state: "withheld", originalLength: 10, renderedLength: 0 } }),
     ],
+    [
+      "an empty present item",
+      item({ id: "e1", render: { state: "rendered", originalLength: 0, renderedLength: 0 } }),
+    ],
     ["unavailable", unavailable("e1")],
     ["no evidence", noEvidence("e1")],
     ["contradiction", item({ id: "e1", status: "contradiction", conflictsWith: ["e2"] })],
@@ -308,10 +313,6 @@ describe("bundle identity", () => {
     [
       "render state",
       item({ id: "a", render: { state: "truncated", originalLength: 100, renderedLength: 40 } }),
-    ],
-    [
-      "rendered length",
-      item({ id: "a", render: { state: "truncated", originalLength: 100, renderedLength: 41 } }),
     ],
     ["status", unavailable("a")],
     ["id", item({ id: "z" })],

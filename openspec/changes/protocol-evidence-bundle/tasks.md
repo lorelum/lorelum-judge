@@ -34,7 +34,8 @@
 - [x] 6.2 Run `bun run validate`.
 - [x] 6.3 Run `openspec validate protocol-evidence-bundle --type change --strict`.
 - [x] 6.4 Import the built entrypoint in Node ESM and validate a bundle and a verdict.
-- [ ] 6.5 Read back the PR and record AI review findings and resolution.
+- [x] 6.5 Read back the PR and record AI review findings and resolution. Independent
+  review findings 1, 2, 4 fixed and finding 3 accepted in the follow-up commit.
 
 ## 7. Final Gate
 

@@ -30,9 +30,14 @@ characters and a `render` with state `rendered`, `withheld`, or `truncated`, and
 ### Requirement: Render lengths match the render state
 
 `rendered` MUST have equal `originalLength` and `renderedLength`. `withheld` MUST
-have `renderedLength` 0. `truncated` MUST have `renderedLength` below
-`originalLength`. Truncation MUST NOT be implied; it is present only as a recorded
-`truncated` state.
+have `renderedLength` 0. `truncated` MUST have `renderedLength` above 0 and below
+`originalLength`; a truncation that kept nothing is `withheld`. Truncation MUST NOT
+be implied; it is present only as a recorded `truncated` state.
+
+#### Scenario: Truncated item that kept nothing is rejected
+
+- **WHEN** a `truncated` render has a `renderedLength` of 0
+- **THEN** validation fails with code `evidence_item_invalid`
 
 #### Scenario: Truncated item that kept everything is rejected
 
@@ -80,8 +85,9 @@ means no evidence was collected.
 `validateVerdictEvidence` MUST first validate the verdict against its criterion and
 the bundle on their own, then require every id in the verdict's `evidenceIds` to
 belong to the bundle. A verdict of `unknown` or `insufficient` MAY cite no evidence.
-A decisive verdict MUST cite at least one item with status `present` whose render
-state is `rendered` or `truncated`.
+A decisive verdict MUST cite at least one item with status `present`, render state
+`rendered` or `truncated`, and a `renderedLength` above 0. An empty item exists but
+shows the judge nothing, so it cannot support a decisive verdict.
 
 #### Scenario: Citing an id outside the bundle is rejected
 
@@ -98,6 +104,11 @@ state is `rendered` or `truncated`.
 
 - **WHEN** a verdict of `unknown` cites no evidence and the bundle has none
 - **THEN** validation succeeds
+
+#### Scenario: Decisive verdict resting on an empty present item is rejected
+
+- **WHEN** a decisive verdict cites only a `present` item whose `renderedLength` is 0
+- **THEN** validation fails with code `verdict_unsupported`
 
 #### Scenario: Decisive verdict citing a truncated item is accepted
 

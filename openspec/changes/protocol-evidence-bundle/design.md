@@ -26,8 +26,9 @@ content handling, calibration statistics, and any change to #6 schemas.
 
 A `render` always carries `originalLength` and `renderedLength`. `rendered` requires
 them equal, `withheld` requires `renderedLength` 0, and `truncated` requires
-`renderedLength` below `originalLength`. Lengths count characters; the compiler in
-#7b chooses the budget. The contract does not know about tokens.
+`renderedLength` above 0 and below `originalLength`; a truncation that kept nothing
+is `withheld`. Lengths count characters; the compiler in #7b chooses the budget.
+The contract does not know about tokens.
 
 ### Contradiction names its counterpart
 
@@ -38,10 +39,12 @@ contradiction, it is a claim nobody can check.
 ### Only supported verdicts may be decisive
 
 A verdict of `unknown` or `insufficient` may cite anything or nothing. A decisive
-verdict must cite at least one item whose status is `present` and whose render state
-is `rendered` or `truncated`. Withheld, unavailable, no-evidence, and contradiction
-items do not support a decisive verdict. This is the rule that stops a verdict from
-resting on material the judge never saw.
+verdict must cite at least one item whose status is `present`, whose render state
+is `rendered` or `truncated`, and whose `renderedLength` is above 0. Withheld,
+unavailable, no-evidence, contradiction, and empty items do not support a decisive
+verdict. This is the rule that stops a verdict from resting on material the judge
+never saw. An empty item exists but shows the judge nothing, so it is valid as a
+record and not as support.
 
 ### Bundle identity ignores order
 

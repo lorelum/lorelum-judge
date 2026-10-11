@@ -69,7 +69,9 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
 - A `contradiction` names the items it conflicts with, all in the same bundle.
 - `validateVerdictEvidence(criterion, verdict, bundle)` requires every cited id to be
   in the bundle. A decisive verdict must cite at least one `present` item that was
-  `rendered` or `truncated`; `unknown` and `insufficient` may cite nothing.
+  `rendered` or `truncated` with some text shown (`renderedLength` above 0); an
+  empty item cannot support it. A `truncated` item must keep some text, otherwise it
+  is `withheld`. `unknown` and `insufficient` may cite nothing.
 - `evidenceBundleIdentity` ignores item order and changes with any content, status,
   or render change. `contentIdentity` is supplied by the caller and is not verified.
 

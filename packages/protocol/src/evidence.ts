@@ -67,8 +67,13 @@ function itemIssues(item: EvidenceItem, index: number): ValidationIssue[] {
     if (state === "withheld" && renderedLength !== 0) {
       issues.push(invalidItem(index, "a withheld item must keep no text"));
     }
-    if (state === "truncated" && renderedLength >= originalLength) {
-      issues.push(invalidItem(index, "a truncated item must keep less than its original length"));
+    if (state === "truncated" && (renderedLength === 0 || renderedLength >= originalLength)) {
+      issues.push(
+        invalidItem(
+          index,
+          "a truncated item must keep some text, and less than its original length",
+        ),
+      );
     }
   }
   return issues;
@@ -117,7 +122,8 @@ function isSupporting(item: EvidenceItem | undefined): boolean {
   return (
     item !== undefined &&
     item.status === "present" &&
-    (item.render?.state === "rendered" || item.render?.state === "truncated")
+    (item.render?.state === "rendered" || item.render?.state === "truncated") &&
+    item.render.renderedLength > 0
   );
 }
 
