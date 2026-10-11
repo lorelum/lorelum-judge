@@ -41,3 +41,12 @@
 
 - [x] 7.1 Update the PR body with commands, results, deferred work, and verification evidence.
 - [x] 7.2 Confirm every acceptance criterion in #36 has evidence.
+
+## 8. Review Fixes (changes requested on the PR)
+
+- [x] 8.1 Bindings are own properties only (Map), with prototype-name tests.
+- [x] 8.2 Escape `<evidence` and `</evidence` in candidate text before lengths and hashing, with tests.
+- [x] 8.3 Empty present evidence: recorded, cannot support a decisive verdict, with test.
+- [x] 8.4 Identity failure returned as an issue instead of thrown.
+- [x] 8.5 Document that the budget covers evidence text only.
+- [ ] 8.6 Confirm the rule change (rules not counted) with the maintainer before merge.

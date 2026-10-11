@@ -76,6 +76,20 @@ be assessed and not instructions. This establishes a stable, identity-covered ma
 It does not prevent the model from following instructions in evidence, and the spec
 does not claim that it does.
 
+### Escaping of candidate text
+
+Evidence text is candidate output and is untrusted. `<evidence` and `</evidence` are
+escaped to `&lt;evidence` and `&lt;/evidence` before lengths and hashing. Only these
+markers are escaped, to keep the text readable. The header's declared length is
+accurate, but it does not prove that a reader interprets the block boundaries the way
+the compiler intends; that is stated as a limitation in the spec.
+
+### Bindings are own properties
+
+Bindings are a `Map` built from own entries, and lookups use `Map.has` and `Map.get`.
+Object prototype names such as `constructor` therefore cannot resolve to inherited
+values.
+
 ## Risks / Trade-offs
 
 - A truncated item keeps a prefix, which may hide the decisive part of the evidence.
@@ -83,6 +97,7 @@ does not claim that it does.
 - Trailing-whitespace removal would alter code whose whitespace matters, for example a
   Makefile or Markdown with hard line breaks. This is accepted for the judge's purpose
   and documented.
+- Headers and unavailable lines are outside the budget, so item count is uncapped.
 - Id ordering means the same material can be truncated differently after an id rename.
   The prompt identity changes only with the budget, not with ids, so this is captured
   by the manifest, not the prompt identity.

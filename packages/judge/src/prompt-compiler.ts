@@ -97,6 +97,15 @@ export function normalizeText(text: string): string {
     .join("\n");
 }
 
+/**
+ * Candidate text can contain block markers. Neutralize `<evidence` and `</evidence`
+ * so only the compiler writes headers. Applied before lengths and hashing, so the
+ * record covers the escaped text the model actually sees.
+ */
+export function escapeEvidenceText(text: string): string {
+  return text.replace(/<(\/?)(evidence)/gi, "&lt;$1$2");
+}
+
 function codePoints(text: string): string[] {
   return Array.from(text);
 }
@@ -119,7 +128,7 @@ function identityOrIssue(schema: string, value: JsonValue): Identity | PromptIss
 interface ReadPrompt {
   readonly system: string;
   readonly template: string;
-  readonly variables: Readonly<Record<string, string>>;
+  readonly variables: ReadonlyMap<string, string>;
   readonly evidenceBudget: number;
 }
 
@@ -145,7 +154,7 @@ function readPrompt(raw: unknown): ReadPrompt | CompileResult {
   if (!isRecord(variables)) {
     return fail("$.prompt.variables", "invalid_input", "variables must be an object");
   }
-  const bound: Record<string, string> = {};
+  const bound = new Map<string, string>();
   for (const [name, value] of Object.entries(variables)) {
     if (name === RESERVED_VARIABLE) {
       return fail(`$.prompt.variables.${name}`, "reserved_variable", "evidence is reserved");
@@ -160,7 +169,7 @@ function readPrompt(raw: unknown): ReadPrompt | CompileResult {
     if (typeof value !== "string") {
       return fail(`$.prompt.variables.${name}`, "invalid_input", "variable values must be strings");
     }
-    bound[name] = normalizeText(value);
+    bound.set(name, normalizeText(value));
   }
   return {
     system: normalizeText(system),
@@ -173,7 +182,7 @@ function readPrompt(raw: unknown): ReadPrompt | CompileResult {
 /** Checks that every placeholder is bound, every binding is used, and `evidence` appears once. */
 function checkPlaceholders(
   template: string,
-  variables: Readonly<Record<string, string>>,
+  variables: ReadonlyMap<string, string>,
 ): PromptIssue[] {
   const issues: PromptIssue[] = [];
   const used = new Set<string>();
@@ -192,7 +201,7 @@ function checkPlaceholders(
       });
       continue;
     }
-    if (!(name in variables)) {
+    if (!variables.has(name)) {
       issues.push({
         path: "$.prompt.template",
         code: "unbound_variable",
@@ -208,7 +217,7 @@ function checkPlaceholders(
       message: `{{evidence}} must appear exactly once, found ${evidenceCount}`,
     });
   }
-  for (const name of Object.keys(variables)) {
+  for (const name of variables.keys()) {
     if (!used.has(name)) {
       issues.push({
         path: `$.prompt.variables.${name}`,
@@ -282,13 +291,14 @@ function headerAttributes(
 }
 
 /**
- * Renders evidence in id order under the budget. Returns the manifest items and the
+ * Renders evidence in id order under the budget. The budget counts evidence text only;
+ * headers and unavailable/no-evidence lines are not counted and grow with item count. Returns the manifest items and the
  * text blocks in the same order, or the manifest-level issues.
  */
 function renderEvidence(
   materials: readonly EvidenceMaterial[],
   budget: number,
-): { items: EvidenceItem[]; blocks: string[] } {
+): { items: EvidenceItem[]; blocks: string[] } | { issues: PromptIssue[] } {
   const sorted = [...materials].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const items: EvidenceItem[] = [];
   const blocks: string[] = [];
@@ -307,7 +317,7 @@ function renderEvidence(
       continue;
     }
 
-    const text = normalizeText(material.text);
+    const text = escapeEvidenceText(normalizeText(material.text));
     const characters = codePoints(text);
     const originalLength = characters.length;
     let state: "rendered" | "truncated" | "withheld";
@@ -325,16 +335,16 @@ function renderEvidence(
       kept = "";
     }
     const renderedLength = codePoints(kept).length;
-    const contentIdentity = identityOf(CONTENT_SCHEMA, text);
-    if (!contentIdentity.ok) {
-      throw new Error(`content identity failed at ${contentIdentity.error.path}`);
+    const contentIdentity = identityOrIssue(CONTENT_SCHEMA, text);
+    if (typeof contentIdentity !== "string") {
+      return { issues: [contentIdentity] };
     }
 
     items.push({
       schema: ITEM_SCHEMA,
       id: material.id,
       status: material.status,
-      contentIdentity: contentIdentity.identity,
+      contentIdentity,
       render: { state, originalLength, renderedLength },
       ...(conflicts !== undefined ? { conflictsWith: [...conflicts] } : {}),
     });
@@ -363,7 +373,11 @@ function compile(raw: unknown): CompileResult {
     return { ok: false, issues: placeholderIssues };
   }
 
-  const { items, blocks } = renderEvidence(materials, prompt.evidenceBudget);
+  const rendered = renderEvidence(materials, prompt.evidenceBudget);
+  if ("issues" in rendered) {
+    return { ok: false, issues: rendered.issues };
+  }
+  const { items, blocks } = rendered;
   const manifest: EvidenceBundle = { schema: BUNDLE_SCHEMA, items };
   const checked = validateEvidenceBundle(manifest);
   if (!checked.ok) {
@@ -380,7 +394,7 @@ function compile(raw: unknown): CompileResult {
   const evidenceSection = blocks.length === 0 ? NO_EVIDENCE_SECTION : blocks.join("\n\n");
   const system = `${prompt.system}\n\n${UNTRUSTED_NOTICE}`;
   const user = prompt.template.replace(PLACEHOLDER, (_match, name: string) =>
-    name === RESERVED_VARIABLE ? evidenceSection : (prompt.variables[name] ?? ""),
+    name === RESERVED_VARIABLE ? evidenceSection : (prompt.variables.get(name) ?? ""),
   );
   const messages: RuntimeMessage[] = [
     { role: "system", content: system },
@@ -391,7 +405,7 @@ function compile(raw: unknown): CompileResult {
     renderVersion: PROMPT_RENDER_VERSION,
     system,
     template: prompt.template,
-    variableNames: Object.keys(prompt.variables).sort(),
+    variableNames: [...prompt.variables.keys()].sort(),
     evidenceBudget: prompt.evidenceBudget,
   });
   if (typeof promptIdentity !== "string") {

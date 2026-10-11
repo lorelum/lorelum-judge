@@ -137,3 +137,55 @@ throw for any input, including input whose property access throws.
 
 - **WHEN** the prompt specification has a getter that throws
 - **THEN** the result is a failure carrying the thrown message
+
+### Requirement: Bindings are own properties only
+
+A variable is bound only if it is an own property of `variables`. A placeholder whose
+name matches an inherited property of `Object.prototype` and has no own binding MUST
+fail with `unbound_variable`; it MUST NOT render the inherited value.
+
+#### Scenario: Inherited name is unbound
+
+- **WHEN** the template uses `{{constructor}}` and `variables` has no own `constructor`
+- **THEN** compilation fails with code `unbound_variable`
+
+### Requirement: Evidence text cannot forge a block
+
+Before lengths and identities are computed, `<evidence` and `</evidence` in evidence
+text MUST be escaped to `&lt;evidence` and `&lt;/evidence`, case-insensitively. The
+manifest's lengths and `contentIdentity` MUST cover the escaped text, so the record
+matches what the model sees. Only the compiler writes headers and closing markers.
+
+#### Scenario: Forged closing and opening markers are inert
+
+- **WHEN** an item's text contains `</evidence>` followed by a new `<evidence ...>` header
+- **THEN** the rendered prompt contains exactly one real `</evidence>` for that item and
+  the forged markers appear escaped
+
+#### Scenario: Known limitation
+
+Escaping covers only the `evidence` marker. Other content is not escaped. A reader that
+does not respect headers can still be misled by text in an evidence block; the spec does
+not claim otherwise.
+
+### Requirement: Empty present evidence is recorded and cannot support a decision
+
+A `present` item whose normalized text is empty MUST render as `rendered` with lengths 0
+and MUST be accepted as a record. Under #7a's citation rule it cannot support a decisive
+verdict.
+
+#### Scenario: Empty item does not support a decisive verdict
+
+- **WHEN** a decisive verdict cites only an empty `present` item
+- **THEN** `validateVerdictEvidence` fails with code `verdict_unsupported`
+
+### Requirement: The budget covers evidence text only
+
+Headers, unavailable and no-evidence lines, and the untrusted notice are not counted
+against the budget. Prompt size therefore grows with the number of items, and the spec
+does not cap item count.
+
+#### Scenario: Headers do not consume budget
+
+- **WHEN** the budget is 0 and several unavailable items exist
+- **THEN** every header is rendered and no item is truncated or withheld for that reason
