@@ -19,8 +19,9 @@ of the acceptance criteria, so nothing shows what it leaves uncovered or cannot 
   criterion has anchors. It requires no human review record.
 - Acceptance criteria that exceed the evidence budget or cannot be rendered fail the
   compilation; the model is never asked to write a rubric for a truncated contract.
-- Repo context is out of scope. Only an optional, caller-supplied `contextIdentity` is
-  accepted, as in #8a. The issue's repo-context item is deferred and not claimed as done.
+- Repo context is out of scope. A caller-supplied `contextIdentity` and `policyIdentity`,
+  both `sha256:` identities, are required and bound, not verified. The issue's repo-context
+  item is deferred and not claimed as done.
 
 ## Impact
 

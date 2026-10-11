@@ -24,7 +24,7 @@ export const RUBRIC_OUTPUT_INSTRUCTION = [
   "Reply with one JSON object and nothing else:",
   '{"proposals":[{"criterion":<criterion>,"covers":[<acceptance id>],"appliesTo":[<task class or "*">],"role":"decisive" or "advisory","mergedFrom":[<criterion id of another proposal>]}],"unsupported":[{"acceptanceId":<acceptance id>,"reason":<why no criterion can judge it>}]}',
   '"mergedFrom" is optional. A criterion is {"schema":"lorelum.judge.criterion/v1","id","kind":"contract" or "quality" or "comparison","description","mandatory","source":{"origin":"user" or "policy" or "contract","ref"},"anchors":[{"verdict","description"}],"evidence":[{"evidenceId","role":"primary" or "reference"}]}.',
-  "Cover only acceptance ids that appear in the evidence.",
+  "Cover only acceptance ids that appear in the evidence. Each covered id needs an evidence entry with the same id.",
 ].join("\n");
 
 const TRUSTED_ORIGINS: ReadonlySet<string> = new Set(["user", "policy", "contract"]);
@@ -37,8 +37,13 @@ const PROPOSAL_KEYS: ReadonlySet<string> = new Set([
 ]);
 const OUTPUT_KEYS: ReadonlySet<string> = new Set(["proposals", "unsupported"]);
 const GAP_KEYS: ReadonlySet<string> = new Set(["acceptanceId", "reason"]);
+const IDENTITY = /^sha256:[0-9a-f]{64}$/;
 
-/** `model`: the port threw or the signal aborted. `output`: the response is not a valid proposal set. `gate`: a deterministic rule failed. `prompt`: the contract could not be rendered in full. */
+/**
+ * `model`: the port threw, or the signal aborted. `output`: the response is not a valid
+ * proposal set. `gate`: a deterministic rule failed. `prompt`: the contract could not be
+ * rendered in full.
+ */
 export type CompileCategory = "model" | "output" | "gate" | "prompt";
 
 export interface CompileIssue {
@@ -58,9 +63,9 @@ export interface CompileRubricInput {
   readonly prompt: PromptSpec;
   /** Model, decoding, runtime, and repetitions. `promptIdentity` is filled in by the compiler. */
   readonly instrument: InstrumentFields;
-  /** Supplied, not verified. */
+  /** A `sha256:` identity of the repository context. Supplied, not verified. */
   readonly contextIdentity: string;
-  /** Supplied, not verified. */
+  /** A `sha256:` identity of the authoring policy. Supplied, not verified. */
   readonly policyIdentity: string;
   readonly model: ModelPort;
   readonly runId: string;
@@ -119,6 +124,14 @@ export async function compileRubric(input: CompileRubricInput): Promise<CompileR
 /** Freezes a complete proposal whose criteria all have anchors. Recomputes identity for the frozen status. */
 export function freezeRubric(compiled: CompiledRubric): FreezeResult {
   const issues: CompileIssue[] = [];
+  const reportCheck = validateCompilationReport(
+    compiled.report,
+    compiled.rubric,
+    compiled.binding.contract,
+  );
+  if (!reportCheck.ok) {
+    return { ok: false, issues: fromValidation("gate", "$.report", reportCheck.issues) };
+  }
   if (!isComplete(compiled.report)) {
     for (const gap of compiled.report.uncovered) {
       issues.push({
@@ -197,6 +210,26 @@ async function run(input: CompileRubricInput): Promise<CompileRubricResult> {
       },
     ]);
   }
+  if (typeof input.contextIdentity !== "string" || !IDENTITY.test(input.contextIdentity)) {
+    return failure([
+      {
+        category: "gate",
+        path: "$.contextIdentity",
+        code: "invalid_identity",
+        message: "must be a sha256 identity",
+      },
+    ]);
+  }
+  if (typeof input.policyIdentity !== "string" || !IDENTITY.test(input.policyIdentity)) {
+    return failure([
+      {
+        category: "gate",
+        path: "$.policyIdentity",
+        code: "invalid_identity",
+        message: "must be a sha256 identity",
+      },
+    ]);
+  }
   const contractResult = validateTaskContract(input.contract);
   if (!contractResult.ok) {
     return failure(fromValidation("gate", "$.contract", contractResult.issues));
@@ -271,18 +304,46 @@ async function run(input: CompileRubricInput): Promise<CompileRubricResult> {
       },
     ]);
   }
-  if (response.kind !== "structured") {
+  if (input.signal.aborted) {
+    return failure([
+      {
+        category: "model",
+        path: "$.signal",
+        code: "aborted",
+        message: "compilation was aborted during the model call",
+      },
+    ]);
+  }
+
+  // The response is untrusted: reading it can throw, and that is an output failure.
+  let kind: unknown;
+  let value: unknown;
+  try {
+    kind = response.kind;
+    value = response.kind === "structured" ? response.value : undefined;
+  } catch (error) {
+    return failure([
+      {
+        category: "output",
+        path: "$.response",
+        code: "unreadable",
+        message: `model response could not be read: ${safeMessage(error)}`,
+      },
+    ]);
+  }
+  if (kind !== "structured") {
+    const name = typeof kind === "string" ? kind : "unknown";
     return failure([
       {
         category: "output",
         path: "$.response",
         code: "not_structured",
-        message: `expected a structured response, got "${response.kind}"`,
+        message: `expected a structured response, got "${name}"`,
       },
     ]);
   }
 
-  const parsed = readOutput(response.value);
+  const parsed = readOutput(value);
   if (!parsed.ok) {
     return failure(parsed.issues);
   }
@@ -477,7 +538,7 @@ function gateProposals(input: GateInput): GateResult {
     }
   }
 
-  // Merge bookkeeping. A merged-away criterion maps to its surviving criterion.
+  // Per-proposal references. Evidence selectors name acceptance ids, because those are the evidence.
   const survivorOf = new Map<string, string>();
   for (const proposal of input.proposals) {
     proposal.covers.forEach((id, index) => {
@@ -486,6 +547,15 @@ function gateProposals(input: GateInput): GateResult {
           `${proposal.path}.covers[${index}]`,
           "unknown_acceptance",
           `covers "${id}", which is not an acceptance id of the contract`,
+        );
+      }
+    });
+    proposal.criterion.evidence.forEach((selector, index) => {
+      if (!acceptanceIds.has(selector.evidenceId)) {
+        gate(
+          `${proposal.path}.criterion.evidence[${index}]`,
+          "unknown_evidence",
+          `evidence "${selector.evidenceId}" is not an acceptance id of the contract`,
         );
       }
     });
@@ -527,7 +597,7 @@ function gateProposals(input: GateInput): GateResult {
     proposal.appliesTo.includes(ANY_TASK_CLASS) ||
     proposal.appliesTo.includes(input.contract.taskClass);
 
-  // Groups: each surviving criterion with the criteria merged into it.
+  // A group is a surviving criterion with the criteria merged into it.
   interface Group {
     readonly survivor: Proposal;
     readonly members: readonly Proposal[];
@@ -546,6 +616,13 @@ function gateProposals(input: GateInput): GateResult {
           proposal.path,
           "merge_across_applicability",
           `merged criterion "${member.criterion.id}" has a different applicability`,
+        );
+      }
+      if (member.criterion.mandatory && !proposal.criterion.mandatory) {
+        gate(
+          proposal.path,
+          "merge_drops_mandatory",
+          `merged criterion "${member.criterion.id}" is mandatory; the surviving criterion must be too`,
         );
       }
     }
@@ -574,6 +651,19 @@ function gateProposals(input: GateInput): GateResult {
         if (!covers.includes(id)) {
           covers.push(id);
         }
+      }
+    }
+    // Every acceptance an entry covers needs its own evidence selector on that entry.
+    const ownEvidence = new Set(
+      group.survivor.criterion.evidence.map((selector) => selector.evidenceId),
+    );
+    for (const id of covers) {
+      if (!ownEvidence.has(id)) {
+        gate(
+          `${group.survivor.path}.criterion.evidence`,
+          "covers_without_evidence",
+          `covers "${id}" but has no evidence selector for it`,
+        );
       }
     }
     kept.push({
@@ -616,10 +706,33 @@ function gateProposals(input: GateInput): GateResult {
     }
   }
 
+  // One primary scoring owner per evidence across the rubric (AGENTS 4.3).
+  const primaryOwner = new Map<string, string>();
+  for (const item of accepted) {
+    for (const selector of item.survivor.criterion.evidence) {
+      if (selector.role !== "primary") {
+        continue;
+      }
+      const owner = primaryOwner.get(selector.evidenceId);
+      if (owner !== undefined && owner !== item.id) {
+        gate(
+          `${item.survivor.path}.criterion.evidence`,
+          "duplicate_primary_evidence",
+          `evidence "${selector.evidenceId}" is primary for "${owner}" and "${item.id}"`,
+        );
+      } else {
+        primaryOwner.set(selector.evidenceId, item.id);
+      }
+    }
+  }
+
   if (accepted.length === 0) {
     gate("$.proposals", "empty_rubric", "no applicable criterion remains to form a rubric");
     for (const item of excluded) {
       gate("$.proposals", item.code, `criterion "${item.criterionId}" excluded: ${item.reason}`);
+    }
+    for (const gap of input.unsupported) {
+      gate("$.unsupported", "unsupported", `"${gap.acceptanceId}": ${gap.reason}`);
     }
   }
 
@@ -703,16 +816,15 @@ function gateProposals(input: GateInput): GateResult {
     })),
   } as unknown as RubricSet;
 
-  const contractForCheck = input.contract;
   const rubricCheck = validateRubricSet(rubric);
   if (!rubricCheck.ok) {
     return { ok: false, issues: fromValidation("gate", "$.rubric", rubricCheck.issues) };
   }
-  const agreement = validateRubricAgainstContract(rubric, contractForCheck);
+  const agreement = validateRubricAgainstContract(rubric, input.contract);
   if (!agreement.ok) {
     return { ok: false, issues: fromValidation("gate", "$.rubric", agreement.issues) };
   }
-  const reportCheck = validateCompilationReport(report, rubric, contractForCheck);
+  const reportCheck = validateCompilationReport(report, rubric, input.contract);
   if (!reportCheck.ok) {
     return { ok: false, issues: fromValidation("gate", "$.report", reportCheck.issues) };
   }

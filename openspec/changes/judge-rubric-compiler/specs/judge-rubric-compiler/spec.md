@@ -154,10 +154,81 @@ repetitions) and the policy. It MUST NOT implement its own hashing or copying.
 
 ### Requirement: Repo context is deferred
 
-The compiler MUST accept only an optional caller-supplied `contextIdentity` and MUST NOT
-select, render, or read repo context.
+The compiler MUST require a caller-supplied `contextIdentity` and `policyIdentity`, each a
+`sha256:` identity, and MUST check their form before the model is called. It MUST NOT
+select, render, or read repo context. The identities are bound, not verified.
 
-#### Scenario: Context identity is passed through
+#### Scenario: Context identity is bound
 
-- **WHEN** a caller supplies `contextIdentity`
+- **WHEN** a caller supplies a valid `contextIdentity`
 - **THEN** it is bound into the rubric identity and not verified
+
+#### Scenario: Malformed identity fails before the model call
+
+- **WHEN** `contextIdentity` is not a `sha256:` identity
+- **THEN** compilation fails with category `gate` and the model is not called
+
+### Requirement: Evidence references are consistent
+
+Every evidence selector MUST name an acceptance id. Every covered acceptance id MUST appear
+in the entry's own evidence selectors. Two criteria in the rubric MUST NOT both be primary
+owners of the same evidence.
+
+#### Scenario: Unknown evidence selector
+
+- **WHEN** a criterion selects evidence `zz` that is not an acceptance id
+- **THEN** compilation fails with category `gate` code `unknown_evidence`
+
+#### Scenario: Covered id without evidence
+
+- **WHEN** a criterion covers `a1` but selects no evidence for `a1`
+- **THEN** compilation fails with category `gate` code `covers_without_evidence`
+
+#### Scenario: Duplicate primary owner
+
+- **WHEN** two criteria in the rubric are primary for the same evidence
+- **THEN** compilation fails with category `gate` code `duplicate_primary_evidence`
+
+### Requirement: Mandatory status survives merge
+
+A mandatory criterion MUST NOT be merged into a criterion that is not mandatory.
+
+#### Scenario: Mandatory member into non-mandatory survivor
+
+- **WHEN** a mandatory criterion is named in `mergedFrom` of a non-mandatory criterion
+- **THEN** compilation fails with category `gate` code `merge_drops_mandatory`
+
+### Requirement: Response reads and aborts are classified
+
+A response whose fields cannot be read MUST be an `output` failure. An abort during the
+model call MUST be a `model` failure.
+
+#### Scenario: Unreadable response
+
+- **WHEN** reading the response throws
+- **THEN** compilation fails with category `output` code `unreadable`
+
+#### Scenario: Abort during the call
+
+- **WHEN** the signal aborts while `generate` is running
+- **THEN** compilation fails with category `model` code `aborted`
+
+### Requirement: Freezing re-checks the report
+
+`freezeRubric` MUST validate the report against the rubric and contract it is bound to,
+and MUST refuse a report that does not match, even if it claims completeness.
+
+#### Scenario: Forged complete report
+
+- **WHEN** a caller alters `uncovered` to empty for an uncovered acceptance
+- **THEN** `freezeRubric` fails with category `gate`
+
+### Requirement: Empty results keep their reasons
+
+When no criterion remains in the rubric, the compilation MUST fail with `empty_rubric` and
+MUST also report each excluded criterion and each declared unsupported acceptance as issues.
+
+#### Scenario: All acceptance unsupported
+
+- **WHEN** the model declares every acceptance unsupported and proposes no applicable criterion
+- **THEN** the failure lists `empty_rubric` and one issue per unsupported acceptance with its reason

@@ -54,18 +54,20 @@ turns a task contract into a proposal `RubricSet` and a `CompilationReport`.
   `runId`, `stepIndex`, and `signal` come from the caller.
 - Model output is untrusted. Every criterion goes through `validateCriterionDraft`; any
   failure fails the whole compilation. Nothing is repaired or dropped.
-- The gate is deterministic: an unknown `covers` or `mergedFrom` id fails the
-  compilation; a mandatory criterion needs a user, policy, or contract source;
-  applicability is by `appliesTo` and task class; merges are only the declared
-  `mergedFrom`; undeclared overlap is a `conflict`.
+- The gate is deterministic: an unknown `covers`, `mergedFrom`, or evidence id fails the
+  compilation; each covered acceptance needs its own evidence selector; one primary owner
+  per evidence; a mandatory criterion needs a user, policy, or contract source and cannot
+  be merged into a non-mandatory one; applicability is by `appliesTo` and task class;
+  merges are only the declared `mergedFrom`; undeclared overlap is a `conflict`.
 - Result: `{ ok: true, value }` with `rubric` (status `proposal`), `report`,
   `rubricIdentity`, and `binding`; or `{ ok: false, issues }`. Each issue has a
   `category`: `model`, `output`, `gate`, or `prompt`.
 - `complete` is derived from the report: nothing uncovered, unsupported, or conflicting.
-- `freezeRubric(compiled)` produces a `frozen` rubric only when the report is complete
-  and every criterion has anchors. It needs no review record.
+- `freezeRubric(compiled)` produces a `frozen` rubric only when the report validates
+  against the rubric and contract, is complete, and every criterion has anchors. It
+  needs no review record.
 
-Not done here: retries, splitting, output repair, repo context selection (only an
-optional `contextIdentity` is accepted and bound, not verified), calibration (#9), and
-migration (#10). Merged criteria's evidence selectors are not checked against the merged
-acceptance ids; the surviving criterion's own evidence is what the rubric records.
+Not done here: retries, splitting, output repair, repo context selection, calibration
+(#9), and migration (#10). `contextIdentity` and `policyIdentity` are required `sha256:`
+identities, bound into the rubric identity and not verified. A merged criterion keeps its
+own role, anchors, and evidence; the merge is recorded in the report.
