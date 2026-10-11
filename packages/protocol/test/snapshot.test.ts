@@ -465,6 +465,30 @@ describe("identity functions copy their input", () => {
     expect(validateGatePolicy({ ...gatePolicy, extra: undefined }).ok).toBe(false);
   });
 
+  test("a non-enumerable array element is rejected by the copy", () => {
+    const array: unknown[] = [1, 2];
+    Object.defineProperty(array, 0, { value: 1, enumerable: false });
+    expect(() => snapshot(array)).toThrow("only own enumerable properties are allowed");
+  });
+
+  test("a validator names the path of a throwing getter", () => {
+    const contract = {
+      schema: "lorelum.judge.task-contract/v1",
+      id: "t1",
+      taskClass: "cli",
+      get text(): string {
+        throw new Error("boom");
+      },
+      acceptance: [{ id: "a1", text: "r", source: { origin: "contract", ref: "AC-1" } }],
+    };
+    const result = validateTaskContract(contract);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues[0]?.path).toBe("$.text");
+      expect(result.issues[0]?.message).toContain("boom");
+    }
+  });
+
   test("a symbol key is rejected by the copy", () => {
     expect(() => snapshot({ [Symbol("s")]: 1 })).toThrow("symbol keys are not allowed");
   });

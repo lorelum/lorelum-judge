@@ -12,7 +12,8 @@ validation. It targets Node and Bun because identity hashing uses `node:crypto`.
 `identityOf(schema, value)` returns `{ ok: true, identity }` with
 `sha256:<hex>` over the canonical form of `{"schema", "value"}`, or
 `{ ok: false, error }` for a rejected input, with the path and reason of the first
-rejected value in traversal order (see the input rule below). Same content gives the same identity regardless of
+rejected value in traversal order (see the input rule below). A node's own structural
+  defects (symbol keys, hidden properties, extra array properties) come before its children. Same content gives the same identity regardless of
 key order; the schema identifier keeps record types apart.
 
 ## Criterion and verdict

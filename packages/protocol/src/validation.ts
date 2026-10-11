@@ -139,6 +139,13 @@ function copyValue(value: unknown, path: string, ancestors: Set<object>, mode: M
     return Array.isArray(value)
       ? copyArray(value, path, ancestors, mode)
       : copyObject(value, path, ancestors, mode);
+  } catch (error) {
+    if (error instanceof CopyError) {
+      throw error;
+    }
+    // Anything else raised while reading this node (a Proxy trap, a stack overflow) is
+    // attributed to the node, so identity can report where it happened.
+    throw new CopyError(path, error instanceof Error ? error.message : String(error));
   } finally {
     ancestors.delete(value);
   }
@@ -156,6 +163,9 @@ function copyArray(
     }
     if (typeof key === "symbol" || !isArrayIndex(key, value.length)) {
       throw new CopyError(path, "an array may only have its elements as own properties");
+    }
+    if (!Object.getOwnPropertyDescriptor(value, key)?.enumerable) {
+      throw new CopyError(`${path}[${key}]`, "only own enumerable properties are allowed");
     }
   }
   const copy: unknown[] = [];
@@ -284,7 +294,7 @@ export function guarded<R>(run: () => R, failure: (issue: ValidationIssue) => R)
     return run();
   } catch (error) {
     return failure({
-      path: "$",
+      path: error instanceof CopyError ? error.path : "$",
       code: "schema",
       message: `input could not be read: ${error instanceof Error ? error.message : "unknown error"}`,
     });
