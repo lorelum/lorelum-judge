@@ -2,8 +2,8 @@
 
 - [x] 1.1 Confirm issue owns only the compiler, not calibration or migration.
 - [x] 1.2 Add the OpenSpec proposal, design, tasks, and specification.
-- [ ] 1.3 Validate the change with OpenSpec strict validation.
-- [ ] 1.4 Create the change PR with only OpenSpec artifacts first.
+- [x] 1.3 Validate the change with OpenSpec strict validation.
+- [x] 1.4 Create the change PR with only OpenSpec artifacts first.
 
 ## 2. Compiler
 
