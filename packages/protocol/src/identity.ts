@@ -19,53 +19,15 @@ export type CanonicalResult =
   | { readonly ok: true; readonly text: string }
   | { readonly ok: false; readonly error: IdentityError };
 
-function findUnsupported(value: unknown, path: string): IdentityError | undefined {
-  if (value === undefined) {
-    return { path, reason: "undefined" };
-  }
-  if (typeof value === "bigint") {
-    return { path, reason: "bigint" };
-  }
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? undefined : { path, reason: "not_finite" };
-  }
-  if (value === null || typeof value === "string" || typeof value === "boolean") {
-    return undefined;
-  }
-  if (Array.isArray(value)) {
-    for (const [index, element] of value.entries()) {
-      const error = findUnsupported(element, `${path}[${index}]`);
-      if (error !== undefined) {
-        return error;
-      }
-    }
-    return undefined;
-  }
-  if (typeof value === "object") {
-    for (const [key, member] of Object.entries(value)) {
-      const error = findUnsupported(member, `${path}.${key}`);
-      if (error !== undefined) {
-        return error;
-      }
-    }
-    return undefined;
-  }
-  return { path, reason: "unsupported" };
-}
-
 function reasonFor(error: unknown): IdentityError {
-  return {
-    path: error instanceof CopyError ? error.path : "$",
-    reason: "unsupported",
-  };
+  if (error instanceof CopyError) {
+    return { path: error.path, reason: error.reason };
+  }
+  return { path: "$", reason: "unsupported" };
 }
 
-/** Canonical form of an already-copied value, or the first unsupported value found. */
+/** Canonical form of an already-copied value. */
 function canonicalOfCopy(copy: unknown): CanonicalResult {
-  const error = findUnsupported(copy, "$");
-  if (error !== undefined) {
-    return { ok: false, error };
-  }
   const text = canonicalize(copy);
   if (text === undefined) {
     return { ok: false, error: { path: "$", reason: "unsupported" } };

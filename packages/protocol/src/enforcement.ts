@@ -146,7 +146,20 @@ function computeKey(
     };
   }
 
-  if (!Array.isArray(evidenceIdentities)) {
+  // The evidence list is untrusted too: copy it once, then use only the copy.
+  let evidenceCopy: unknown;
+  try {
+    evidenceCopy = snapshot(evidenceIdentities);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      issues: [
+        { path: "evidence", code: "schema", message: `input could not be read: ${message}` },
+      ],
+    };
+  }
+  if (!Array.isArray(evidenceCopy)) {
     return {
       ok: false,
       issues: [{ path: "evidence", code: "schema", message: "type: must be an array" }],
@@ -155,7 +168,7 @@ function computeKey(
 
   const issues: ValidationIssue[] = [];
   const valid = new Set<string>();
-  for (const [index, evidence] of evidenceIdentities.entries()) {
+  for (const [index, evidence] of evidenceCopy.entries()) {
     if (typeof evidence === "string" && identityPattern.test(evidence)) {
       valid.add(evidence);
     } else {

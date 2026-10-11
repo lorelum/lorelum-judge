@@ -368,6 +368,52 @@ describe("identity functions copy their input", () => {
     expect(identityOf("x", { a: "\ud800" }).ok).toBe(false);
   });
 
+  const holeArray = (): unknown[] => {
+    const array: unknown[] = [1, 2, 3];
+    delete array[1];
+    return array;
+  };
+
+  test.each([
+    [
+      "a bigint before a function",
+      { a: 1n, f: () => 1 },
+      { path: "$.value.a", reason: "bigint" as const },
+    ],
+    [
+      "NaN before a lone surrogate",
+      { a: Number.NaN, s: "\ud800" },
+      { path: "$.value.a", reason: "not_finite" as const },
+    ],
+    [
+      "a bigint before a Date",
+      { a: 1n, d: new Date(0) },
+      { path: "$.value.a", reason: "bigint" as const },
+    ],
+    [
+      "an undefined before a bigint",
+      { a: undefined, b: 1n },
+      { path: "$.value.a", reason: "undefined" as const },
+    ],
+    ["an array hole", { a: holeArray() }, { path: "$.value.a[1]", reason: "undefined" as const }],
+  ])("reports the first defect in order: %s", (_name, value, expected) => {
+    const outcome = identityOf("x", value);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error).toEqual(expected);
+    }
+  });
+
+  test("measurementKey rejects an evidence list with an extra own property", () => {
+    const withExtra = Object.assign([hex("1")], { note: "x" });
+    expect(measurementKey(definition, instrument, withExtra).ok).toBe(false);
+  });
+
+  test("measurementKey rejects an evidence list with a symbol key", () => {
+    const withSymbol = Object.assign([hex("1")], { [Symbol("s")]: 1 });
+    expect(measurementKey(definition, instrument, withSymbol).ok).toBe(false);
+  });
+
   test("a deep input is a failed result", () => {
     let deep: unknown = 1;
     for (let depth = 0; depth < 40000; depth += 1) {
