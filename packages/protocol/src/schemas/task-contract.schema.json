@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:task-contract:v1",
+  "title": "TaskContract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "taskClass", "text", "acceptance"],
+  "properties": {
+    "schema": { "const": "lorelum.judge.task-contract/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "taskClass": { "type": "string", "minLength": 1 },
+    "text": { "type": "string", "minLength": 1 },
+    "acceptance": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "text", "source"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "text": { "type": "string", "minLength": 1 },
+          "source": { "$ref": "urn:lorelum:judge:criterion:v1#/definitions/source" }
+        }
+      }
+    }
+  }
+}

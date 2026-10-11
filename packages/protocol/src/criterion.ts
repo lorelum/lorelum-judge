@@ -35,6 +35,20 @@ export function validateCriterion(input: unknown): ValidationResult<Criterion> {
   return guarded<ValidationResult<Criterion>>(() => checkCriterionShape(input), failedResult);
 }
 
+/**
+ * Schema-level check only: shape and the mandatory-needs-source rule. A draft criterion
+ * may still have incomplete anchors; use `validateCriterion` for the full rules.
+ */
+export function validateCriterionDraft(input: unknown): ValidationResult<Criterion> {
+  return guarded<ValidationResult<Criterion>>(
+    () =>
+      checkCriterion(input)
+        ? { ok: true, value: input }
+        : { ok: false, issues: schemaIssues(checkCriterion.errors) },
+    failedResult,
+  );
+}
+
 function failedResult<T>(issue: ValidationIssue): ValidationResult<T> {
   return { ok: false, issues: [issue] };
 }

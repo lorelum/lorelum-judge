@@ -22,12 +22,35 @@ export type IssueCode =
   | "evidence_item_invalid"
   | "duplicate_evidence_item"
   | "evidence_not_in_bundle"
-  | "verdict_unsupported";
+  | "verdict_unsupported"
+  | "invalid_applicability"
+  | "not_applicable"
+  | "unknown_acceptance"
+  | "duplicate_acceptance"
+  | "report_mismatch";
 
 export interface ValidationIssue {
   readonly path: string;
   readonly code: IssueCode;
   readonly message: string;
+}
+
+/** A failed result with no value; assignable to every `ValidationResult<T>`. */
+export interface Failure {
+  readonly ok: false;
+  readonly issues: readonly ValidationIssue[];
+}
+
+export function failed(issue: ValidationIssue): Failure {
+  return { ok: false, issues: [issue] };
+}
+
+/** Re-roots issue paths written for a sub-record, for example `$.a` becomes `$.prefix.a`. */
+export function prefixIssues(
+  issues: readonly ValidationIssue[],
+  prefix: string,
+): ValidationIssue[] {
+  return issues.map((issue) => ({ ...issue, path: `${prefix}${issue.path.slice(1)}` }));
 }
 
 export type ValidationResult<T> =
