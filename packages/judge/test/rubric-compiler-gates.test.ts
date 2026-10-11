@@ -247,3 +247,19 @@ describe("freezing", () => {
     expect(freezeRubric(forged).ok).toBe(false);
   });
 });
+
+describe("optional fields", () => {
+  test("an empty mergedFrom is the same as none", async () => {
+    const model = modelWith(
+      structured({
+        proposals: [proposal("c1", ["a1"], { mergedFrom: [] }), proposal("c2", ["a2"])],
+        unsupported: [],
+      }),
+    );
+    const result = await compileRubric(input(model));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.report.merged).toEqual([]);
+    expect(result.value.rubric.entries.length).toBe(2);
+  });
+});

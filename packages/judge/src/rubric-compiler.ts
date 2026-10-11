@@ -390,7 +390,7 @@ function readOutput(
   const report = (path: string, code: string, message: string): void => {
     issues.push({ category: "output", path, code, message });
   };
-  const readList = (raw: unknown, path: string): string[] | undefined => {
+  const readList = (raw: unknown, path: string, allowEmpty = false): string[] | undefined => {
     if (!Array.isArray(raw)) {
       report(path, "not_array", "must be an array");
       return undefined;
@@ -408,7 +408,7 @@ function readOutput(
         out.push(entry);
       }
     });
-    if (out.length === 0) {
+    if (out.length === 0 && !allowEmpty) {
       report(path, "empty_list", "must not be empty");
       ok = false;
     }
@@ -448,7 +448,7 @@ function readOutput(
         const covers = readList(raw.covers, `${path}.covers`);
         const appliesTo = readList(raw.appliesTo, `${path}.appliesTo`);
         const mergedFrom =
-          raw.mergedFrom === undefined ? [] : readList(raw.mergedFrom, `${path}.mergedFrom`);
+          raw.mergedFrom === undefined ? [] : readList(raw.mergedFrom, `${path}.mergedFrom`, true);
         if (raw.role !== "decisive" && raw.role !== "advisory") {
           report(`${path}.role`, "invalid_role", 'role must be "decisive" or "advisory"');
         }

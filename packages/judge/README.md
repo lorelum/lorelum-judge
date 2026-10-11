@@ -69,5 +69,8 @@ turns a task contract into a proposal `RubricSet` and a `CompilationReport`.
 
 Not done here: retries, splitting, output repair, repo context selection, calibration
 (#9), and migration (#10). `contextIdentity` and `policyIdentity` are required `sha256:`
-identities, bound into the rubric identity and not verified. A merged criterion keeps its
-own role, anchors, and evidence; the merge is recorded in the report.
+identities, bound into the rubric identity and not verified. The surviving criterion keeps
+its own role, anchors, and evidence; criteria merged into it leave the rubric, and the
+survivor must select evidence for every acceptance id they cover. `freezeRubric` checks
+the report against the rubric and contract, not the proposal-time merge rules, so
+`compileRubric` is the only supported producer of a compiled rubric.
