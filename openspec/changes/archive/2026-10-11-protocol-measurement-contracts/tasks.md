@@ -49,7 +49,9 @@
 - [x] 7.3 Run `openspec validate protocol-measurement-contracts --type change --strict`.
 - [x] 7.4 Import the built entrypoint in Node ESM and run definition, instrument,
   run, calibration, and enforcement in sequence.
-- [ ] 7.5 Read back the PR and record AI review findings and resolution.
+- [x] 7.5 Read back the PR and record AI review findings and resolution. Independent
+  review findings 1, 2, 3, 5, 6 fixed or documented in 679ee01; finding 4 (duplicated
+  generated types) deferred.
 
 ## 8. Final Gate
 
