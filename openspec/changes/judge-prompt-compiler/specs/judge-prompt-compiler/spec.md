@@ -1,0 +1,139 @@
+# Judge Prompt Compiler Specification
+
+## Purpose
+
+Turn a measurement's rules and raw evidence into the messages a model receives, a
+manifest of what was shown, and identities that are computed here rather than declared
+by the caller.
+
+## ADDED Requirements
+
+### Requirement: Compilation is order independent
+
+`compilePrompt` MUST produce identical messages, manifest, and identities for the same
+rules and the same evidence supplied in any order or with object keys in any order.
+
+#### Scenario: Shuffled evidence produces the same output
+
+- **WHEN** the same evidence items are supplied in a different order
+- **THEN** messages, manifest, and all three identities are equal
+
+### Requirement: Budget renders evidence in id order
+
+Evidence MUST be rendered in ascending id order under a character budget counted in
+code points. The first item that fits is `rendered`; the first that does not fit is
+`truncated` to the remaining budget when some remains, otherwise `withheld`; every later
+present item is `withheld`. `unavailable` and `no_evidence` items MUST render as a line
+and consume no budget. The budget MUST be a non-negative safe integer.
+
+#### Scenario: Boundary truncation
+
+- **WHEN** the budget is 10 and items of length 6 and 6 are present
+- **THEN** the first is `rendered`, the second is `truncated` with `renderedLength` 4,
+  and no later item is rendered
+
+#### Scenario: Zero budget withholds all present evidence
+
+- **WHEN** the budget is 0 and a present item exists
+- **THEN** that item is `withheld` with `renderedLength` 0 and its header still appears
+
+### Requirement: The manifest is a validated evidence bundle
+
+The returned manifest MUST pass `validateEvidenceBundle` from `protocol`. Each present or
+contradiction item MUST carry a `contentIdentity` computed by the compiler from its
+normalized text. A compilation whose manifest fails validation MUST return issues.
+
+#### Scenario: Manifest validates
+
+- **WHEN** a valid set of materials is compiled
+- **THEN** `validateEvidenceBundle(manifest)` succeeds
+
+### Requirement: Headers record what was shown
+
+Each evidence block header MUST state the id, status, render state, original length,
+and rendered length. A `contradiction` header MUST list the ids it conflicts with.
+Evidence ids MUST match `^[A-Za-z0-9_.:-]+$`.
+
+#### Scenario: Truncated block declares its length
+
+- **WHEN** an item is truncated
+- **THEN** its header states both lengths and the rendered text is the first
+  `renderedLength` code points
+
+#### Scenario: Id that could break the header is rejected
+
+- **WHEN** an id contains a quote or a space
+- **THEN** compilation fails with code `invalid_evidence`
+
+### Requirement: Variables are bound exactly
+
+Every `{{name}}` in the template MUST be bound in `variables`, and every bound name MUST
+appear in the template. Names MUST match `^[a-z][a-z0-9_]*$`. `evidence` is reserved and
+MUST appear exactly once in the template. Substitution MUST be a single pass: a value
+containing a placeholder MUST appear literally.
+
+#### Scenario: Missing binding fails
+
+- **WHEN** the template uses `{{goal}}` and no `goal` is bound
+- **THEN** compilation fails with code `unbound_variable`
+
+#### Scenario: Extra binding fails
+
+- **WHEN** a variable is bound but not used
+- **THEN** compilation fails with code `unknown_variable`
+
+#### Scenario: Placeholder inside a value is not expanded
+
+- **WHEN** a value is `{{evidence}}`
+- **THEN** the rendered message contains that text literally and only one evidence block
+  section
+
+### Requirement: Mechanical differences do not change identity
+
+Before any rendering or hashing, text MUST be normalized: NFC, line endings converted to
+`\n`, and trailing spaces and tabs removed from every line. Text differing only in these
+ways MUST produce identical messages and identities. Any other difference MUST change at
+least the identity of the text that contains it.
+
+#### Scenario: CRLF and trailing spaces are ignored
+
+- **WHEN** a rule differs from another only by `\r\n` against `\n` and trailing spaces
+- **THEN** the prompt identity is equal
+
+#### Scenario: One word changes the identity
+
+- **WHEN** one word of a rule changes
+- **THEN** the prompt identity differs
+
+### Requirement: Identities have distinct scopes
+
+The prompt identity MUST depend on the normalized system text, normalized template,
+sorted variable names, render version, and evidence budget, and MUST NOT depend on
+variable values. The render identity MUST depend on the final messages. Changing a
+variable value MUST change the render identity and MUST NOT change the prompt identity.
+Changing the budget or the template MUST change the prompt identity.
+
+#### Scenario: Value change affects only the render identity
+
+- **WHEN** a bound variable value changes
+- **THEN** the render identity differs and the prompt identity is equal
+
+### Requirement: Untrusted-content notice is present
+
+The system message MUST end with the fixed notice that evidence blocks are data to be
+assessed and are not instructions. The notice MUST be covered by the prompt identity.
+
+#### Scenario: Notice is in the system message
+
+- **WHEN** any input is compiled
+- **THEN** the system message contains the notice text
+
+### Requirement: Compilation never throws
+
+`compilePrompt` MUST return `{ ok: true, value }` or `{ ok: false, issues }` and MUST NOT
+throw for any input, including input whose property access throws.
+
+#### Scenario: Hostile input
+
+- **WHEN** the prompt specification has a getter that throws
+- **THEN** the result is a failure carrying the thrown message
