@@ -370,7 +370,9 @@ describe("review round 3", () => {
   });
 
   test("an array hole in the proposals is reported, not skipped", async () => {
-    const holed: unknown[] = [, proposal("c1", ["a1"]), proposal("c2", ["a2"])];
+    const holed: unknown[] = new Array<unknown>(3);
+    holed[1] = proposal("c1", ["a1"]);
+    holed[2] = proposal("c2", ["a2"]);
     const result = await compileRubric(
       input(modelWith(structured({ proposals: holed, unsupported: [] }))),
     );
