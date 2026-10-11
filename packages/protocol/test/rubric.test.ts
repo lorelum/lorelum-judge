@@ -111,6 +111,7 @@ function report(overrides: Record<string, unknown> = {}): Record<string, unknown
     uncovered: [],
     unsupported: [],
     merged: [],
+    excluded: [],
     ...overrides,
   };
 }
@@ -943,5 +944,129 @@ describe("every rubric entry point copies its own argument", () => {
     const result = validateRubricSet(stateful);
     expect(reads).toBe(1);
     expect(result.ok && result.value.id).toBe("first");
+  });
+});
+
+describe("compilation report: excluded proposals", () => {
+  const check = (r: Record<string, unknown>, entries = goodEntries()) =>
+    validateCompilationReport(r, rubric(entries), contract());
+  const excluded = (
+    criterionId: string,
+    code = "not_applicable",
+    reason = "not for this class",
+  ) => ({
+    criterionId,
+    code,
+    reason,
+  });
+
+  test("accepts not_applicable and conflict items with reasons", () => {
+    const r = report({
+      excluded: [excluded("c8"), excluded("c9", "conflict", "same evidence, different anchors")],
+    });
+    expect(check(r).ok).toBe(true);
+  });
+
+  test("rejects a code outside the two defined values", () => {
+    const result = check(report({ excluded: [excluded("c8", "dropped")] }));
+    expect(codes(result)).toEqual(["schema"]);
+  });
+
+  test("rejects a blank reason", () => {
+    const result = check(report({ excluded: [excluded("c8", "not_applicable", "  ")] }));
+    expect(codes(result)).toEqual(["schema"]);
+  });
+
+  test("rejects a report without the excluded field", () => {
+    const { excluded: _omitted, ...withoutField } = report();
+    expect(codes(check(withoutField))).toEqual(["schema"]);
+  });
+
+  test("rejects the same criterion excluded twice", () => {
+    const result = check(report({ excluded: [excluded("c8"), excluded("c8", "conflict")] }));
+    expect(codes(result)).toEqual(["report_mismatch"]);
+    expect(paths(result)).toEqual(["$.excluded[1].criterionId"]);
+  });
+
+  test("rejects excluding a criterion that is in the rubric", () => {
+    const result = check(report({ excluded: [excluded("c1")] }));
+    expect(codes(result)).toEqual(["report_mismatch"]);
+    expect(paths(result)).toEqual(["$.excluded[0].criterionId"]);
+  });
+
+  test("rejects excluding a proposal that was absorbed by a merge", () => {
+    const r = report({
+      merged: [{ criterionId: "c1", mergedFrom: ["c7"] }],
+      excluded: [excluded("c7")],
+    });
+    const result = check(r, [entry("c1", ["a1"]), entry("c2", ["a2"])]);
+    expect(codes(result)).toEqual(["report_mismatch"]);
+    expect(paths(result)).toEqual(["$.excluded[0].criterionId"]);
+  });
+
+  test.each([
+    ["a NEL", "\u0085"],
+    ["a zero-width space", "\u200B"],
+    ["a NUL", "\u0000"],
+    ["a BOM", "\uFEFF"],
+    ["a no-break space", "\u00A0"],
+    ["a Hangul filler", "\u3164"],
+    ["a Hangul choseong filler", "\u115F"],
+    ["a braille blank", "\u2800"],
+    ["a lone combining mark", "\u0301"],
+    ["combining marks only", "\u0301\u0308"],
+  ])("rejects a reason that is %s only", (_name, reason) => {
+    expect(codes(check(report({ excluded: [excluded("c8", "not_applicable", reason)] })))).toEqual([
+      "schema",
+    ]);
+  });
+
+  test.each([
+    ["a zero-width space", "\u200B"],
+    ["a Hangul filler", "\u3164"],
+    ["a Hangul choseong filler", "\u115F"],
+    ["a Hangul jungseong filler", "\u1160"],
+    ["a halfwidth Hangul filler", "\uFFA0"],
+    ["a braille blank", "\u2800"],
+    ["a lone combining mark", "\u0301"],
+  ])("rejects a blank reason on an uncovered gap: %s", (_name, reason) => {
+    const r = report({
+      covered: [{ acceptanceId: "a1", criterionIds: ["c1"] }],
+      uncovered: [{ acceptanceId: "a2", reason }],
+    });
+    expect(codes(check(r, [entry("c1", ["a1"])]))).toEqual(["schema"]);
+  });
+
+  test("accepts a spacing combining mark, which is visible", () => {
+    expect(check(report({ excluded: [excluded("c8", "not_applicable", "\u0903")] })).ok).toBe(true);
+  });
+
+  test("the missing-field rejection comes from the schema, not from a thrown TypeError", () => {
+    const { excluded: _omitted, ...withoutField } = report();
+    const result = check(withoutField);
+    expect(result.ok).toBe(false);
+    expect(
+      result.ok ? "" : (result.issues ?? []).map((issue) => issue.message).join(" "),
+    ).toContain("must have required property 'excluded'");
+  });
+
+  test("rejects an extra property on an excluded item", () => {
+    const result = check(report({ excluded: [{ ...excluded("c8"), note: "extra" }] }));
+    expect(codes(result)).toEqual(["schema"]);
+  });
+
+  test("accepts a reason where a combining mark follows a letter", () => {
+    expect(check(report({ excluded: [excluded("c8", "not_applicable", "e\u0301")] })).ok).toBe(
+      true,
+    );
+  });
+
+  test("rejects an empty criterionId", () => {
+    expect(codes(check(report({ excluded: [excluded("")] })))).toEqual(["schema"]);
+  });
+
+  test("compares excluded ids exactly, as the rest of the rubric does", () => {
+    // "c1 " is not the rubric's "c1", so it is not rejected as in-rubric. That is the rule.
+    expect(check(report({ excluded: [excluded("c1 ")] })).ok).toBe(true);
   });
 });

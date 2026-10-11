@@ -4,7 +4,15 @@
   "title": "CompilationReport",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "contractIdentity", "covered", "uncovered", "unsupported", "merged"],
+  "required": [
+    "schema",
+    "contractIdentity",
+    "covered",
+    "uncovered",
+    "unsupported",
+    "merged",
+    "excluded"
+  ],
   "properties": {
     "schema": { "const": "lorelum.judge.compilation-report/v1" },
     "contractIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
@@ -43,6 +51,23 @@
           }
         }
       }
+    },
+    "excluded": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["criterionId", "code", "reason"],
+        "properties": {
+          "criterionId": { "type": "string", "minLength": 1 },
+          "code": { "enum": ["not_applicable", "conflict"] },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[\\s\\S]*[^\\p{White_Space}\\p{Cc}\\p{Cf}\\p{Mn}\\p{Me}\\u115F\\u1160\\u3164\\uFFA0\\u2800]"
+          }
+        }
+      }
     }
   },
   "definitions": {
@@ -52,7 +77,11 @@
       "required": ["acceptanceId", "reason"],
       "properties": {
         "acceptanceId": { "type": "string", "minLength": 1 },
-        "reason": { "type": "string", "minLength": 1, "pattern": "\\S" }
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[\\s\\S]*[^\\p{White_Space}\\p{Cc}\\p{Cf}\\p{Mn}\\p{Me}\\u115F\\u1160\\u3164\\uFFA0\\u2800]"
+        }
       }
     }
   }

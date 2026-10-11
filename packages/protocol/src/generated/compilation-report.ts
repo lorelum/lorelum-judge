@@ -20,6 +20,11 @@ criterionId: string
  */
 mergedFrom: [string, ...(string)[]]
 }[]
+excluded: {
+criterionId: string
+code: ("not_applicable" | "conflict")
+reason: string
+}[]
 }
 export interface Gap {
 acceptanceId: string

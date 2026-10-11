@@ -153,7 +153,8 @@ function checkRubricAgainst(rubricRaw: unknown, contractRaw: unknown): Validatio
 /**
  * Checks a compilation report against the contract and rubric it describes. The report is
  * derived: each acceptance id sits in exactly one of covered, uncovered, unsupported, and
- * `covered` lists exactly the criteria whose entries cover it.
+ * `covered` lists exactly the criteria whose entries cover it. `merged` and `excluded` are
+ * checked for coherence with the rubric only, not against the proposals.
  */
 export function validateCompilationReport(
   reportInput: unknown,
@@ -307,6 +308,24 @@ function checkReportAgainst(
           `"${absorbed}" was reported merged away but is still in the rubric`,
         );
       }
+    }
+  }
+
+  const excludedIds = new Set<string>();
+  for (const [index, item] of report.excluded.entries()) {
+    const path = `$.excluded[${index}]`;
+    if (excludedIds.has(item.criterionId)) {
+      mismatch(`${path}.criterionId`, `criterion "${item.criterionId}" is excluded more than once`);
+    }
+    excludedIds.add(item.criterionId);
+    if (present.has(item.criterionId)) {
+      mismatch(`${path}.criterionId`, `excluded criterion "${item.criterionId}" is in the rubric`);
+    }
+    if (absorbedBy.has(item.criterionId)) {
+      mismatch(
+        `${path}.criterionId`,
+        `excluded criterion "${item.criterionId}" was also merged away`,
+      );
     }
   }
 
