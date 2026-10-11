@@ -31,8 +31,8 @@
 
 ## 6. Verification and Review
 
-- [ ] 6.1 Run `bun run validate`, including the Node ESM smoke test.
-- [ ] 6.2 Run `openspec validate protocol-compilation-report-decisions --type change --strict`.
+- [x] 6.1 Run `bun run validate`, including the Node ESM smoke test.
+- [x] 6.2 Run `openspec validate protocol-compilation-report-decisions --type change --strict`.
 - [ ] 6.3 Read back the PR body and the issue; record AI assistance and independent review.
 
 ## 7. Final Gate

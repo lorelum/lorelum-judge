@@ -1010,6 +1010,11 @@ describe("compilation report: excluded proposals", () => {
     ["a NUL", "\u0000"],
     ["a BOM", "\uFEFF"],
     ["a no-break space", "\u00A0"],
+    ["a Hangul filler", "\u3164"],
+    ["a Hangul choseong filler", "\u115F"],
+    ["a braille blank", "\u2800"],
+    ["a lone combining mark", "\u0301"],
+    ["combining marks only", "\u0301\u0308"],
   ])("rejects a reason that is %s only", (_name, reason) => {
     expect(codes(check(report({ excluded: [excluded("c8", "not_applicable", reason)] })))).toEqual([
       "schema",
@@ -1036,6 +1041,12 @@ describe("compilation report: excluded proposals", () => {
   test("rejects an extra property on an excluded item", () => {
     const result = check(report({ excluded: [{ ...excluded("c8"), note: "extra" }] }));
     expect(codes(result)).toEqual(["schema"]);
+  });
+
+  test("accepts a reason where a combining mark follows a letter", () => {
+    expect(check(report({ excluded: [excluded("c8", "not_applicable", "e\u0301")] })).ok).toBe(
+      true,
+    );
   });
 
   test("rejects an empty criterionId", () => {

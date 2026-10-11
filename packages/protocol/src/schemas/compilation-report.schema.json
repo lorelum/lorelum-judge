@@ -64,7 +64,7 @@
           "reason": {
             "type": "string",
             "minLength": 1,
-            "pattern": "[^\\p{White_Space}\\p{Cc}\\p{Cf}]"
+            "pattern": "^[\\s\\S]*[^\\p{White_Space}\\p{Cc}\\p{Cf}\\p{M}\\u115F\\u1160\\u3164\\uFFA0\\u2800]"
           }
         }
       }
@@ -80,7 +80,7 @@
         "reason": {
           "type": "string",
           "minLength": 1,
-          "pattern": "[^\\p{White_Space}\\p{Cc}\\p{Cf}]"
+          "pattern": "^[\\s\\S]*[^\\p{White_Space}\\p{Cc}\\p{Cf}\\p{M}\\u115F\\u1160\\u3164\\uFFA0\\u2800]"
         }
       }
     }
