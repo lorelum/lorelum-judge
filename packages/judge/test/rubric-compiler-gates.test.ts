@@ -332,16 +332,52 @@ describe("freeze accepts only compiled results", () => {
     expect(refused.issues.map((issue) => issue.code)).toEqual(["not_compiled"]);
   });
 
-  test("an in-place change to a compiled result is refused by the report check", async () => {
+  test("a compiled result cannot be changed in place", async () => {
     const result = await compileRubric(
       input(modelWith(structured({ proposals: [proposal("c1", ["a1"])], unsupported: [] }))),
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    (result.value as { report: unknown }).report = { ...result.value.report, uncovered: [] };
-    const refused = freezeRubric(result.value);
-    expect(refused.ok).toBe(false);
-    if (refused.ok) return;
-    expect(refused.issues.some((issue) => issue.category === "gate")).toBe(true);
+    expect(() => {
+      (result.value as { report: unknown }).report = { ...result.value.report, uncovered: [] };
+    }).toThrow();
+    expect(freezeRubric(result.value).ok).toBe(false);
+  });
+});
+
+describe("review round 3", () => {
+  test("a surviving criterion that conflicts is excluded, not reported as merged", async () => {
+    const member = proposal("m", ["a1"]);
+    const survivor = proposal("s", ["a1"], { mergedFrom: ["m"] });
+    const rival = proposal("r", ["a1"]);
+    const result = await compileRubric(
+      input(
+        modelWith(
+          structured({
+            proposals: [member, survivor, rival, proposal("c3", ["a2"])],
+            unsupported: [],
+          }),
+        ),
+      ),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.report.merged).toEqual([]);
+    expect(
+      result.value.report.excluded.map((item) => `${item.criterionId}:${item.code}`).sort(),
+    ).toEqual(["m:conflict", "r:conflict", "s:conflict"]);
+    expect(result.value.report.uncovered.map((gap) => gap.acceptanceId)).toEqual(["a1"]);
+  });
+
+  test("an array hole in the proposals is reported, not skipped", async () => {
+    const holed: unknown[] = [, proposal("c1", ["a1"]), proposal("c2", ["a2"])];
+    const result = await compileRubric(
+      input(modelWith(structured({ proposals: holed, unsupported: [] }))),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(
+      result.issues.some((issue) => issue.category === "output" && issue.path === "$.proposals[0]"),
+    ).toBe(true);
   });
 });

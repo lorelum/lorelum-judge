@@ -9,6 +9,7 @@ import {
   taskContractIdentity,
   validateCompilationReport,
   validateCriterionDraft,
+  validateInstrument,
   validateRubricAgainstContract,
   validateRubricSet,
   validateTaskContract,
@@ -38,8 +39,6 @@ const PROPOSAL_KEYS: ReadonlySet<string> = new Set([
 const OUTPUT_KEYS: ReadonlySet<string> = new Set(["proposals", "unsupported"]);
 const GAP_KEYS: ReadonlySet<string> = new Set(["acceptanceId", "reason"]);
 const IDENTITY = /^sha256:[0-9a-f]{64}$/;
-/** Results that compileRubric itself returned. Only these can be frozen. */
-const compiledResults = new WeakSet<CompiledRubric>();
 
 /**
  * `model`: the port threw, or the signal aborted. `output`: the response is not a valid
@@ -98,6 +97,37 @@ export type FreezeResult =
   | { readonly ok: true; readonly rubric: RubricSet; readonly rubricIdentity: Identity }
   | { readonly ok: false; readonly issues: readonly CompileIssue[] };
 
+interface Proposal {
+  readonly path: string;
+  readonly criterion: Criterion;
+  readonly covers: readonly string[];
+  readonly appliesTo: readonly string[];
+  readonly role: "decisive" | "advisory";
+  readonly mergedFrom: readonly string[];
+}
+
+interface GapEntry {
+  readonly acceptanceId: string;
+  readonly reason: string;
+}
+
+interface GateInput {
+  readonly rubricId: string;
+  readonly contract: {
+    readonly taskClass: string;
+    readonly acceptance: readonly { readonly id: string }[];
+  };
+  readonly contractIdentity: Identity;
+  readonly proposals: readonly Proposal[];
+  readonly unsupported: readonly GapEntry[];
+}
+
+/**
+ * Results that compileRubric returned. Each is deep-frozen, so its contents cannot change after
+ * the compiler produced it; membership therefore means "exactly what the compiler built".
+ */
+const compiledResults = new WeakSet<CompiledRubric>();
+
 /** True when the report has no uncovered, unsupported, or conflicting acceptance. */
 export function isComplete(report: CompilationReport): boolean {
   return (
@@ -125,20 +155,28 @@ export async function compileRubric(input: CompileRubricInput): Promise<CompileR
 
 /** Freezes a complete proposal whose criteria all have anchors. Recomputes identity for the frozen status. */
 export function freezeRubric(compiled: CompiledRubric): FreezeResult {
-  if (!compiledResults.has(compiled)) {
+  try {
+    return freezeChecked(compiled);
+  } catch (error) {
     return {
       ok: false,
       issues: [
         {
           category: "gate",
           path: "$",
-          code: "not_compiled",
-          message:
-            "only a result returned by compileRubric can be frozen; copies and hand-built objects cannot",
+          code: "internal",
+          message: `unexpected failure: ${safeMessage(error)}`,
         },
       ],
     };
   }
+}
+
+function freezeChecked(compiled: CompiledRubric): FreezeResult {
+  if (!compiledResults.has(compiled)) {
+    return refuseFreeze("not_compiled", "only a result returned by compileRubric can be frozen");
+  }
+
   const issues: CompileIssue[] = [];
   const reportCheck = validateCompilationReport(
     compiled.report,
@@ -189,7 +227,7 @@ export function freezeRubric(compiled: CompiledRubric): FreezeResult {
   if (issues.length > 0) {
     return { ok: false, issues };
   }
-  const frozen = { ...compiled.rubric, status: "frozen" } as RubricSet;
+  const frozen = deepFreeze({ ...compiled.rubric, status: "frozen" } as RubricSet);
   const checked = validateRubricSet(frozen);
   if (!checked.ok) {
     return { ok: false, issues: fromValidation("gate", "$", checked.issues) };
@@ -201,18 +239,8 @@ export function freezeRubric(compiled: CompiledRubric): FreezeResult {
   return { ok: true, rubric: frozen, rubricIdentity: identity.identity };
 }
 
-interface Proposal {
-  readonly path: string;
-  readonly criterion: Criterion;
-  readonly covers: readonly string[];
-  readonly appliesTo: readonly string[];
-  readonly role: "decisive" | "advisory";
-  readonly mergedFrom: readonly string[];
-}
-
-interface GapEntry {
-  readonly acceptanceId: string;
-  readonly reason: string;
+function refuseFreeze(code: string, message: string): FreezeResult {
+  return { ok: false, issues: [{ category: "gate", path: "$", code, message }] };
 }
 
 async function run(input: CompileRubricInput): Promise<CompileRubricResult> {
@@ -291,6 +319,16 @@ async function run(input: CompileRubricInput): Promise<CompileRubricResult> {
     return failure(unrendered);
   }
 
+  // The instrument is copied and validated here, so the result never holds the caller's object.
+  const instrumentResult = validateInstrument({
+    ...input.instrument,
+    promptIdentity: compiled.value.promptIdentity,
+  });
+  if (!instrumentResult.ok) {
+    return failure(fromValidation("gate", "$.instrument", instrumentResult.issues));
+  }
+  const instrument = instrumentResult.value;
+
   if (input.signal.aborted) {
     return failure([
       {
@@ -364,18 +402,18 @@ async function run(input: CompileRubricInput): Promise<CompileRubricResult> {
     return failure(parsed.issues);
   }
 
-  const gated = gateProposals({
+  const gateInput: GateInput = {
     rubricId: input.rubricId,
     contract,
     contractIdentity: contractId.identity,
     proposals: parsed.value.proposals,
     unsupported: parsed.value.unsupported,
-  });
+  };
+  const gated = gateProposals(gateInput);
   if (!gated.ok) {
     return failure(gated.issues);
   }
 
-  const instrument = { ...input.instrument, promptIdentity: compiled.value.promptIdentity };
   const binding: RubricBinding = {
     contract,
     contextIdentity: input.contextIdentity,
@@ -386,12 +424,12 @@ async function run(input: CompileRubricInput): Promise<CompileRubricResult> {
   if (!identity.ok) {
     return failure(fromValidation("gate", "$", identity.issues));
   }
-  const compiledRubric: CompiledRubric = {
+  const compiledRubric: CompiledRubric = deepFreeze({
     rubric: gated.rubric,
     report: gated.report,
     rubricIdentity: identity.identity,
     binding,
-  };
+  });
   compiledResults.add(compiledRubric);
   return { ok: true, value: compiledRubric };
 }
@@ -405,6 +443,7 @@ function readOutput(
   const report = (path: string, code: string, message: string): void => {
     issues.push({ category: "output", path, code, message });
   };
+  // Array.from visits holes as undefined, so a hole is reported rather than skipped.
   const readList = (raw: unknown, path: string, allowEmpty = false): string[] | undefined => {
     if (!Array.isArray(raw)) {
       report(path, "not_array", "must be an array");
@@ -412,7 +451,7 @@ function readOutput(
     }
     const out: string[] = [];
     let ok = true;
-    raw.forEach((entry, index) => {
+    Array.from(raw).forEach((entry, index) => {
       if (!isNonEmpty(entry)) {
         report(`${path}[${index}]`, "invalid_id", "must be a non-empty string");
         ok = false;
@@ -445,7 +484,7 @@ function readOutput(
     if (!Array.isArray(rawProposals)) {
       report("$.proposals", "not_array", "must be an array");
     } else {
-      rawProposals.forEach((raw, index) => {
+      Array.from(rawProposals).forEach((raw, index) => {
         const path = `$.proposals[${index}]`;
         if (!isRecord(raw)) {
           report(path, "not_object", "proposal must be an object");
@@ -490,7 +529,7 @@ function readOutput(
     if (!Array.isArray(rawUnsupported)) {
       report("$.unsupported", "not_array", "must be an array");
     } else {
-      rawUnsupported.forEach((raw, index) => {
+      Array.from(rawUnsupported).forEach((raw, index) => {
         const path = `$.unsupported[${index}]`;
         if (!isRecord(raw)) {
           report(path, "not_object", "entry must be an object");
@@ -521,17 +560,6 @@ function readOutput(
     report("$", "unreadable", `model output could not be read: ${safeMessage(error)}`);
     return { ok: false, issues };
   }
-}
-
-interface GateInput {
-  readonly rubricId: string;
-  readonly contract: {
-    readonly taskClass: string;
-    readonly acceptance: readonly { readonly id: string }[];
-  };
-  readonly contractIdentity: Identity;
-  readonly proposals: readonly Proposal[];
-  readonly unsupported: readonly GapEntry[];
 }
 
 type GateResult =
@@ -664,6 +692,8 @@ function gateProposals(input: GateInput): GateResult {
       }
       continue;
     }
+    // The survivor takes over the acceptance ids of the criteria merged into it. It must select
+    // evidence for each of them, so its own evidence list is checked against the union.
     const covers: string[] = [];
     for (const item of all) {
       for (const id of item.covers) {
@@ -672,7 +702,6 @@ function gateProposals(input: GateInput): GateResult {
         }
       }
     }
-    // Every acceptance an entry covers needs its own evidence selector on that entry.
     const ownEvidence = new Set(
       group.survivor.criterion.evidence.map((selector) => selector.evidenceId),
     );
@@ -693,9 +722,10 @@ function gateProposals(input: GateInput): GateResult {
     });
   }
 
-  // Undeclared conflict, as #41 defines it: two kept groups cover the same acceptance ids
-  // with the same evidence selectors (id and role). Neither is kept; the report says why.
-  // Partial overlap is not a conflict; a second primary owner of one evidence is a gate failure.
+  // Undeclared conflict, as #41 defines it: two kept groups cover the same acceptance ids with
+  // the same evidence selectors (id and role). Both are excluded and the report says why.
+  // Identical duplicates fall under the same rule; they are reported, never merged silently.
+  // Partial overlap is not a conflict. A second primary owner of one evidence is a gate failure.
   const signature = (item: {
     readonly covers: readonly string[];
     readonly survivor: Proposal;
@@ -813,7 +843,8 @@ function gateProposals(input: GateInput): GateResult {
       });
     }
   }
-  const merged = kept
+  // Only accepted survivors appear as merges: a conflicted survivor is excluded, not merged.
+  const merged = accepted
     .filter((item) => item.members.length > 0)
     .map((item) => ({
       criterionId: item.id,
@@ -854,6 +885,16 @@ function gateProposals(input: GateInput): GateResult {
     return { ok: false, issues: fromValidation("gate", "$.report", reportCheck.issues) };
   }
   return { ok: true, rubric, report };
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const key of Object.keys(value)) {
+      deepFreeze((value as Record<string, unknown>)[key]);
+    }
+  }
+  return value;
 }
 
 function failure(issues: readonly CompileIssue[]): {
