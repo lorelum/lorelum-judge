@@ -52,7 +52,7 @@
       "required": ["acceptanceId", "reason"],
       "properties": {
         "acceptanceId": { "type": "string", "minLength": 1 },
-        "reason": { "type": "string", "minLength": 1 }
+        "reason": { "type": "string", "minLength": 1, "pattern": "\\S" }
       }
     }
   }

@@ -84,8 +84,10 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
   `criterion`, the acceptance ids it `covers`, the task classes it `appliesTo` (or `*`
   alone), and a `role` of `decisive` or `advisory`. `role` is a declaration; it has no
   gate meaning until #9.
-- A `proposal` may have incomplete anchors. A `frozen` set must pass every criterion rule.
-  A mandatory criterion needs a source in both states.
+- A `proposal` may omit anchors but not contradict itself: anchors must be verdicts the kind
+  allows and must not repeat, and evidence ids must not repeat within a criterion. A
+  `frozen` set must also pass every criterion rule, including one primary owner per
+  evidence id. A mandatory criterion needs a source in both states.
 - `validateRubricAgainstContract(rubric, contract)` requires the rubric's
   `contractIdentity` to match, every covered id to exist, and every entry to apply to the
   contract's task class. An entry that does not apply is an error, not skipped.
@@ -93,7 +95,11 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
   `validateCompilationReport(report, rubric, contract)` requires each acceptance id in
   exactly one of `covered`, `uncovered`, `unsupported`, `covered` to list exactly the
   covering criteria, and `merged` to name a criterion that exists and absorbed ids that
-  no longer do.
+  no longer do. A survivor has one merged record, and an absorbed id goes to one survivor.
+  A gap's `reason` must contain a non-whitespace character.
+- Input is copied once (own properties, getters read once) before it is validated and
+  hashed, so inherited fields and stateful getters cannot make the validated data differ
+  from the hashed data.
 - `rubricIdentity(rubric, { contract, contextIdentity, instrument, policyIdentity })`
   changes with the rubric, the contract, the context, the instrument (model, decoding,
   prompt, runtime, repetitions), or the policy. Entry order does not matter.

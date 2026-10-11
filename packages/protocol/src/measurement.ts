@@ -13,6 +13,7 @@ import definitionSchema from "./schemas/measurement-definition.schema.json" with
 import runSchema from "./schemas/measurement-run.schema.json" with { type: "json" };
 import {
   compileSchema,
+  failed,
   guarded,
   schemaIssues,
   type ValidationIssue,
@@ -36,10 +37,6 @@ const checkInstrument = compileSchema<InstrumentProfile>(instrumentSchema);
 const checkGatePolicy = compileSchema<GatePolicy>(gatePolicySchema);
 const checkCalibration = compileSchema<CalibrationArtifact>(calibrationSchema);
 const checkRun = compileSchema<MeasurementRun>(runSchema);
-
-function failed<T>(issue: ValidationIssue): ValidationResult<T> {
-  return { ok: false, issues: [issue] };
-}
 
 export function validateDefinition(input: unknown): ValidationResult<MeasurementDefinition> {
   return guarded<ValidationResult<MeasurementDefinition>>(() => {

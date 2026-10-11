@@ -34,11 +34,13 @@ that carries a domain-specific criterion for the wrong class is exactly the old 
 
 ### A rubric has two states
 
-`proposal` and `frozen`. A proposal may have incomplete anchors, because it is a draft
-that someone or something still has to finish. A frozen rubric MUST pass the full #6
-criterion rules, including anchors covering exactly the decisive verdicts, a source for
-every mandatory criterion, and one primary owner per evidence id. Both states require the
-schema-level rules, so a mandatory criterion without a source is rejected in both. The
+`proposal` and `frozen`. A proposal may omit anchors, because it is a draft that someone
+or something still has to finish, but it may not be contradictory: an anchor must be a
+verdict the kind allows, anchors must not repeat, evidence selectors must not repeat an id,
+and a mandatory criterion needs a source. Missing anchors are the only leniency, and
+primary-evidence ownership is checked when the rubric is frozen. A frozen rubric MUST pass
+the full #6 criterion rules, including anchors covering exactly the decisive verdicts and
+one primary owner per evidence id. The
 transition from proposal to frozen is a validation, not a function in this change; the
 compiler that performs it is #8b.
 
@@ -87,6 +89,16 @@ runtime, and repetitions), and the policy identity. Entries are sorted by criter
 each entry's `covers` and `appliesTo` are sorted, so order does not change the identity;
 status, role, and any criterion content do. `contextIdentity` and `policyIdentity` are
 supplied by the caller and are not verified.
+
+### Input is snapshotted once
+
+Validators run on untrusted input, and `ajv` reads inherited properties while `{...value}`
+copies only own ones. Validating one view and hashing another lets a contract whose fields
+live on its prototype validate and then hash without them, so two different tasks share an
+identity. A getter that returns different data on each read has the same effect. Each public
+function therefore copies its input once with a JSON round trip (own enumerable properties,
+getters read once) and validates, hashes, and returns the copy. Input that cannot round trip,
+such as a cycle, a bigint, or a throwing `toJSON`, becomes a structured failure.
 
 ### Errors are values
 

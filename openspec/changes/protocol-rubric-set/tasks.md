@@ -36,9 +36,20 @@
 - [x] 6.2 Run `bun run validate`.
 - [x] 6.3 Run `openspec validate protocol-rubric-set --type change --strict`.
 - [x] 6.4 Import the built entrypoint in Node ESM and validate a contract, rubric, and report.
-- [ ] 6.5 Independent review in a separate context and record the findings and resolution.
+- [x] 6.5 Independent review in a separate context and record the findings and resolution.
 
 ## 7. Final Gate
 
 - [x] 7.1 Update the PR body with commands, results, deferred work, and verification evidence.
 - [x] 7.2 Confirm every acceptance criterion in #38 has evidence.
+
+## 8. Review Fixes (changes requested on the PR)
+
+- [x] 8.1 Snapshot untrusted input once in every public function; add inherited-field and stateful-getter tests.
+- [x] 8.2 Proposal keeps every anchor and evidence-selector rule except missing anchors; the dead draft call now has a job.
+- [x] 8.3 Report: one merged record per survivor, an absorbed id goes to one survivor, whitespace-only reasons rejected.
+- [x] 8.4 Add the missing tests (exactly one list, gap-list unknown ids, appliesTo and rubric id in the identity, wildcard contract) and mutation-check them.
+- [x] 8.5 Report a duplicate criterion id once in the frozen state.
+- [x] 8.6 Replace the three local `failed` helpers with the shared one.
+- [x] 8.7 Correct the dist-smoke requirement to the existing import check; keep the behavioural run as PR evidence.
+- [x] 8.8 Record the independent review (bbf7b3f) and its resolution in the PR.

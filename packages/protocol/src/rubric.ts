@@ -15,6 +15,7 @@ import {
   guarded,
   prefixIssues,
   schemaIssues,
+  snapshot,
   type ValidationIssue,
   type ValidationResult,
 } from "./validation.js";
@@ -38,7 +39,8 @@ export function validateRubricSet(input: unknown): ValidationResult<RubricSet> {
   return guarded<ValidationResult<RubricSet>>(() => checkRubricShape(input), failed);
 }
 
-function checkRubricShape(input: unknown): ValidationResult<RubricSet> {
+function checkRubricShape(raw: unknown): ValidationResult<RubricSet> {
+  const input = snapshot(raw);
   if (!checkRubric(input)) {
     return { ok: false, issues: schemaIssues(checkRubric.errors) };
   }
@@ -51,7 +53,7 @@ function checkRubricShape(input: unknown): ValidationResult<RubricSet> {
     if (!draft.ok) {
       issues.push(...prefixIssues(draft.issues, `${path}.criterion`));
     }
-    if (ids.has(entry.criterion.id)) {
+    if (ids.has(entry.criterion.id) && input.status === "proposal") {
       issues.push({
         path: `${path}.criterion.id`,
         code: "duplicate_criterion",
@@ -101,10 +103,9 @@ export function validateRubricAgainstContract(
   );
 }
 
-function checkRubricAgainst(
-  rubricInput: unknown,
-  contractInput: unknown,
-): ValidationResult<RubricSet> {
+function checkRubricAgainst(rubricRaw: unknown, contractRaw: unknown): ValidationResult<RubricSet> {
+  const rubricInput = snapshot(rubricRaw);
+  const contractInput = snapshot(contractRaw);
   const contract = validateTaskContract(contractInput);
   if (!contract.ok) {
     return { ok: false, issues: prefixIssues(contract.issues, "$.contract") };
@@ -166,10 +167,13 @@ export function validateCompilationReport(
 }
 
 function checkReportAgainst(
-  reportInput: unknown,
-  rubricInput: unknown,
-  contractInput: unknown,
+  reportRaw: unknown,
+  rubricRaw: unknown,
+  contractRaw: unknown,
 ): ValidationResult<CompilationReport> {
+  const reportInput = snapshot(reportRaw);
+  const rubricInput = snapshot(rubricRaw);
+  const contractInput = snapshot(contractRaw);
   const rubric = validateRubricAgainstContract(rubricInput, contractInput);
   if (!rubric.ok) {
     return { ok: false, issues: prefixIssues(rubric.issues, "$.rubric") };
@@ -271,8 +275,17 @@ function checkReportAgainst(
   }
 
   const present = new Set(rubric.value.entries.map((entry) => entry.criterion.id));
+  const survivors = new Set<string>();
+  const absorbedBy = new Map<string, string>();
   for (const [index, merge] of report.merged.entries()) {
     const path = `$.merged[${index}]`;
+    if (survivors.has(merge.criterionId)) {
+      mismatch(
+        `${path}.criterionId`,
+        `criterion "${merge.criterionId}" has more than one merged record`,
+      );
+    }
+    survivors.add(merge.criterionId);
     if (!present.has(merge.criterionId)) {
       mismatch(
         `${path}.criterionId`,
@@ -280,6 +293,14 @@ function checkReportAgainst(
       );
     }
     for (const [fromIndex, absorbed] of merge.mergedFrom.entries()) {
+      const earlier = absorbedBy.get(absorbed);
+      if (earlier !== undefined && earlier !== merge.criterionId) {
+        mismatch(
+          `${path}.mergedFrom[${fromIndex}]`,
+          `"${absorbed}" was merged into both "${earlier}" and "${merge.criterionId}"`,
+        );
+      }
+      absorbedBy.set(absorbed, merge.criterionId);
       if (present.has(absorbed)) {
         mismatch(
           `${path}.mergedFrom[${fromIndex}]`,
@@ -314,7 +335,9 @@ export function rubricIdentity(rubricInput: unknown, binding: unknown): Identity
   return guarded<IdentityOutcome>(() => identifyRubric(rubricInput, binding), failed);
 }
 
-function identifyRubric(rubricInput: unknown, bindingInput: unknown): IdentityOutcome {
+function identifyRubric(rubricRaw: unknown, bindingRaw: unknown): IdentityOutcome {
+  const rubricInput = snapshot(rubricRaw);
+  const bindingInput = snapshot(bindingRaw);
   if (typeof bindingInput !== "object" || bindingInput === null) {
     return failed({ path: "$.binding", code: "schema", message: "binding must be an object" });
   }

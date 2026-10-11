@@ -4,6 +4,7 @@ import {
   rubricIdentity,
   taskContractIdentity,
   validateCompilationReport,
+  validateCriterionDraft,
   validateRubricAgainstContract,
   validateRubricSet,
   validateTaskContract,
@@ -636,5 +637,262 @@ describe("hostile input", () => {
       expect(outcome.ok).toBe(false);
       expect((outcome.issues ?? []).some((issue) => issue.message.includes("boom"))).toBe(true);
     }
+  });
+});
+
+describe("input is read once into a snapshot", () => {
+  test("a contract that inherits its fields is rejected, not hashed without them", () => {
+    const inherited = (taskClass: string, text: string) =>
+      Object.create({ ...contract(), taskClass, text });
+    const one = taskContractIdentity(inherited("cli", "one"));
+    const two = taskContractIdentity(inherited("web", "two"));
+    expect(one.ok).toBe(false);
+    expect(two.ok).toBe(false);
+  });
+
+  test("a getter is read exactly once, and the identity covers what was read", () => {
+    let reads = 0;
+    const stateful = {
+      ...contract(),
+      get text(): string {
+        reads += 1;
+        return reads === 1 ? "first" : "later";
+      },
+    };
+    const identity = taskContractIdentity(stateful);
+    expect(reads).toBe(1);
+    expect(identity.ok).toBe(true);
+    expect(identity.ok ? identity.identity : "").toBe(contractId(contract({ text: "first" })));
+  });
+
+  test("a rubric is validated against the same contract that is hashed", () => {
+    let reads = 0;
+    const flipping = {
+      get contract(): unknown {
+        reads += 1;
+        return reads === 1 ? contract() : contract({ id: "other" });
+      },
+      contextIdentity: hex("2"),
+      instrument: instrument(),
+      policyIdentity: hex("3"),
+    };
+    const result = rubricIdentity(rubric(goodEntries()), flipping);
+    // The contract is read at most once, so a flip cannot bind the identity to a
+    // contract the rubric was not validated against.
+    expect(reads).toBeLessThanOrEqual(1);
+    if (result.ok) {
+      const direct = rubricIdentity(rubric(goodEntries()), binding());
+      expect(direct.ok ? direct.identity : "").toBe(result.identity);
+    }
+  });
+
+  test.each([
+    [
+      "a circular reference",
+      () => {
+        const loop: Record<string, unknown> = { ...contract() };
+        loop.self = loop;
+        return loop;
+      },
+    ],
+    ["a bigint field", () => ({ ...contract(), count: 1n })],
+    [
+      "a toJSON that throws",
+      () => ({
+        ...contract(),
+        toJSON(): never {
+          throw new Error("boom");
+        },
+      }),
+    ],
+  ])("%s is a structured failure", (_name, build) => {
+    const result = validateTaskContract(build());
+    expect(result.ok).toBe(false);
+    expect(codes(result)).toEqual(["schema"]);
+  });
+});
+
+describe("proposal rules", () => {
+  const proposal = (criterionOverrides: Record<string, unknown>) =>
+    validateRubricSet(
+      rubric([entry("c1", ["a1"], { criterion: criterionOverrides })], { status: "proposal" }),
+    );
+
+  test("a proposal may leave anchors out", () => {
+    expect(proposal({ anchors: [] }).ok).toBe(true);
+  });
+
+  test("a proposal may have only some anchors", () => {
+    expect(proposal({ anchors: [{ verdict: "met", description: "ok" }] }).ok).toBe(true);
+  });
+
+  test("a proposal still rejects an anchor the kind does not allow", () => {
+    const result = proposal({ anchors: [{ verdict: "strong", description: "wrong kind" }] });
+    expect(codes(result)).toEqual(["anchor_mismatch"]);
+  });
+
+  test("a proposal still rejects a repeated anchor", () => {
+    const result = proposal({
+      anchors: [
+        { verdict: "met", description: "a" },
+        { verdict: "met", description: "b" },
+      ],
+    });
+    expect(codes(result)).toEqual(["anchor_mismatch"]);
+  });
+
+  test("a proposal still rejects a duplicate evidence selector", () => {
+    const result = proposal({
+      evidence: [
+        { evidenceId: "e1", role: "primary" },
+        { evidenceId: "e1", role: "reference" },
+      ],
+    });
+    expect(codes(result)).toEqual(["duplicate_evidence"]);
+  });
+
+  test("validateCriterionDraft is lenient only about missing anchors", () => {
+    expect(validateCriterionDraft(criterion("c1", { anchors: [] })).ok).toBe(true);
+    expect(validateCriterionDraft(criterion("c1", { source: undefined })).ok).toBe(false);
+    expect(
+      validateCriterionDraft(
+        criterion("c1", { anchors: [{ verdict: "strong", description: "x" }] }),
+      ).ok,
+    ).toBe(false);
+  });
+
+  test("a duplicate criterion id is reported once in each state", () => {
+    for (const status of ["proposal", "frozen"]) {
+      const result = validateRubricSet(
+        rubric([entry("c1", ["a1"]), entry("c1", ["a2"])], { status }),
+      );
+      expect(codes(result).filter((code) => code === "duplicate_criterion")).toHaveLength(1);
+    }
+  });
+});
+
+describe("report: exactly one list, and merged coherence", () => {
+  const check = (r: Record<string, unknown>, entries = goodEntries()) =>
+    validateCompilationReport(r, rubric(entries), contract());
+  const onlyA1 = [entry("c1", ["a1"])];
+  const covered1 = { acceptanceId: "a1", criterionIds: ["c1"] };
+
+  test("an id covered twice is rejected", () => {
+    const result = check(report({ covered: [covered1, covered1] }), onlyA1);
+    expect(codes(result)).toContain("report_mismatch");
+  });
+
+  test("an id in uncovered and unsupported is rejected", () => {
+    const r = report({
+      covered: [covered1],
+      uncovered: [{ acceptanceId: "a2", reason: "x" }],
+      unsupported: [{ acceptanceId: "a2", reason: "y" }],
+    });
+    expect(codes(check(r, onlyA1))).toEqual(["report_mismatch"]);
+  });
+
+  test("an id listed twice in uncovered is rejected", () => {
+    const r = report({
+      covered: [covered1],
+      uncovered: [
+        { acceptanceId: "a2", reason: "x" },
+        { acceptanceId: "a2", reason: "y" },
+      ],
+    });
+    expect(codes(check(r, onlyA1))).toEqual(["report_mismatch"]);
+  });
+
+  test.each(["uncovered", "unsupported"])("an unknown id in %s is rejected", (list) => {
+    const r = report({
+      covered: [covered1],
+      uncovered: [{ acceptanceId: "a2", reason: "x" }],
+      [list]: [{ acceptanceId: "zz", reason: "y" }],
+    });
+    expect(codes(check(r, onlyA1))).toContain("unknown_acceptance");
+  });
+
+  test("covered naming a criterion that is not in the rubric is rejected", () => {
+    const r = report({
+      covered: [
+        { acceptanceId: "a1", criterionIds: ["c1"] },
+        { acceptanceId: "a2", criterionIds: ["nope"] },
+      ],
+    });
+    expect(codes(check(r))).toEqual(["report_mismatch"]);
+  });
+
+  test("a whitespace-only reason is rejected", () => {
+    const r = report({
+      covered: [covered1],
+      uncovered: [{ acceptanceId: "a2", reason: "   " }],
+    });
+    expect(check(r, onlyA1).ok).toBe(false);
+  });
+
+  test("a survivor with two merged records is rejected", () => {
+    const r = report({
+      merged: [
+        { criterionId: "c1", mergedFrom: ["c7"] },
+        { criterionId: "c1", mergedFrom: ["c8"] },
+      ],
+    });
+    expect(codes(check(r))).toEqual(["report_mismatch"]);
+  });
+
+  test("an absorbed id merged into two survivors is rejected", () => {
+    const r = report({
+      merged: [
+        { criterionId: "c1", mergedFrom: ["c7"] },
+        { criterionId: "c2", mergedFrom: ["c7"] },
+      ],
+    });
+    expect(codes(check(r))).toEqual(["report_mismatch"]);
+  });
+
+  test("two survivors absorbing different ids is accepted", () => {
+    const r = report({
+      merged: [
+        { criterionId: "c1", mergedFrom: ["c7"] },
+        { criterionId: "c2", mergedFrom: ["c8"] },
+      ],
+    });
+    expect(check(r).ok).toBe(true);
+  });
+});
+
+describe("rubric identity: remaining fields", () => {
+  const id = (r: Record<string, unknown>): string => {
+    const result = rubricIdentity(r, binding());
+    if (!result.ok) {
+      throw new Error(`expected an identity: ${JSON.stringify(result.issues)}`);
+    }
+    return result.identity;
+  };
+  const base = id(rubric(goodEntries()));
+
+  test("changes with an entry's appliesTo content", () => {
+    const changed = [entry("c1", ["a1"], { appliesTo: ["cli", "web"] }), entry("c2", ["a2"])];
+    expect(id(rubric(changed))).not.toBe(base);
+  });
+
+  test("changes with the rubric id", () => {
+    expect(id(rubric(goodEntries(), { id: "r2" }))).not.toBe(base);
+  });
+});
+
+describe("applicability edge cases", () => {
+  test("a contract class of * is rejected, so no rubric can be checked against it", () => {
+    const wildcardContract = contract({ taskClass: "*" });
+    const r = rubric([entry("c1", ["a1"], { appliesTo: ["*"] })], {
+      contractIdentity: hex("a"),
+    });
+    expect(validateRubricAgainstContract(r, wildcardContract).ok).toBe(false);
+  });
+
+  test("class names are matched exactly, including case", () => {
+    const upper = entry("c1", ["a1"], { appliesTo: ["CLI"] });
+    expect(codes(validateRubricAgainstContract(rubric([upper]), contract()))).toEqual([
+      "not_applicable",
+    ]);
   });
 });

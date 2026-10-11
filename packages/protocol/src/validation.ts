@@ -53,6 +53,19 @@ export function prefixIssues(
   return issues.map((issue) => ({ ...issue, path: `${prefix}${issue.path.slice(1)}` }));
 }
 
+/**
+ * Reads untrusted input once into plain data: own enumerable properties only, getters
+ * read exactly once. Everything after this works on the copy, so validation and hashing
+ * see the same data and inherited properties cannot be validated but never hashed.
+ * Throws if the input cannot be read; callers run it inside `guarded`.
+ */
+export function snapshot(input: unknown): unknown {
+  if (typeof input === "object" && input !== null) {
+    return JSON.parse(JSON.stringify(input));
+  }
+  return input;
+}
+
 export type ValidationResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly issues: readonly ValidationIssue[] };

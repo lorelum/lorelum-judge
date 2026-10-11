@@ -8,6 +8,7 @@ import type { IdentityOutcome } from "./measurement.js";
 import evidenceBundleSchema from "./schemas/evidence-bundle.schema.json" with { type: "json" };
 import {
   compileSchema,
+  failed,
   guarded,
   schemaIssues,
   type ValidationIssue,
@@ -17,15 +18,6 @@ import {
 export type { EvidenceBundle, EvidenceItem };
 
 const checkBundle = compileSchema<EvidenceBundle>(evidenceBundleSchema);
-interface Failure {
-  readonly ok: false;
-  readonly issues: readonly ValidationIssue[];
-}
-
-function failed(issue: ValidationIssue): Failure {
-  return { ok: false, issues: [issue] };
-}
-
 function invalidItem(index: number, message: string): ValidationIssue {
   return { path: `$.items[${index}]`, code: "evidence_item_invalid", message };
 }

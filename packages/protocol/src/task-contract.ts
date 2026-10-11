@@ -8,6 +8,7 @@ import {
   failed,
   guarded,
   schemaIssues,
+  snapshot,
   type ValidationIssue,
   type ValidationResult,
 } from "./validation.js";
@@ -27,7 +28,8 @@ export function validateTaskContract(input: unknown): ValidationResult<TaskContr
   return guarded<ValidationResult<TaskContract>>(() => checkContractShape(input), failed);
 }
 
-function checkContractShape(input: unknown): ValidationResult<TaskContract> {
+function checkContractShape(raw: unknown): ValidationResult<TaskContract> {
+  const input = snapshot(raw);
   if (!checkContract(input)) {
     return { ok: false, issues: schemaIssues(checkContract.errors) };
   }

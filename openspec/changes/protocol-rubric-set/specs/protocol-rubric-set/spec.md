@@ -57,13 +57,22 @@ list, and a `role` of `decisive` or `advisory`. `appliesTo` MUST NOT repeat a va
 
 A `frozen` rubric MUST pass every rule of #6's criterion validation, including anchors that
 cover exactly the decisive verdicts and one primary owner per evidence id. A `proposal`
-MAY have incomplete anchors.
+MAY omit anchors, but every anchor it has MUST be a verdict its kind allows and MUST NOT
+repeat, evidence selectors within a criterion MUST NOT repeat an evidence id, and a
+mandatory criterion MUST have a source. A proposal MAY have two criteria that are primary
+for the same evidence id; ownership is checked when the rubric is frozen.
 
 #### Scenario: Proposal without anchors is accepted, frozen is not
 
 - **WHEN** an entry's criterion has no anchors
 - **THEN** the rubric validates as `proposal` and fails as `frozen` with code
   `anchor_mismatch`
+
+#### Scenario: Proposal with a contradictory anchor is rejected
+
+- **WHEN** a proposal's `contract` criterion has an anchor for `strong`, or two anchors for
+  `met`
+- **THEN** validation fails with code `anchor_mismatch`
 
 #### Scenario: Frozen rubric with two primary owners is rejected
 
@@ -106,8 +115,10 @@ acceptance id of the contract appears in exactly one of `covered`, `uncovered`, 
 `unsupported`; an id with covering entries is in `covered` and lists exactly those
 criterion ids; an id with none is in `uncovered` or `unsupported` with a non-empty
 `reason`; and each `merged` record names a `criterionId` present in the rubric and
-`mergedFrom` ids absent from it. A report whose `contractIdentity` differs from the
-contract's MUST fail with `identity_mismatch`.
+`mergedFrom` ids absent from it. A criterion id MUST have at most one `merged` record, and
+an absorbed id MUST NOT be merged into two criteria. A `reason` MUST contain a non-whitespace
+character. A report whose `contractIdentity` differs from the contract's MUST fail with
+`identity_mismatch`.
 
 #### Scenario: Report claims coverage nothing provides
 
@@ -163,6 +174,23 @@ contract, the context identity, the instrument, or the policy identity changes.
 - **WHEN** the same entries are identified as `proposal` and as `frozen`
 - **THEN** the identities differ
 
+### Requirement: Input is read once
+
+Each public function MUST read untrusted input into a plain-data snapshot once, using own
+enumerable properties only, and MUST validate, hash, and return that snapshot. Properties
+that exist only on the prototype MUST NOT be validated yet omitted from a hash, and a getter
+MUST NOT be able to return different data to the validation and to the hash.
+
+#### Scenario: Inherited fields are rejected
+
+- **WHEN** a contract's required fields exist only on its prototype
+- **THEN** the function returns a failed result and no identity
+
+#### Scenario: A getter is read once
+
+- **WHEN** a field is a getter that returns a different value on each read
+- **THEN** the getter is read exactly once and the identity covers the value that was read
+
 ### Requirement: Validation returns values
 
 Every function in this capability MUST return a result value and MUST NOT throw for invalid
@@ -176,10 +204,16 @@ input, including input whose property access throws.
 ### Requirement: Schemas generate types and load in Node ESM
 
 The new schemas MUST be generated into TypeScript types and checked by the repository gate,
-and the built entrypoint MUST load them in Node ESM.
+and the built entrypoint MUST load in Node ESM through the existing dist check.
 
-#### Scenario: Dist smoke test
+#### Scenario: Dist import
 
-- **WHEN** the built entrypoint is imported in Node ESM and given a valid contract, rubric,
-  and report
-- **THEN** every validator succeeds
+- **WHEN** `bun run check:dist` imports the built `protocol` entrypoint in Node ESM
+- **THEN** the import succeeds
+
+#### Scenario: Behaviour from the built entrypoint
+
+- **WHEN** the built entrypoint is exercised in Node ESM with a valid contract, rubric, and
+  report during verification
+- **THEN** every validator succeeds; this is recorded as evidence in the PR, not as a
+  repository script, because the dist check is shared by every package
