@@ -228,13 +228,14 @@ model call MUST be a `model` failure.
 
 ### Requirement: Freezing re-checks the report
 
-`freezeRubric` MUST validate the report against the rubric and contract it is bound to,
-and MUST refuse a report that does not match, even if it claims completeness.
+`freezeRubric` MUST accept only a result returned by `compileRubric`, and MUST validate the
+report against the rubric and contract that result is bound to. Compiled results MUST be deep-frozen.
 
-#### Scenario: Forged complete report
+#### Scenario: Compiled result cannot be changed
 
-- **WHEN** a caller alters `uncovered` to empty for an uncovered acceptance
-- **THEN** `freezeRubric` fails with category `gate`
+- **WHEN** a caller assigns to a field of a result returned by `compileRubric`
+- **THEN** the assignment fails, because the result is deep-frozen
+- **AND** `freezeRubric` refuses any object that `compileRubric` did not return, with code `not_compiled`
 
 ### Requirement: Empty results keep their reasons
 

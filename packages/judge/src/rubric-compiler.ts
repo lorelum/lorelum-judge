@@ -243,7 +243,20 @@ function refuseFreeze(code: string, message: string): FreezeResult {
   return { ok: false, issues: [{ category: "gate", path: "$", code, message }] };
 }
 
-async function run(input: CompileRubricInput): Promise<CompileRubricResult> {
+async function run(raw: CompileRubricInput): Promise<CompileRubricResult> {
+  // Every field is read once, here. Each later check and use sees the value that was checked.
+  const input: CompileRubricInput = {
+    rubricId: raw.rubricId,
+    contract: raw.contract,
+    prompt: raw.prompt,
+    instrument: raw.instrument,
+    contextIdentity: raw.contextIdentity,
+    policyIdentity: raw.policyIdentity,
+    model: raw.model,
+    runId: raw.runId,
+    stepIndex: raw.stepIndex,
+    signal: raw.signal,
+  };
   if (!isNonEmpty(input.rubricId)) {
     return failure([
       {
@@ -320,10 +333,20 @@ async function run(input: CompileRubricInput): Promise<CompileRubricResult> {
   }
 
   // The instrument is copied and validated here, so the result never holds the caller's object.
-  const instrumentResult = validateInstrument({
-    ...input.instrument,
-    promptIdentity: compiled.value.promptIdentity,
-  });
+  let instrumentSource: unknown;
+  try {
+    instrumentSource = { ...input.instrument, promptIdentity: compiled.value.promptIdentity };
+  } catch (error) {
+    return failure([
+      {
+        category: "gate",
+        path: "$.instrument",
+        code: "unreadable",
+        message: `instrument could not be read: ${safeMessage(error)}`,
+      },
+    ]);
+  }
+  const instrumentResult = validateInstrument(instrumentSource);
   if (!instrumentResult.ok) {
     return failure(fromValidation("gate", "$.instrument", instrumentResult.issues));
   }
@@ -374,7 +397,7 @@ async function run(input: CompileRubricInput): Promise<CompileRubricResult> {
   let value: unknown;
   try {
     kind = response.kind;
-    value = response.kind === "structured" ? response.value : undefined;
+    value = kind === "structured" ? (response as { readonly value: unknown }).value : undefined;
   } catch (error) {
     return failure([
       {

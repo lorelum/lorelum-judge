@@ -383,3 +383,53 @@ describe("review round 3", () => {
     ).toBe(true);
   });
 });
+
+describe("review round 4", () => {
+  test("a context identity getter is read once, and that value is the one checked and bound", async () => {
+    const base = input(
+      modelWith(
+        structured({
+          proposals: [proposal("c1", ["a1"]), proposal("c2", ["a2"])],
+          unsupported: [],
+        }),
+      ),
+    );
+    let reads = 0;
+    const flipping = { ...base };
+    Object.defineProperty(flipping, "contextIdentity", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return reads === 1 ? ID : "bogus";
+      },
+    });
+    const result = await compileRubric(flipping as CompileRubricInput);
+    expect(reads).toBe(1);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.binding.contextIdentity).toBe(ID);
+  });
+
+  test("an instrument whose field throws is reported at the instrument path", async () => {
+    const base = input(
+      modelWith(
+        structured({
+          proposals: [proposal("c1", ["a1"]), proposal("c2", ["a2"])],
+          unsupported: [],
+        }),
+      ),
+    );
+    const broken: Record<string, unknown> = { ...base.instrument };
+    Object.defineProperty(broken, "repetitions", {
+      enumerable: true,
+      get() {
+        throw new Error("boom");
+      },
+    });
+    const result = await compileRubric({ ...base, instrument: broken } as CompileRubricInput);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({ category: "gate", path: "$.instrument", code: "unreadable" }),
+    );
+  });
+});
