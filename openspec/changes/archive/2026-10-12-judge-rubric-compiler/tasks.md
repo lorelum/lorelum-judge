@@ -35,4 +35,4 @@
 - [x] 5.1 Run `bun run validate` (563 pass, Node ESM load OK) and mutation checks.
 - [x] 5.2 Update `packages/judge/README.md`; record repo context as deferred.
 - [x] 5.3 Independent review at the final SHA (67ede08: APPROVE, 1 low finding recorded in PR); record findings in the PR.
-- [ ] 5.4 Archive the change after merge.
+- [x] 5.4 Archive the change after merge (PR #45 merged at 7b50d1d; archived in follow-up).
