@@ -1,7 +1,7 @@
 # judge-rubric-compiler Specification
 
 ## Purpose
-TBD - created by archiving change judge-rubric-compiler. Update Purpose after archive.
+Compile a task contract's acceptance items into a deterministic, frozen rubric. The compiler renders the contract as evidence in a model prompt, validates the model's proposals with a deterministic gate, and returns a report of covered, uncovered, merged, and excluded criteria.
 
 ## Requirements
 
