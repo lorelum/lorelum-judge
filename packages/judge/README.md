@@ -39,5 +39,44 @@ Behavior:
 - Text with unpaired surrogates is rejected with the field's path, not canonicalized.
 - `compilePrompt` never throws. Failures are `{ ok: false, issues }`.
 
-Not here: calibration and gate semantics (#9), rubric authoring (#8), and any provider
-call.
+Not here: calibration and gate semantics (#9), and any provider call. The model call that
+uses this compiler is in the rubric compiler, through a caller-supplied `ModelPort`.
+
+## Rubric compiler
+
+`compileRubric({ rubricId, contract, prompt, instrument, contextIdentity, policyIdentity, model, runId, stepIndex, signal })`
+turns a task contract into a proposal `RubricSet` and a `CompilationReport`.
+
+- Acceptance items render as evidence with their ids, through `compilePrompt`. The
+  compiler appends its own output instruction to the caller's system text; that text is
+  part of the prompt identity.
+- One `ModelPort.generate` call per contract. The response must be `structured`.
+  `runId`, `stepIndex`, and `signal` come from the caller.
+- Model output is untrusted. Every criterion goes through `validateCriterionDraft`; any
+  failure fails the whole compilation. Nothing is repaired or dropped.
+- The gate is deterministic: an unknown `covers`, `mergedFrom`, or evidence id fails the
+  compilation; each covered acceptance needs its own evidence selector; one primary owner
+  per evidence; a mandatory criterion needs a user, policy, or contract source and cannot
+  be merged into a non-mandatory one; applicability is by `appliesTo` and task class;
+  merges are only the declared `mergedFrom`, and the absorbed criteria's content is discarded.
+  An undeclared conflict (same covers and same evidence, as #41 defines it) excludes both
+  criteria; partial overlap is kept.
+- Result: `{ ok: true, value }` with `rubric` (status `proposal`), `report`,
+  `rubricIdentity`, and `binding`; or `{ ok: false, issues }`. Each issue has a
+  `category`: `model`, `output`, `gate`, or `prompt`.
+- `complete` is derived from the report: nothing uncovered, unsupported, or conflicting.
+- `freezeRubric(compiled)` produces a `frozen` rubric only when the report validates
+  against the rubric and contract, is complete, and every criterion has anchors. It
+  needs no review record.
+
+The task class reaches the model as an ASCII JSON string (non-ASCII escaped as `\uXXXX`), so
+NFC normalization of the system message cannot change the class the model must echo back.
+
+Not done here: retries, splitting, output repair, repo context selection, calibration
+(#9), and migration (#10). `contextIdentity` and `policyIdentity` are required `sha256:`
+identities, bound into the rubric identity and not verified. The surviving criterion keeps
+its own role, anchors, and evidence. Criteria merged into it leave the rubric, and their
+descriptions and anchors are discarded, not recorded; the report lists only their ids. The
+survivor must select evidence for every acceptance id they cover. `freezeRubric` accepts only
+a result that `compileRubric` returned, and checks the report against the rubric and contract.
+Copies and hand-built objects are refused.
