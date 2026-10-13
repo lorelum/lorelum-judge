@@ -52,7 +52,8 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
   carries no score or timestamp.
 - `GatePolicy` and `CalibrationArtifact` are minimal shapes: a degradation
   (`diagnostic`, `shadow`, `indeterminate`) and a status plus three identities.
-  Thresholds, statistics, and confidence rules are not defined here.
+  `evaluateEnforcement` preserves this v1 identity-only compatibility behavior; new
+  enforcement must use the v2 qualification contract and Judge verifier.
 - `evaluateEnforcement({ definition, instrument, gatePolicy, calibration })`
   allows enforcement only for an `enforced` calibration whose definition,
   instrument, and gate policy identities all match. Otherwise it returns the
@@ -60,6 +61,30 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
   be read.
 - `measurementKey(definition, instrument, evidenceIdentities)` is a cache key.
   Evidence order and duplicates do not change it.
+
+## Calibration and gate records
+
+Calibration datasets, reports, and user-facing gate decisions are new v1 records.
+`GatePolicy/v2` carries acceptance rules, scope, repeated-verdict agreement, sample
+coverage, uncertainty level, error limits, and fallback mode. `CalibrationArtifact/v2`
+binds the definition, instrument, dataset, policy, report, scope, status, and validity
+interval. Their validators check cross-record identities, task-group split isolation,
+criterion verdict kinds, repetition counts, and evidence citations. TypeScript interfaces
+are generated from the versioned JSON schemas.
+
+Each group carries a stable source-task identity so variants cannot be moved between
+development and holdout by changing record IDs.
+
+Report rates require complete, count-consistent Wilson intervals (or no estimates when
+their denominator is zero). Failure counts preserve the supplied taxonomy and are limited
+to one event per task group. Gate-decision validation checks that the overall quality result
+agrees with its criterion findings and retains supplied failure categories. The protocol reports structured facts and reason codes;
+the Judge package formats them into user-readable Chinese or English. Localization does
+not change measurement identity. A v1 artifact remains readable but cannot establish v2
+calibration eligibility.
+
+Evidence-based findings retain each required evidence ID's status (`missing`, `unavailable`,
+`truncated`, `contradiction`, `unsupported`, or `available`) so mixed conditions remain visible.
 
 ## Evidence
 

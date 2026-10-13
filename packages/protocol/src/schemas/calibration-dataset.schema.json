@@ -1,0 +1,122 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:calibration-dataset:v1",
+  "title": "CalibrationDataset",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "definitionIdentity", "instrumentIdentity", "taskGroups"],
+  "properties": {
+    "schema": { "const": "lorelum.judge.calibration-dataset/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "definitionIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "instrumentIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "taskGroups": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "taskIdentity", "split", "taskClass", "evidenceShape", "cases"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "taskIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+          "split": { "enum": ["development", "holdout"] },
+          "taskClass": { "type": "string", "minLength": 1 },
+          "evidenceShape": { "type": "string", "minLength": 1 },
+          "cases": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "criterionId",
+                "expectedVerdict",
+                "caseKind",
+                "provenance",
+                "evidenceIds",
+                "observations"
+              ],
+              "properties": {
+                "id": { "type": "string", "minLength": 1 },
+                "criterionId": { "type": "string", "minLength": 1 },
+                "expectedVerdict": {
+                  "enum": [
+                    "met",
+                    "unmet",
+                    "strong",
+                    "adequate",
+                    "weak",
+                    "better",
+                    "equivalent",
+                    "worse"
+                  ]
+                },
+                "caseKind": { "enum": ["decisive", "equivalent", "anti", "partial"] },
+                "provenance": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["origin", "ref"],
+                  "properties": {
+                    "origin": { "enum": ["user", "policy", "contract", "decision"] },
+                    "ref": { "type": "string", "minLength": 1 }
+                  }
+                },
+                "evidenceIds": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": { "type": "string", "minLength": 1 }
+                },
+                "observations": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["id", "status", "run", "evidenceBundle"],
+                        "properties": {
+                          "id": { "type": "string", "minLength": 1 },
+                          "status": { "const": "completed" },
+                          "run": { "$ref": "urn:lorelum:judge:measurement-run:v1" },
+                          "evidenceBundle": { "$ref": "urn:lorelum:judge:evidence-bundle:v1" }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["id", "status", "failureCategory", "message"],
+                        "properties": {
+                          "id": { "type": "string", "minLength": 1 },
+                          "status": { "const": "failed" },
+                          "failureCategory": {
+                            "enum": [
+                              "rubric",
+                              "fixture_label",
+                              "evidence",
+                              "prompt",
+                              "provider",
+                              "threshold",
+                              "measurement_noise",
+                              "execution",
+                              "unattributed"
+                            ]
+                          },
+                          "message": { "type": "string", "minLength": 1 },
+                          "evidenceBundle": { "$ref": "urn:lorelum:judge:evidence-bundle:v1" }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
