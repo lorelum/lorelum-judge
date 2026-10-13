@@ -78,6 +78,8 @@ The decision MUST include `pass`, `fail`, or `indeterminate`, execution mode, a 
 
 A decisive unacceptable result for an optional criterion MUST show the matching anchor while remaining explicitly non-blocking. When valid evidence is present but repeated verdicts are `unknown` or `insufficient`, the finding MUST identify a Judge abstention rather than claim evidence is missing; it MUST remain indeterminate and MUST NOT request evidence as though absence were established. Evidence marked `no_evidence` MUST be distinguished from evidence marked `unavailable`, with next steps appropriate to the recorded status.
 
+When no declared task scope applies, the overall result MUST remain `indeterminate` even if every criterion is optional and its finding is advisory; the absence of scope MUST NOT be represented as successful assessment.
+
 #### Scenario: Supported failure takes precedence while other items remain visible
 
 - **WHEN** one mandatory criterion is evidence-backed unacceptable and another lacks evidence
@@ -102,6 +104,11 @@ A decisive unacceptable result for an optional criterion MUST show the matching 
 
 - **WHEN** an optional criterion has a clear verdict outside the accepted range
 - **THEN** its finding names the matching anchor, remains advisory, and says it does not block overall acceptance
+
+#### Scenario: Optional-only rubric outside configured scope is indeterminate
+
+- **WHEN** no declared scope matches the current task and every criterion is optional
+- **THEN** findings remain advisory and the overall result is indeterminate rather than pass or a validation error
 
 #### Scenario: Uncalibrated judge gives a reference result
 

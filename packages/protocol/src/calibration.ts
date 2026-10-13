@@ -661,11 +661,15 @@ export function validateGateDecision(raw: unknown): ValidationResult<GateDecisio
       }
       criterionIds.add(finding.criterionId);
     }
+    const noApplicableScope =
+      result.value.findings.length > 0 &&
+      result.value.findings.every((finding) => finding.reason === "not_applicable");
     const expectedOutcome: GateDecision["qualityOutcome"] = result.value.findings.some(
       (finding) => finding.outcome === "fail",
     )
       ? "fail"
       : result.value.findings.length === 0 ||
+          noApplicableScope ||
           result.value.findings.some((finding) => finding.outcome === "indeterminate")
         ? "indeterminate"
         : "pass";

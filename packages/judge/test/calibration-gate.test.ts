@@ -776,6 +776,29 @@ describe("calibration and gate behavior", () => {
     expect(english.ok && english.value.findings[0]?.message).toContain(
       "does not block overall acceptance",
     );
+
+    const outOfScope = evaluateGate({
+      id: "optional-out-of-scope",
+      definition: measuredDefinition,
+      instrument: measuredInstrument,
+      policy,
+      taskClass: "frontend",
+      evidenceShape: "test-results",
+      observations: Array.from({ length: 3 }, (_unused, index) => ({
+        id: `optional-out-of-scope-${index}`,
+        status: "completed" as const,
+        run: run(measuredDefinition, measuredInstrument, `optional-out-of-scope-${index}`, {
+          c1: "met",
+        }),
+        evidenceBundle: bundle(["e1"]),
+      })),
+      now: "2026-10-13T00:00:00Z",
+    });
+    expect(outOfScope.ok).toBe(true);
+    expect(outOfScope.ok && outOfScope.value.qualityOutcome).toBe("indeterminate");
+    expect(outOfScope.ok && outOfScope.value.executionMode).toBe("indeterminate");
+    expect(outOfScope.ok && outOfScope.value.findings[0]?.outcome).toBe("advisory");
+    expect(outOfScope.ok && outOfScope.value.findings[0]?.reason).toBe("not_applicable");
   });
 
   test("custom agreement threshold is part of policy identity and changes the result", () => {
