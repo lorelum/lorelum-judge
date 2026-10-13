@@ -2,119 +2,100 @@
 
 ## Purpose
 
-Define evidence-backed calibration and gate decisions that callers can explain to users without conflating a quality failure with missing evidence or an unreliable judge.
+Calibrate Judge against known outcomes and return understandable gate decisions without mistaking missing evidence or judge failures for poor quality.
 
 ## ADDED Requirements
 
-### Requirement: Gate policy declares category coverage and error limits
+### Requirement: Calibration cases preserve labels, evidence, repetitions, and task grouping
 
-A calibration policy MUST declare accepted decisive verdicts for each in-scope criterion, required calibration case categories and minimum independent holdout task groups per category, the confidence level, and maximum false-accept, false-reject, abstention, and disagreement rates. It MUST declare the repetition aggregation and fallback mode. A behaviorally equivalent contract case MUST use the expected contract verdict; comparison `equivalent` MUST NOT be required for contract or quality criteria. Case category and expected verdict are separate labels. Unsupported category/verdict combinations MUST be rejected rather than inferred.
-
-#### Scenario: Policy omits a required category
-
-- **WHEN** a policy declares a criterion scope without its required case categories or minimum counts
-- **THEN** policy validation fails and the scope cannot qualify
-
-#### Scenario: Criterion kind does not support a case verdict
-
-- **WHEN** calibration labels pair a case category with a verdict not allowed by that criterion
-- **THEN** calibration input validation fails without coercing the verdict
-
-### Requirement: Error-rate denominators are explicit
-
-For each criterion and declared task-class/evidence-shape scope, false-accept MUST be unacceptable gold task groups accepted by the gate divided by all unacceptable gold task groups; false-reject MUST be acceptable gold task groups rejected divided by all acceptable gold task groups. Abstention and repetition-disagreement denominators MUST be all task groups in scope. Reports MUST include numerators, denominators, estimates, and Wilson score intervals at the policy confidence level. A group contributes once per criterion after repetition aggregation. Development data MUST NOT contribute to qualification. Caller-provided label truth is not independently certified by the judge.
-
-#### Scenario: Empty error denominator cannot qualify
-
-- **WHEN** a declared scope has no acceptable or no unacceptable holdout groups
-- **THEN** the corresponding rate is unavailable and the scope cannot qualify
-
-#### Scenario: Development data does not change qualification metrics
-
-- **WHEN** only development task groups are added to an otherwise unchanged dataset
-- **THEN** holdout rates, confidence intervals, and qualification remain unchanged
-
-### Requirement: Calibration inputs are labeled, complete, and identity-bound
-
-A calibration dataset MUST identify its measurement definition, instrument, and declared task-class/evidence-shape scopes. Every task group MUST have one split (`development` or `holdout`), explicit label provenance, expected verdicts for the applicable criteria, evidence references, and one or more validated runs. Every run MUST match the dataset definition and instrument identities. A task group MUST NOT occur in both splits. Invalid or incomplete inputs MUST produce structured issues and MUST NOT produce a qualifying artifact.
-
-#### Scenario: Mismatched run is rejected
-
-- **WHEN** a calibration run's definition or instrument identity differs from the dataset
-- **THEN** calibration returns an identity issue and no qualification
+A calibration dataset MUST bind a measurement definition and instrument. Each task group MUST declare one split, task class, evidence shape, and one or more labeled cases. Each case MUST declare a criterion, kind-valid expected verdict, category (`decisive`, `equivalent`, `anti`, or `partial`), label provenance, evidence references, and exactly `InstrumentProfile.repetitions` observations. Each successful observation MUST contain a validated run and evidence bundle matching the bound identities; execution failures MUST be represented distinctly from verdicts. A task group MUST occur in only one split.
 
 #### Scenario: Split leakage is rejected
 
-- **WHEN** a task group appears in both development and holdout data
-- **THEN** dataset validation fails and no holdout qualification is produced
+- **WHEN** a task group or its behavior variants appear in both development and holdout
+- **THEN** dataset validation fails and no calibration qualifies
 
-#### Scenario: Missing provenance or labels is rejected
+#### Scenario: Missing label or evidence reference is rejected
 
-- **WHEN** an expected verdict has no declared provenance or omits an applicable criterion
-- **THEN** validation reports the missing field and does not infer a failure or score
+- **WHEN** a case omits its expected verdict, provenance, or a referenced evidence item
+- **THEN** validation returns a structured issue and does not infer a score
 
-### Requirement: Calibration reports task-level error, uncertainty, and stability
+#### Scenario: Repetition count must match instrument
 
-Calibration MUST report false-accept, false-reject, abstention, and repetition-disagreement rates per criterion and declared task-class/evidence-shape scope, including task-group counts and uncertainty intervals. Development data MUST NOT contribute to qualification. Repeated runs for one task group MUST be aggregated according to the frozen policy and MUST count as one independent task group. `unknown` and `insufficient` predictions MUST count as abstentions, not quality failures.
+- **WHEN** a case has fewer or more observations than the bound instrument declares
+- **THEN** calibration validation fails rather than padding or silently dropping observations
 
-#### Scenario: Repetitions do not inflate sample count
+### Requirement: Gate policy declares verdict acceptance, coverage, and thresholds
 
-- **WHEN** one task group has multiple repeated runs
-- **THEN** it contributes at most one expected/predicted outcome to each criterion's error-rate sample count, and disagreement is reported separately
+`GatePolicy/v2` MUST bind the definition and instrument, applicability scopes, acceptable decisive verdicts per criterion, required case categories and minimum independent holdout task groups, minimum decisive agreement, confidence level, maximum false-accept/false-reject/abstention/disagreement rates, and fallback mode. Mandatory contract criteria MUST accept only `met`. Equivalent contract behavior MUST be labeled with expected verdict `met`; the `equivalent` verdict MUST NOT be required for contract or quality criteria. The default policy MUST use three repetitions, `2/3` agreement, 20 groups per required case category, 95% Wilson intervals, and limits of 5%, 10%, 20%, and 20% respectively.
 
-#### Scenario: Under-covered scope is indeterminate
+#### Scenario: Invalid criterion verdict is rejected
 
-- **WHEN** holdout data lacks a required verdict category or the minimum independent task-group count for a declared scope
-- **THEN** that scope is reported as indeterminate and cannot qualify
+- **WHEN** a policy accepts a verdict not supported by the criterion kind or accepts `unmet` for a mandatory contract criterion
+- **THEN** policy validation fails
 
-#### Scenario: Uncertainty bound misses policy threshold
+#### Scenario: Changed policy invalidates qualification
 
-- **WHEN** a metric's policy-required confidence bound exceeds its predeclared maximum
-- **THEN** that scope cannot qualify even if its point estimate is within the maximum
+- **WHEN** agreement, coverage, confidence, threshold, fallback, or accepted-verdict policy changes
+- **THEN** the policy identity changes and the old calibration cannot qualify
 
-### Requirement: Qualification is derived, current, and scoped
+### Requirement: Calibration report uses held-out task groups and reports uncertainty
 
-A calibration artifact MUST bind canonical identities for the measurement definition, instrument, dataset, calibration policy, report, and declared applicability scope, and MUST declare its status and validity interval. Qualification MUST be recomputed or verified against the supplied dataset and validated runs; a claimed `enforced` status alone MUST NOT grant enforcement. Any identity or scope mismatch, insufficient coverage, unmet threshold, expired validity, or revocation MUST prevent enforcement. Existing v1 records MUST NOT be treated as v2 qualification.
+Only holdout cases MUST contribute to qualification. Variants and repetitions in the same task group MUST count as at most one independent group per criterion and scope. The report MUST provide task-group and case counts plus numerator, denominator, point estimate, and 95% Wilson interval for false accept, false reject, abstention, and disagreement. False-accept denominator is groups containing unacceptable gold cases; false-reject denominator is groups containing acceptable gold cases. Abstention and disagreement denominators are all groups in scope. Each group contributes at most one event to a metric. No denominator, insufficient category coverage, under-minimum count, or an upper bound above policy MUST make the scope ineligible.
 
-#### Scenario: Changed instrument invalidates qualification
+#### Scenario: Repetitions and variants do not inflate sample count
 
-- **WHEN** model, prompt, runtime, decoding, repetition configuration, measurement definition, or calibration policy changes
-- **THEN** the old artifact does not qualify for the changed identity
+- **WHEN** a task group has multiple behavior variants or repeated observations
+- **THEN** rates count the task group once per criterion and report cases and observations separately
 
-#### Scenario: Forged status cannot bypass eligibility
+#### Scenario: Development data cannot change qualification
 
-- **WHEN** an artifact claims `enforced` but its report or source data fails qualification checks
-- **THEN** the evaluator denies enforcement and returns the applicable reason
+- **WHEN** development cases are added or changed without changing holdout cases
+- **THEN** holdout metrics and qualification remain unchanged
 
-#### Scenario: Expired or revoked artifact degrades
+#### Scenario: Point estimate passes but interval does not
 
-- **WHEN** the artifact is expired or revoked
-- **THEN** the evaluator returns a non-enforcing decision with a reason and the configured fallback mode
+- **WHEN** a point estimate is under its limit but the Wilson upper bound exceeds it
+- **THEN** that scope remains ineligible
 
-### Requirement: Gate results separate quality from execution mode
+### Requirement: Verified calibration is required for enforcement
 
-Gate evaluation MUST return a quality outcome of `pass`, `fail`, or `indeterminate`, an execution mode, criterion-level findings, reason codes, evidence IDs, and next-action codes. A decisive unmet mandatory criterion with supporting evidence MAY produce `fail`. Missing, unavailable, truncated, contradictory, or unsupported evidence; an unknown/insufficient verdict; or unreliable repeated results MUST NOT by themselves produce a quality failure. Ineligible calibration MUST NOT block unrelated work and MUST follow the configured `diagnostic`, `shadow`, or `indeterminate` fallback.
+`CalibrationArtifact/v2` MUST bind definition, instrument, dataset, policy, report, scope, status, and validity interval. Loading MUST recompute the report from the bound source data and return a process-local verified value. A raw artifact status or report alone MUST NOT enable enforcement. The default new status is `shadow`; only an eligible, current, identity- and scope-matched verified value with explicit enforced status may be used for automatic blocking. Expired, revoked, provisional, or mismatched calibration MUST use the configured fallback. Existing v1 records MUST remain compatible but MUST NOT qualify for v2 enforcement.
 
-#### Scenario: Supported unmet criterion fails
+#### Scenario: Forged enforcement status is rejected
 
-- **WHEN** a mandatory criterion has a validated decisive unmet verdict supported by evidence
-- **THEN** the result is `fail` and identifies that criterion and its evidence
+- **WHEN** an artifact claims `enforced` but recomputation, identity, scope, or validity fails
+- **THEN** loading refuses enforcement and returns actionable reasons
 
-#### Scenario: Missing evidence is not a quality failure
+#### Scenario: New rubric remains advisory
 
-- **WHEN** a mandatory criterion cannot be assessed because its evidence is absent or unsupported
-- **THEN** the result is `indeterminate`, identifies the missing evidence, and suggests the next evidence action
+- **WHEN** the current definition identity is not covered by the calibration
+- **THEN** the result is advisory and cannot block
 
-#### Scenario: Valid calibration allows enforcement
+### Requirement: Gate result is understandable and separates quality from authority
 
-- **WHEN** calibration qualifies for the current identity and scope, is current, and all applicable gate requirements are satisfied
-- **THEN** the result may use `enforced` mode while retaining the quality outcome and its findings
+The decision MUST include `pass`, `fail`, or `indeterminate`, execution mode, a deterministic localized summary, criterion-level messages, evidence IDs, and next steps. Any mandatory supported unacceptable finding MUST make the overall quality outcome fail even if another criterion is indeterminate; all remaining indeterminate findings MUST still be shown. Without a supported failure, any mandatory indeterminate finding MUST make the overall outcome indeterminate. Only all-supported acceptable mandatory criteria may pass. Missing, unavailable, truncated, contradictory, or unsupported evidence and execution failures MUST NOT by themselves become quality failures. Optional findings MUST remain advisory. Chinese is the default display language; English MUST be supported without changing calibration identity.
 
-### Requirement: Failure attribution is not guessed
+#### Scenario: Supported failure takes precedence while other items remain visible
 
-Calibration and gate reports MUST distinguish quality errors, abstentions, identity/input validation failures, and repetition disagreement. A rubric, fixture/label, evidence, prompt, provider, threshold, or measurement-noise cause MUST be assigned only when supported by recorded diagnostics; otherwise the report MUST preserve an unattributed reason.
+- **WHEN** one mandatory criterion is evidence-backed unacceptable and another lacks evidence
+- **THEN** the overall result is fail and both the failure and pending item are shown
 
-#### Scenario: Unsupported root cause remains unattributed
+#### Scenario: Missing evidence remains indeterminate
 
-- **WHEN** a measurement is wrong but supplied diagnostics do not establish why
-- **THEN** the report records the error without inventing a provider, rubric, or fixture cause
+- **WHEN** a mandatory criterion has no supported decisive verdict and no other mandatory failure exists
+- **THEN** the result is indeterminate and names the evidence needed next
+
+#### Scenario: Uncalibrated judge gives a reference result
+
+- **WHEN** there is enough evidence to assess the work but no verified calibration applies
+- **THEN** the result remains informative in the configured advisory mode and cannot block unrelated work
+
+### Requirement: Failure causes are evidence-based
+
+Reports MUST distinguish quality errors, abstentions, execution failures, input/label failures, and disagreement. More specific rubric, fixture, evidence, prompt, provider, threshold, or noise attribution MUST be emitted only when supplied diagnostics support it; otherwise the cause remains unassigned.
+
+#### Scenario: Root cause is not inferable
+
+- **WHEN** a wrong measurement has no diagnostic evidence identifying its cause
+- **THEN** the report records an unattributed error rather than guessing

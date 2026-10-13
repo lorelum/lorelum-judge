@@ -1,26 +1,25 @@
-## 1. Contract Design and Validation
+## 1. OpenSpec
 
-- [ ] 1.1 Define v2 dataset, policy, report, artifact, and decision schemas and canonical identities.
-- [ ] 1.2 Validate this change with `openspec validate judge-calibration-gate --type change --strict`.
-- [ ] 1.3 Create the change PR with OpenSpec artifacts before source implementation.
+- [x] 1.1 Confirm issue scope and record the agreed defaults, aggregation, and v1 compatibility.
+- [x] 1.2 Validate with `openspec validate judge-calibration-gate --type change --strict`.
+- [x] 1.3 Create the OpenSpec-first PR before source implementation.
 
 ## 2. Protocol
 
-- [ ] 2.1 Add schemas, generated types, validators, and identity helpers for v2 calibration inputs and outputs.
-- [ ] 2.2 Validate task-group split isolation, label provenance, criterion coverage, and run/evidence references.
-- [ ] 2.3 Add fixtures for malformed, mismatched, incomplete, and split-leaking datasets.
+- [ ] 2.1 Add dataset, GatePolicy/v2, report, CalibrationArtifact/v2, and gate-decision schemas and generated types.
+- [ ] 2.2 Validate identity bindings, task-group split isolation, case coverage, labels, repetitions, and evidence references.
+- [ ] 2.3 Test malformed, incomplete, mismatched, duplicate, and split-leaking inputs.
 
-## 3. Judge Calibration and Gate
+## 3. Judge
 
-- [ ] 3.1 Implement per-task-group repetition aggregation and deterministic rates/uncertainty intervals.
-- [ ] 3.2 Implement holdout qualification by criterion and declared task-class/evidence-shape scope.
-- [ ] 3.3 Implement artifact validity, revocation, identity/scope matching, and qualification verification.
-- [ ] 3.4 Implement gate outcomes and findings that separate pass/fail/indeterminate from execution mode.
-- [ ] 3.5 Add deterministic tests for supported failures, missing evidence, instability, fallback, and eligible enforcement.
+- [ ] 3.1 Implement default policy and task-group repetition aggregation.
+- [ ] 3.2 Compute per-scope rates and Wilson 95% intervals; qualify holdout scopes only.
+- [ ] 3.3 Recompute reports while loading calibration and reject forged, stale, or out-of-scope status.
+- [ ] 3.4 Evaluate pass/fail/indeterminate with evidence-backed findings and deterministic localized summaries.
+- [ ] 3.5 Test defaults, custom agreement, error-bound failures, fallbacks, mandatory failure precedence, and missing evidence.
 
-## 4. Documentation and Verification
+## 4. Delivery
 
-- [ ] 4.1 Document consumer-visible result meaning and v1/v2 compatibility in package READMEs.
-- [ ] 4.2 Run `bun run validate` and record exact results.
-- [ ] 4.3 Review the final diff for contract scope, dependency direction, and ungrounded failure attribution.
-- [ ] 4.4 Complete an independent review against a fixed commit SHA and record findings.
+- [ ] 4.1 Document result meanings, policy defaults, and v1/v2 compatibility.
+- [ ] 4.2 Run strict OpenSpec validation and `bun run validate`; record exact results.
+- [ ] 4.3 Review scope and dependencies; independently review a fixed commit SHA and record findings.
