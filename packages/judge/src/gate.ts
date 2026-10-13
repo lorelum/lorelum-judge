@@ -243,6 +243,8 @@ function nextStep(
   evidenceStatuses: readonly GateEvidenceStatusEntry[],
   locale: GateLocale,
 ): string {
+  const allRequiredEvidenceAvailable =
+    evidenceStatuses.length > 0 && evidenceStatuses.every((entry) => entry.status === "available");
   const evidenceAction = evidenceRemediation(evidenceStatuses, locale);
   if (evidenceAction !== undefined) return evidenceAction;
   const distinctCategories = new Set(categories);
@@ -260,7 +262,10 @@ function nextStep(
       return "根据列出的失败类别复核对应的结果或输入，再重新评审。";
     if (reason === "abstention")
       return "复核本次判断及其依据；必要时增加独立评审或补充针对性材料。这不表示质量不合格。";
-    if (reason === "unsupported_evidence") return "补充可读取且能支持判断的证据后重新评审。";
+    if (reason === "unsupported_evidence")
+      return allRequiredEvidenceAvailable
+        ? "现有证据可读取；请核对评审引用是否对应本项要求，修正引用后重新评审。"
+        : "核实无法支持判断的证据内容后重新评审。";
     if (reason === "unavailable_evidence")
       return "检查证据来源、访问权限或采集过程，确认材料可读取后重新评审。";
     if (reason === "missing_evidence") return "补充或核实尚未提供的证据后重新评审。";
@@ -283,7 +288,9 @@ function nextStep(
   if (reason === "abstention")
     return "Review the judgment and its basis; collect another independent review or targeted evidence if needed. This is not a quality failure.";
   if (reason === "unsupported_evidence")
-    return "Provide readable evidence that supports the judgment, then rerun.";
+    return allRequiredEvidenceAvailable
+      ? "The evidence is readable; check that the review cites material relevant to this requirement, correct the citation, then rerun."
+      : "Review the evidence that does not support the judgment, then rerun.";
   if (reason === "unavailable_evidence")
     return "Check access to the evidence source or its collection, restore availability, then rerun the review.";
   if (reason === "missing_evidence")
@@ -425,8 +432,14 @@ function evaluateCriterion(
   for (const observation of observations) {
     if (observation.failure !== undefined) {
       failureCategories.add(observation.failure);
-      if (observation.failure === "evidence") evidenceFailure = true;
-      else if (observation.failure === "provider" || observation.failure === "execution")
+      if (observation.failure === "evidence") {
+        evidenceFailure = true;
+        if (observation.evidenceBundle !== undefined) {
+          for (const entry of requiredEvidenceStatuses(criterion, observation.evidenceBundle)) {
+            evidenceStatusEntries.set(`${entry.evidenceId}\0${entry.status}`, entry);
+          }
+        }
+      } else if (observation.failure === "provider" || observation.failure === "execution")
         executionFailure = true;
       else if (observation.failure === "unattributed") unattributedFailure = true;
       else measurementFailure = true;
@@ -685,8 +698,15 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
       if (!run.ok || !bundle.ok) {
         const evidenceFailure =
           !bundle.ok ||
-          (!run.ok && run.issues.some((issue) => issue.code === "verdict_without_evidence"));
-        return { failure: evidenceFailure ? "evidence" : "unattributed" };
+          (!run.ok &&
+            run.issues.some(
+              (issue) =>
+                issue.code === "verdict_without_evidence" || issue.code === "evidence_not_declared",
+            ));
+        return {
+          failure: evidenceFailure ? "evidence" : "unattributed",
+          ...(bundle.ok ? { evidenceBundle: bundle.value } : {}),
+        };
       }
       return { run: run.value, evidenceBundle: bundle.value };
     });

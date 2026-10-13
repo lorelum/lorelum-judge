@@ -906,6 +906,18 @@ describe("calibration and gate behavior", () => {
       "核对相互矛盾的证据",
     );
 
+    const withheldBundle = bundle(["e1"]);
+    const withheldItem = (withheldBundle.items as Array<Record<string, unknown>>)[0];
+    if (withheldItem === undefined) throw new Error("expected a withheld evidence item");
+    withheldItem.render = { state: "withheld", originalLength: 5, renderedLength: 0 };
+    const withheldDecision = makeDecision(withheldBundle, "unknown", "withheld");
+    expect(withheldDecision.ok && withheldDecision.value.findings[0]?.reason).toBe(
+      "unsupported_evidence",
+    );
+    expect(withheldDecision.ok && withheldDecision.value.findings[0]?.evidenceStatuses).toEqual([
+      { evidenceId: "e1", status: "unsupported" },
+    ]);
+
     const unavailableDecision = makeDecision(bundle(["e1"], false), "unknown", "unavailable");
     expect(unavailableDecision.ok && unavailableDecision.value.qualityOutcome).toBe(
       "indeterminate",
@@ -1178,6 +1190,46 @@ describe("calibration and gate behavior", () => {
     expect(disagreement.ok && disagreement.value.findings[0]?.message).toContain(
       "e1：当前不可读取；e2：未采集；e3：可读取",
     );
+  });
+
+  test("corrects an invalid citation when required evidence is already available", () => {
+    const measuredDefinition = definition();
+    const measuredInstrument = instrument();
+    const policy = makePolicy(measuredDefinition, measuredInstrument);
+    const evidenceBundle = bundle(["e1", "e2"]);
+    const observations = Array.from({ length: 3 }, (_unused, index) => {
+      const measuredRun = run(measuredDefinition, measuredInstrument, `bad-citation-${index}`, {
+        c1: "unmet",
+      }) as { verdicts: Array<{ evidenceIds: string[] }> };
+      const finding = measuredRun.verdicts[0];
+      if (finding === undefined) throw new Error("expected a verdict");
+      finding.evidenceIds = ["e2"];
+      return {
+        id: `bad-citation-${index}`,
+        status: "completed" as const,
+        run: measuredRun,
+        evidenceBundle,
+      };
+    });
+    const decision = evaluateGate({
+      id: "bad-citation",
+      definition: measuredDefinition,
+      instrument: measuredInstrument,
+      policy,
+      taskClass: "backend",
+      evidenceShape: "test-results",
+      observations,
+      now: "2026-10-13T00:00:00Z",
+    });
+
+    expect(decision.ok && decision.value.findings[0]?.reason).toBe("unsupported_evidence");
+    expect(decision.ok && decision.value.findings[0]?.evidenceStatuses).toEqual([
+      { evidenceId: "e1", status: "available" },
+    ]);
+    expect(decision.ok && decision.value.findings[0]?.nextStep).toContain(
+      "核对评审引用是否对应本项要求",
+    );
+    expect(decision.ok && decision.value.findings[0]?.nextStep).not.toContain("补充可读取");
   });
 
   test("rejects duplicate measurement runs and excess observations instead of replacing them", () => {
