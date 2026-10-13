@@ -8,7 +8,7 @@ Calibrate Judge against known outcomes and return understandable gate decisions 
 
 ### Requirement: Calibration cases preserve labels, evidence, repetitions, and task grouping
 
-A calibration dataset MUST bind a measurement definition and instrument. Each task group MUST declare one split, task class, evidence shape, and one or more labeled cases. Each case MUST declare a criterion, kind-valid expected verdict, category (`decisive`, `equivalent`, `anti`, or `partial`), label provenance, evidence references, and exactly `InstrumentProfile.repetitions` observations. Each successful observation MUST contain a validated run and evidence bundle matching the bound identities; execution failures MUST be represented distinctly from verdicts. A task group MUST occur in only one split.
+A calibration dataset MUST bind a measurement definition and instrument. Each task group MUST declare one split, task class, evidence shape, and one or more labeled cases. Each case MUST declare a criterion, kind-valid expected verdict, category (`decisive`, `equivalent`, `anti`, or `partial`), label provenance, evidence references, and exactly `InstrumentProfile.repetitions` observations. Each successful observation MUST contain a validated run and evidence bundle matching the bound identities; execution failures MUST be represented distinctly from verdicts and MAY retain an evidence bundle collected before failure. A task group MUST occur in only one split.
 
 #### Scenario: Split leakage is rejected
 
@@ -41,7 +41,7 @@ A calibration dataset MUST bind a measurement definition and instrument. Each ta
 
 ### Requirement: Calibration report uses held-out task groups and reports uncertainty
 
-Only holdout cases MUST contribute to qualification. Variants and repetitions in the same task group MUST count as at most one independent group per criterion and scope. The report MUST provide task-group and case counts plus numerator, denominator, point estimate, and 95% Wilson interval for false accept, false reject, abstention, and disagreement. False-accept denominator is groups containing unacceptable gold cases; false-reject denominator is groups containing acceptable gold cases. Abstention and disagreement denominators are all groups in scope. Each group contributes at most one event to a metric. No denominator, insufficient category coverage, under-minimum count, or an upper bound above policy MUST make the scope ineligible.
+Only holdout cases MUST contribute to qualification. Variants and repetitions in the same task group MUST count as at most one independent group per criterion and scope. The report MUST provide task-group and case counts plus numerator, denominator, point estimate, and a Wilson interval for false accept, false reject, abstention, and disagreement; the default confidence level is 95%. False-accept denominator is groups containing unacceptable gold cases; false-reject denominator is groups containing acceptable gold cases. Abstention and disagreement denominators are all groups in scope. Each group contributes at most one event to a metric, and each supplied failure category MUST be counted at most once per group. A zero denominator MUST have no estimate or interval; a non-zero denominator MUST have a complete count-consistent estimate and interval. No denominator, insufficient category coverage, under-minimum count, or an upper bound above policy MUST make the scope ineligible.
 
 #### Scenario: Repetitions and variants do not inflate sample count
 
@@ -74,7 +74,7 @@ Only holdout cases MUST contribute to qualification. Variants and repetitions in
 
 ### Requirement: Gate result is understandable and separates quality from authority
 
-The decision MUST include `pass`, `fail`, or `indeterminate`, execution mode, a deterministic localized summary, criterion-level messages, evidence IDs, and next steps. Any mandatory supported unacceptable finding MUST make the overall quality outcome fail even if another criterion is indeterminate; all remaining indeterminate findings MUST still be shown. Without a supported failure, any mandatory indeterminate finding MUST make the overall outcome indeterminate. Only all-supported acceptable mandatory criteria may pass. Missing, unavailable, truncated, contradictory, or unsupported evidence and execution failures MUST NOT by themselves become quality failures. Optional findings MUST remain advisory. Chinese is the default display language; English MUST be supported without changing calibration identity.
+The decision MUST include `pass`, `fail`, or `indeterminate`, execution mode, a deterministic localized summary, criterion-level messages, evidence IDs, and next steps. Any mandatory supported unacceptable finding MUST make the overall quality outcome fail even if another criterion is indeterminate; all remaining indeterminate findings MUST still be shown. Without a supported failure, any mandatory indeterminate finding MUST make the overall outcome indeterminate. Only all-supported acceptable mandatory criteria may pass. Missing, unavailable, truncated, contradictory, or unsupported evidence and execution failures MUST NOT by themselves become quality failures. Optional findings MUST remain advisory. Chinese is the default display language; English MUST be supported without changing calibration identity. A decision MUST contain at most one finding per criterion, and its validator MUST reject an overall quality outcome that conflicts with the findings.
 
 #### Scenario: Supported failure takes precedence while other items remain visible
 
@@ -93,7 +93,7 @@ The decision MUST include `pass`, `fail`, or `indeterminate`, execution mode, a 
 
 ### Requirement: Failure causes are evidence-based
 
-Reports MUST distinguish quality errors, abstentions, execution failures, input/label failures, and disagreement. More specific rubric, fixture, evidence, prompt, provider, threshold, or noise attribution MUST be emitted only when supplied diagnostics support it; otherwise the cause remains unassigned.
+Reports MUST distinguish quality errors, abstentions, execution failures, input/label failures, and disagreement. More specific rubric, fixture, evidence, prompt, provider, threshold, or noise attribution MUST be emitted only when supplied diagnostics support it; otherwise the cause remains unassigned. A gate decision MUST use `unattributed_failure` when the supplied failure category does not establish a user-actionable cause, and its message MUST NOT guess the root cause.
 
 #### Scenario: Root cause is not inferable
 

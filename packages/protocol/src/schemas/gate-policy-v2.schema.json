@@ -1,0 +1,91 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:gate-policy:v2",
+  "title": "GatePolicyV2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "definitionIdentity",
+    "instrumentIdentity",
+    "scopes",
+    "criteria",
+    "minimumAgreement",
+    "minimumGroupsPerCaseKind",
+    "confidenceLevel",
+    "maximumFalseAcceptRate",
+    "maximumFalseRejectRate",
+    "maximumAbstentionRate",
+    "maximumDisagreementRate",
+    "onUncalibrated"
+  ],
+  "properties": {
+    "schema": { "const": "lorelum.judge.gate-policy/v2" },
+    "id": { "type": "string", "minLength": 1 },
+    "definitionIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "instrumentIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "scopes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["taskClass", "evidenceShape", "criterionIds"],
+        "properties": {
+          "taskClass": { "type": "string", "minLength": 1 },
+          "evidenceShape": { "type": "string", "minLength": 1 },
+          "criterionIds": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["criterionId", "acceptedVerdicts", "requiredCaseKinds"],
+        "properties": {
+          "criterionId": { "type": "string", "minLength": 1 },
+          "acceptedVerdicts": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "met",
+                "unmet",
+                "strong",
+                "adequate",
+                "weak",
+                "better",
+                "equivalent",
+                "worse"
+              ]
+            }
+          },
+          "requiredCaseKinds": {
+            "type": "array",
+            "minItems": 3,
+            "uniqueItems": true,
+            "items": { "enum": ["decisive", "equivalent", "anti", "partial"] }
+          }
+        }
+      }
+    },
+    "minimumAgreement": { "type": "number", "exclusiveMinimum": 0.5, "maximum": 1 },
+    "minimumGroupsPerCaseKind": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "confidenceLevel": { "enum": [0.9, 0.95, 0.99] },
+    "maximumFalseAcceptRate": { "type": "number", "minimum": 0, "maximum": 1 },
+    "maximumFalseRejectRate": { "type": "number", "minimum": 0, "maximum": 1 },
+    "maximumAbstentionRate": { "type": "number", "minimum": 0, "maximum": 1 },
+    "maximumDisagreementRate": { "type": "number", "minimum": 0, "maximum": 1 },
+    "onUncalibrated": { "enum": ["diagnostic", "shadow", "indeterminate"] }
+  }
+}

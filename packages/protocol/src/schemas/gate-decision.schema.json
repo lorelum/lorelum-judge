@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:gate-decision:v1",
+  "title": "GateDecision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "definitionIdentity",
+    "instrumentIdentity",
+    "qualityOutcome",
+    "executionMode",
+    "summary",
+    "findings"
+  ],
+  "properties": {
+    "schema": { "const": "lorelum.judge.gate-decision/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "definitionIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "instrumentIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "qualityOutcome": { "enum": ["pass", "fail", "indeterminate"] },
+    "executionMode": { "enum": ["enforced", "shadow", "diagnostic", "indeterminate"] },
+    "summary": { "type": "string", "minLength": 1 },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "criterionId",
+          "criterionDescription",
+          "outcome",
+          "reason",
+          "message",
+          "evidenceIds",
+          "requiredEvidenceIds",
+          "nextStep"
+        ],
+        "properties": {
+          "criterionId": { "type": "string", "minLength": 1 },
+          "criterionDescription": { "type": "string", "minLength": 1 },
+          "outcome": { "enum": ["pass", "fail", "indeterminate", "advisory"] },
+          "reason": {
+            "enum": [
+              "acceptable",
+              "unacceptable",
+              "missing_evidence",
+              "unsupported_evidence",
+              "disagreement",
+              "execution_failure",
+              "unattributed_failure",
+              "calibration_unavailable",
+              "not_applicable"
+            ]
+          },
+          "message": { "type": "string", "minLength": 1 },
+          "evidenceIds": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "requiredEvidenceIds": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "nextStep": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

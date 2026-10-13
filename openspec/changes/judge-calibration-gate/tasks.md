@@ -6,20 +6,26 @@
 
 ## 2. Protocol
 
-- [ ] 2.1 Add dataset, GatePolicy/v2, report, CalibrationArtifact/v2, and gate-decision schemas and generated types.
-- [ ] 2.2 Validate identity bindings, task-group split isolation, case coverage, labels, repetitions, and evidence references.
-- [ ] 2.3 Test malformed, incomplete, mismatched, duplicate, and split-leaking inputs.
+- [x] 2.1 Add dataset, GatePolicy/v2, report, CalibrationArtifact/v2, and gate-decision schemas and generated types.
+- [x] 2.2 Validate identity bindings, task-group split isolation, case coverage, labels, repetitions, and evidence references.
+- [x] 2.3 Test malformed, incomplete, mismatched, duplicate, and split-leaking inputs.
 
 ## 3. Judge
 
-- [ ] 3.1 Implement default policy and task-group repetition aggregation.
-- [ ] 3.2 Compute per-scope rates and Wilson 95% intervals; qualify holdout scopes only.
-- [ ] 3.3 Recompute reports while loading calibration and reject forged, stale, or out-of-scope status.
-- [ ] 3.4 Evaluate pass/fail/indeterminate with evidence-backed findings and deterministic localized summaries.
-- [ ] 3.5 Test defaults, custom agreement, error-bound failures, fallbacks, mandatory failure precedence, and missing evidence.
+- [x] 3.1 Implement default policy and task-group repetition aggregation.
+- [x] 3.2 Compute per-scope rates and Wilson intervals; qualify holdout scopes only.
+- [x] 3.3 Recompute reports while loading calibration and reject forged, stale, or out-of-scope status.
+- [x] 3.4 Evaluate pass/fail/indeterminate with evidence-backed findings and deterministic localized summaries.
+- [x] 3.5 Test defaults, custom agreement, error-bound failures, fallbacks, mandatory failure precedence, and missing evidence.
 
 ## 4. Delivery
 
-- [ ] 4.1 Document result meanings, policy defaults, and v1/v2 compatibility.
-- [ ] 4.2 Run strict OpenSpec validation and `bun run validate`; record exact results.
+- [x] 4.1 Document result meanings, policy defaults, and v1/v2 compatibility.
+- [x] 4.2 Run strict OpenSpec validation and `bun run validate`; record exact results.
 - [ ] 4.3 Review scope and dependencies; independently review a fixed commit SHA and record findings.
+
+## Verification Record
+
+- `bun install --frozen-lockfile`: passed; no dependency or lockfile changes.
+- `openspec validate judge-calibration-gate --type change --strict`: valid.
+- `bun run validate`: passed; 601 tests, all five package builds, and Node ESM loading for all five package exports succeeded.

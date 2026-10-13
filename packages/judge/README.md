@@ -39,8 +39,8 @@ Behavior:
 - Text with unpaired surrogates is rejected with the field's path, not canonicalized.
 - `compilePrompt` never throws. Failures are `{ ok: false, issues }`.
 
-Not here: calibration and gate semantics (#9), and any provider call. The model call that
-uses this compiler is in the rubric compiler, through a caller-supplied `ModelPort`.
+This compiler does not make provider calls. The model call that uses it is in the rubric
+compiler, through a caller-supplied `ModelPort`.
 
 ## Rubric compiler
 
@@ -80,3 +80,35 @@ descriptions and anchors are discarded, not recorded; the report lists only thei
 survivor must select evidence for every acceptance id they cover. `freezeRubric` accepts only
 a result that `compileRubric` returned, and checks the report against the rubric and contract.
 Copies and hand-built objects are refused.
+
+## Calibration and gate
+
+`createDefaultGatePolicyV2` creates the published starter policy for explicit task-class
+and evidence-shape scopes. It binds the measurement definition and instrument, requires
+three observations per case, uses a 2/3 agreement threshold and 20 independent holdout
+groups per required case category, and checks 95% Wilson intervals against false-accept
+5%, false-reject 10%, abstention 20%, and disagreement 20% limits. The default helper
+requires an `InstrumentProfile` with three repetitions. These are eligibility limits, not
+a claim that a judge has achieved them.
+
+`buildCalibration` validates caller-supplied development/holdout task groups and returns a
+report plus per-scope artifacts in `shadow`. Repetitions and behavior variants count once
+per task group; unsupported verdict evidence and failed observations are reported, not
+converted into quality failures. Failure categories are counted at most once per task group
+and remain `unattributed` unless diagnostics identify a cause. Only held-out groups
+contribute to eligibility.
+
+`loadVerifiedCalibration` recomputes that report and returns a process-local verified
+value. Persisted values must be loaded again after restart. A raw artifact marked
+`enforced` is not sufficient: identities, report, scope, validity, and every eligibility
+metric must match. The caller explicitly changes a qualifying artifact to `enforced` to
+enable automatic blocking.
+
+`evaluateGate` consumes the verified value when available and returns a `GateDecision`
+with a human-readable Chinese summary by default (English is supported), criterion-level
+findings, evidence IDs, and next steps. Quality is `pass`, `fail`, or `indeterminate`;
+execution mode separately says whether the result is enforced or advisory. An evidence-
+backed mandatory failure takes precedence over other pending criteria, which remain visible.
+The protocol rejects duplicate criterion findings and a total quality result that conflicts
+with those findings. Without applicable verified calibration, an informative result is
+still returned in the policy fallback mode and cannot block.
