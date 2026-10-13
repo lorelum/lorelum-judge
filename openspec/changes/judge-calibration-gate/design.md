@@ -1,0 +1,26 @@
+# Design
+
+## Decisions
+
+1. **Keep existing v1 records stable.** Add v2 calibration and gate records rather than changing the meaning of `CalibrationArtifact/v1`, `GatePolicy/v1`, or `evaluateEnforcement`. New enforcement decisions use only the new verified qualification path; v1 artifacts do not qualify automatically.
+2. **Separate calibration from candidate judgment.** Calibration compares known expected verdicts with validated `MeasurementRun`s. Candidate gate evaluation consumes one validated run and a qualifying calibration. It returns a quality outcome (`pass`, `fail`, `indeterminate`) independently from execution mode (`enforced`, `shadow`, `diagnostic`).
+3. **Treat human-readable outcome as structured facts.** Return the outcome, criterion descriptions/anchors, reason codes, evidence IDs, and next-action codes. Do not ask a model to write the gate result; callers can render these facts in the user's language. A missing or unavailable evidence item yields `indeterminate`, never a quality failure by itself.
+4. **Make labels and scope explicit.** A dataset records label provenance, task-group ID, split, task class, evidence shape, expected per-criterion verdicts, and references to evidence and repeated runs. Each task group belongs to exactly one split. Only holdout groups qualify a policy; development groups cannot contribute to qualification metrics.
+5. **Count independent task groups, not repetitions.** For each task group and criterion, apply the frozen repetition aggregation rule once, then count one expected/predicted pair. Report repetition disagreement separately per task group. Unknown/insufficient predictions count as abstentions, not false negatives or zero scores.
+6. **Use conservative, reproducible statistics.** Report false-accept, false-reject, abstention, and repetition-disagreement point estimates per declared scope. Compute exact binomial confidence intervals from independent task-group outcomes at the policy's declared confidence level. A scope qualifies only when its required category coverage and minimum group counts are met and its predeclared upper bounds are within policy thresholds. No pooling across task class or evidence shape is implicit.
+7. **Bind the complete decision basis.** Dataset, policy, measurement definition, instrument, report, and artifact have canonical identities. Changes to any decision-bearing input invalidate prior qualification. The artifact has an explicit scope and validity interval; expired/revoked or mismatched artifacts cannot enforce. Qualification validation recomputes metrics from the supplied dataset and validated runs rather than trusting a claimed `enforced` status or report alone.
+8. **Keep failure attribution evidence-based.** Reports distinguish labeled quality errors, abstentions, input/label validation problems, and repeated-run disagreement. Provider/prompt/rubric/fixture causes are recorded only when supported by input diagnostics; otherwise use an unattributed measurement issue rather than guessing a cause.
+
+## Repetition aggregation
+
+The policy declares a minimum and maximum repetition count and the aggregation rule. For a criterion, unanimous decisive verdicts produce that verdict; any disagreement or non-decisive verdict produces `indeterminate`. Calibration measures the resulting task-group outcome and separately reports whether the raw repetitions disagreed. This avoids silently taking a majority that could hide instability.
+
+## Compatibility and package ownership
+
+`protocol` owns v2 schemas, identities, and validation. `judge` owns deterministic metric computation, qualification checks, and gate evaluation. Tests use inline deterministic fixtures; no provider or benchmark package is added. Existing v1 exports and semantics remain available, but the new qualification evaluator will not accept v1 as proof for enforcement.
+
+## Policy and metric semantics
+
+The v2 policy declares accepted decisive verdicts per criterion, required case categories and minimum independent holdout groups per category, a supported confidence level, maximum error/abstention/disagreement rates, repetition aggregation, and fallback mode. A behaviorally equivalent contract example has expected verdict `met`; `equivalent` is a comparison verdict and is not required for contract or quality criteria. Calibration labels identify case categories (`decisive`, behaviorally equivalent, anti-example, partial) separately from expected verdicts; unsupported criterion/category combinations are invalid rather than inferred.
+
+For each group and criterion, false-accept is an unacceptable gold verdict accepted by the gate divided by all unacceptable gold groups. False-reject is an acceptable gold verdict rejected divided by all acceptable gold groups. Abstention and repetition disagreement use all groups in the declared scope as denominator. Reports include numerators, denominators, estimates, and Wilson score intervals at the policy confidence level. Development records never contribute to qualification. A group contributes once per criterion after frozen repetition aggregation; unknown/insufficient is abstention, not either error. Since labels are caller-supplied, provenance is recorded but label truth remains the caller's responsibility.
