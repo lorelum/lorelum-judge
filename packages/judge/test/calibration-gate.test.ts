@@ -1126,6 +1126,40 @@ describe("calibration and gate behavior", () => {
     );
     expect(decision.ok && decision.value.findings[0]?.nextStep).toContain("补充尚未采集的证据");
     expect(decision.ok && decision.value.findings[0]?.nextStep).toContain("恢复不可读取证据的访问");
+
+    const disagreementObservations = ["met", "unmet", "unknown"].map((verdict, index) => {
+      const measuredRun = run(
+        measuredDefinition,
+        measuredInstrument,
+        `evidence-disagreement-${index}`,
+        {
+          c1: verdict as "met" | "unmet" | "unknown",
+        },
+      ) as { verdicts: Array<{ evidenceIds: string[] }> };
+      const finding = measuredRun.verdicts[0];
+      if (finding === undefined) throw new Error("expected a verdict");
+      if (verdict !== "unknown") finding.evidenceIds = ["e3"];
+      return {
+        id: `evidence-disagreement-${index}`,
+        status: "completed" as const,
+        run: measuredRun,
+        evidenceBundle,
+      };
+    });
+    const disagreement = evaluateGate({
+      id: "mixed-evidence-disagreement",
+      definition: measuredDefinition,
+      instrument: measuredInstrument,
+      policy,
+      taskClass: "backend",
+      evidenceShape: "test-results",
+      observations: disagreementObservations,
+      now: "2026-10-13T00:00:00Z",
+    });
+    expect(disagreement.ok && disagreement.value.findings[0]?.reason).toBe("disagreement");
+    expect(disagreement.ok && disagreement.value.findings[0]?.message).toContain(
+      "e1：当前不可读取；e2：未采集；e3：可读取",
+    );
   });
 
   test("rejects duplicate measurement runs and excess observations instead of replacing them", () => {

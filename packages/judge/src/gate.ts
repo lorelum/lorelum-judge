@@ -301,7 +301,7 @@ function findingMessage(
         return `${criterion.description}：${description}。这是可选建议，不会阻止整体通过。`;
       const base = `${criterion.description}：有待关注，但不是必选阻塞项。`;
       if (reason === "disagreement")
-        return `${base}${verdict === undefined ? "" : `当前多数判断：${description}。`}重复评审结论不一致。`;
+        return `${base}${verdict === undefined ? "" : `当前多数判断：${description}。`}重复评审结论不一致。${evidenceDetails.length > 0 ? `证据状态：${evidenceDetails.join("；")}。` : ""}`;
       if (failureDetails.length > 0) return `${base}评审记录：${failureDetails.join("、")}。`;
       if (
         reason === "missing_evidence" ||
@@ -314,7 +314,7 @@ function findingMessage(
       return base;
     }
     if (reason === "disagreement")
-      return `暂时无法判断“${criterion.description}”：重复评审结论不一致。${failureDetails.length > 0 ? ` 另有评审问题：${failureDetails.join("、")}。` : ""}`;
+      return `暂时无法判断“${criterion.description}”：重复评审结论不一致。${failureDetails.length > 0 ? ` 另有评审问题：${failureDetails.join("、")}。` : ""}${evidenceDetails.length > 0 ? ` 所需证据状态：${evidenceDetails.join("；")}。` : ""}`;
     if (reason === "execution_failure")
       return `暂时无法判断“${criterion.description}”：${failureDetails.length > 0 ? failureDetails.join("、") : "评审未能完整执行"}。`;
     if (
@@ -340,7 +340,7 @@ function findingMessage(
       return `${criterion.description}: ${description}. This is advisory and does not block overall acceptance.`;
     const base = `${criterion.description}: needs attention but is not a mandatory blocker.`;
     if (reason === "disagreement")
-      return `${base}${verdict === undefined ? "" : ` Current majority judgment: ${description}.`} Repeated judgments disagree.`;
+      return `${base}${verdict === undefined ? "" : ` Current majority judgment: ${description}.`} Repeated judgments disagree.${evidenceDetails.length > 0 ? ` Evidence status: ${evidenceDetails.join("; ")}.` : ""}`;
     if (failureDetails.length > 0) return `${base} Review record: ${failureDetails.join(", ")}.`;
     if (
       reason === "missing_evidence" ||
@@ -353,7 +353,7 @@ function findingMessage(
     return base;
   }
   if (reason === "disagreement")
-    return `Unable to determine ${criterion.description}: repeated judgments disagree.${failureDetails.length > 0 ? ` Other review issues: ${failureDetails.join(", ")}.` : ""}`;
+    return `Unable to determine ${criterion.description}: repeated judgments disagree.${failureDetails.length > 0 ? ` Other review issues: ${failureDetails.join(", ")}.` : ""}${evidenceDetails.length > 0 ? ` Required evidence status: ${evidenceDetails.join("; ")}.` : ""}`;
   if (reason === "execution_failure")
     return `Unable to determine ${criterion.description}: ${failureDetails.length > 0 ? failureDetails.join(", ") : "the review did not complete"}.`;
   if (
