@@ -26,6 +26,12 @@ type GateFailureCategory = Extract<
   CalibrationObservation,
   { readonly status: "failed" }
 >["failureCategory"];
+type GateEvidenceStatus = NonNullable<
+  GateDecision["findings"][number]["evidenceStatuses"]
+>[number]["status"];
+type GateEvidenceStatusEntry = NonNullable<
+  GateDecision["findings"][number]["evidenceStatuses"]
+>[number];
 
 export type GateObservation =
   | {
@@ -128,12 +134,101 @@ function describeFailureCategories(
   return [...new Set(categories)].sort().map((category) => failureLabels[locale][category]);
 }
 
+const evidenceStatusLabels: Record<GateLocale, Record<GateEvidenceStatus, string>> = {
+  "zh-CN": {
+    missing: "未采集",
+    unavailable: "当前不可读取",
+    unsupported: "内容无法支持判断",
+    available: "可读取",
+  },
+  "en-US": {
+    missing: "not collected",
+    unavailable: "currently unavailable",
+    unsupported: "does not support the judgment",
+    available: "available",
+  },
+};
+
+function describeEvidenceStatuses(
+  statuses: readonly GateEvidenceStatusEntry[],
+  locale: GateLocale,
+): string[] {
+  return statuses.map(
+    ({ evidenceId, status }) =>
+      `${evidenceId}${locale === "zh-CN" ? "：" : ": "}${evidenceStatusLabels[locale][status]}`,
+  );
+}
+
+function evidenceFindingDetails(
+  reason: GateDecision["findings"][number]["reason"],
+  statuses: readonly GateEvidenceStatusEntry[],
+  requiredEvidenceIds: readonly string[],
+  locale: GateLocale,
+): string {
+  const details = describeEvidenceStatuses(statuses, locale);
+  if (details.length > 0) {
+    const summary =
+      locale === "zh-CN"
+        ? `所需证据状态：${details.join("；")}。`
+        : `Required evidence status: ${details.join("; ")}.`;
+    if (
+      reason === "unsupported_evidence" &&
+      statuses.every((entry) => entry.status === "available")
+    ) {
+      return locale === "zh-CN"
+        ? `${summary}但当前评审引用无法支持结论。`
+        : `${summary} The current review citations still do not support a conclusion.`;
+    }
+    return summary;
+  }
+  const ids = requiredEvidenceIds.join(locale === "zh-CN" ? "、" : ", ");
+  if (locale === "zh-CN") {
+    if (reason === "unavailable_evidence") return `所需证据当前不可读取（${ids}）。`;
+    if (reason === "missing_evidence") return `尚未提供或采集所需证据（${ids}）。`;
+    return "现有证据无法支持该结论。";
+  }
+  if (reason === "unavailable_evidence")
+    return `Required evidence is currently unavailable (${ids}).`;
+  if (reason === "missing_evidence")
+    return `Required evidence has not been provided or collected (${ids}).`;
+  return "The available evidence does not support a conclusion.";
+}
+
+function evidenceRemediation(
+  statuses: readonly GateEvidenceStatusEntry[],
+  locale: GateLocale,
+): string | undefined {
+  const distinctStatuses = new Set(statuses.map((entry) => entry.status));
+  const actions: string[] = [];
+  if (distinctStatuses.has("missing"))
+    actions.push(
+      locale === "zh-CN" ? "补充尚未采集的证据" : "collect the evidence that is missing",
+    );
+  if (distinctStatuses.has("unavailable"))
+    actions.push(
+      locale === "zh-CN" ? "恢复不可读取证据的访问" : "restore access to the unavailable evidence",
+    );
+  if (distinctStatuses.has("unsupported"))
+    actions.push(
+      locale === "zh-CN"
+        ? "核实内容矛盾或无法支持判断的证据"
+        : "review evidence that is contradictory or does not support the judgment",
+    );
+  if (actions.length === 0) return undefined;
+  return locale === "zh-CN"
+    ? `${actions.join("，")}后重新评审。`
+    : `${actions.join("; ")}, then rerun the review.`;
+}
+
 function nextStep(
   reason: GateDecision["findings"][number]["reason"],
   outcome: GateDecision["findings"][number]["outcome"],
   categories: readonly GateFailureCategory[],
+  evidenceStatuses: readonly GateEvidenceStatusEntry[],
   locale: GateLocale,
 ): string {
+  const evidenceAction = evidenceRemediation(evidenceStatuses, locale);
+  if (evidenceAction !== undefined) return evidenceAction;
   const distinctCategories = new Set(categories);
   if (locale === "zh-CN") {
     if (reason === "unacceptable")
@@ -188,10 +283,12 @@ function findingMessage(
   reason: GateDecision["findings"][number]["reason"],
   verdict: Verdict["verdict"] | undefined,
   failureCategories: readonly GateFailureCategory[],
+  evidenceStatuses: readonly GateEvidenceStatusEntry[],
   requiredEvidenceIds: readonly string[],
   locale: GateLocale,
 ): string {
   const failureDetails = describeFailureCategories(failureCategories, locale);
+  const evidenceDetails = describeEvidenceStatuses(evidenceStatuses, locale);
   const description =
     verdict === undefined ? criterion.description : anchorDescription(criterion, verdict);
   if (locale === "zh-CN") {
@@ -206,30 +303,32 @@ function findingMessage(
       if (reason === "disagreement")
         return `${base}${verdict === undefined ? "" : `当前多数判断：${description}。`}重复评审结论不一致。`;
       if (failureDetails.length > 0) return `${base}评审记录：${failureDetails.join("、")}。`;
-      if (reason === "abstention") return `${base}Judge 未能作出明确判断；这不表示质量不合格。`;
-      if (reason === "unavailable_evidence")
-        return `${base}所需证据当前不可读取（${requiredEvidenceIds.join("、")}）。`;
-      if (reason === "missing_evidence")
-        return `${base}尚未提供或采集所需证据（${requiredEvidenceIds.join("、")}）。`;
-      if (reason === "unsupported_evidence") return `${base}现有证据无法支持明确结论。`;
+      if (
+        reason === "missing_evidence" ||
+        reason === "unavailable_evidence" ||
+        reason === "unsupported_evidence"
+      )
+        return `${base}${evidenceFindingDetails(reason, evidenceStatuses, requiredEvidenceIds, locale)}`;
+      if (reason === "abstention")
+        return `${base}Judge 未能作出明确判断；${evidenceDetails.length > 0 ? `证据状态：${evidenceDetails.join("；")}。` : ""}这不表示质量不合格。`;
       return base;
     }
     if (reason === "disagreement")
       return `暂时无法判断“${criterion.description}”：重复评审结论不一致。${failureDetails.length > 0 ? ` 另有评审问题：${failureDetails.join("、")}。` : ""}`;
     if (reason === "execution_failure")
       return `暂时无法判断“${criterion.description}”：${failureDetails.length > 0 ? failureDetails.join("、") : "评审未能完整执行"}。`;
-    if (reason === "unsupported_evidence")
-      return `暂时无法判断“${criterion.description}”：现有证据无法支持该结论。`;
-    if (reason === "unavailable_evidence")
-      return `暂时无法判断“${criterion.description}”：所需证据当前不可读取（${requiredEvidenceIds.join("、")}）。`;
-    if (reason === "missing_evidence")
-      return `暂时无法判断“${criterion.description}”：尚未提供或采集所需证据（${requiredEvidenceIds.join("、")}）。`;
+    if (
+      reason === "missing_evidence" ||
+      reason === "unavailable_evidence" ||
+      reason === "unsupported_evidence"
+    )
+      return `暂时无法判断“${criterion.description}”：${evidenceFindingDetails(reason, evidenceStatuses, requiredEvidenceIds, locale)}`;
     if (reason === "measurement_failure")
       return `暂时无法判断“${criterion.description}”：评审发现${failureDetails.join("、")}。`;
     if (reason === "unattributed_failure")
       return `暂时无法判断“${criterion.description}”：评审过程中出现问题，原因未能确定。`;
     if (reason === "abstention")
-      return `暂时无法判断“${criterion.description}”：Judge 返回了“未知 / 证据不足”，未能作出明确判断。请复核现有依据或重新评审；这不表示质量不合格。`;
+      return `暂时无法判断“${criterion.description}”：Judge 返回了“未知 / 证据不足”，未能作出明确判断。${evidenceDetails.length > 0 ? `证据状态：${evidenceDetails.join("；")}。` : ""}请复核现有依据或重新评审；这不表示质量不合格。`;
     return `暂时无法判断“${criterion.description}”：现有信息不足以形成明确结论。`;
   }
   if (outcome === "pass") return `${criterion.description}: satisfied.`;
@@ -243,59 +342,53 @@ function findingMessage(
     if (reason === "disagreement")
       return `${base}${verdict === undefined ? "" : ` Current majority judgment: ${description}.`} Repeated judgments disagree.`;
     if (failureDetails.length > 0) return `${base} Review record: ${failureDetails.join(", ")}.`;
+    if (
+      reason === "missing_evidence" ||
+      reason === "unavailable_evidence" ||
+      reason === "unsupported_evidence"
+    )
+      return `${base} ${evidenceFindingDetails(reason, evidenceStatuses, requiredEvidenceIds, locale)}`;
     if (reason === "abstention")
-      return `${base} The judge did not reach a clear conclusion; this is not a quality failure.`;
-    if (reason === "unavailable_evidence")
-      return `${base} Required evidence is currently unavailable (${requiredEvidenceIds.join(", ")}).`;
-    if (reason === "missing_evidence")
-      return `${base} Required evidence has not been provided or collected (${requiredEvidenceIds.join(", ")}).`;
-    if (reason === "unsupported_evidence")
-      return `${base} The available evidence does not support a clear conclusion.`;
+      return `${base} The judge did not reach a clear conclusion.${evidenceDetails.length > 0 ? ` Evidence status: ${evidenceDetails.join("; ")}.` : ""} This is not a quality failure.`;
     return base;
   }
   if (reason === "disagreement")
     return `Unable to determine ${criterion.description}: repeated judgments disagree.${failureDetails.length > 0 ? ` Other review issues: ${failureDetails.join(", ")}.` : ""}`;
   if (reason === "execution_failure")
     return `Unable to determine ${criterion.description}: ${failureDetails.length > 0 ? failureDetails.join(", ") : "the review did not complete"}.`;
-  if (reason === "unsupported_evidence")
-    return `Unable to determine ${criterion.description}: the available evidence does not support a conclusion.`;
-  if (reason === "unavailable_evidence")
-    return `Unable to determine ${criterion.description}: required evidence is currently unavailable (${requiredEvidenceIds.join(", ")}).`;
-  if (reason === "missing_evidence")
-    return `Unable to determine ${criterion.description}: required evidence has not been provided or collected (${requiredEvidenceIds.join(", ")}).`;
+  if (
+    reason === "missing_evidence" ||
+    reason === "unavailable_evidence" ||
+    reason === "unsupported_evidence"
+  )
+    return `Unable to determine ${criterion.description}: ${evidenceFindingDetails(reason, evidenceStatuses, requiredEvidenceIds, locale)}`;
   if (reason === "measurement_failure")
     return `Unable to determine ${criterion.description}: review issues were reported (${failureDetails.join(", ")}).`;
   if (reason === "unattributed_failure")
     return `Unable to determine ${criterion.description}: a review problem occurred, but its cause is unknown.`;
   if (reason === "abstention")
-    return `Unable to determine ${criterion.description}: the judge returned an unknown or insufficient verdict and did not reach a clear conclusion. Review the current basis or rerun the review; this is not a quality failure.`;
+    return `Unable to determine ${criterion.description}: the judge returned an unknown or insufficient verdict and did not reach a clear conclusion.${evidenceDetails.length > 0 ? ` Evidence status: ${evidenceDetails.join("; ")}.` : ""} Review the current basis or rerun the review; this is not a quality failure.`;
   return `Unable to determine ${criterion.description}: the available information is not sufficient to reach a clear conclusion.`;
 }
 
-function requiredEvidenceState(
+function requiredEvidenceStatuses(
   criterion: Criterion,
   bundle: EvidenceBundle,
-): "available" | "missing" | "unavailable" | "unsupported" {
-  let missing = false;
-  let unavailable = false;
-  let unsupported = false;
-  for (const selector of criterion.evidence) {
+): GateEvidenceStatusEntry[] {
+  return criterion.evidence.map((selector) => {
     const item = bundle.items.find((entry) => entry.id === selector.evidenceId);
-    if (item === undefined || item.status === "no_evidence") {
-      missing = true;
-    } else if (item.status === "unavailable") {
-      unavailable = true;
-    } else if (
+    let status: GateEvidenceStatus;
+    if (item === undefined || item.status === "no_evidence") status = "missing";
+    else if (item.status === "unavailable") status = "unavailable";
+    else if (
       item.status === "contradiction" ||
       item.render?.state === "withheld" ||
       item.render?.renderedLength === 0
-    ) {
-      unsupported = true;
-    }
-  }
-  if (unsupported) return "unsupported";
-  if (unavailable) return "unavailable";
-  return missing ? "missing" : "available";
+    )
+      status = "unsupported";
+    else status = "available";
+    return { evidenceId: selector.evidenceId, status };
+  });
 }
 
 function evaluateCriterion(
@@ -314,6 +407,7 @@ function evaluateCriterion(
   let unattributedFailure = false;
   let missingRequiredEvidence = false;
   let unavailableRequiredEvidence = false;
+  const evidenceStatusEntries = new Map<string, GateEvidenceStatusEntry>();
   for (const observation of observations) {
     if (observation.failure !== undefined) {
       failureCategories.add(observation.failure);
@@ -333,6 +427,10 @@ function evaluateCriterion(
       executionFailure = true;
       continue;
     }
+    const currentEvidenceStatuses = requiredEvidenceStatuses(criterion, observation.evidenceBundle);
+    for (const entry of currentEvidenceStatuses) {
+      evidenceStatusEntries.set(`${entry.evidenceId}\0${entry.status}`, entry);
+    }
     const checked = validateVerdictEvidence(criterion, verdict, observation.evidenceBundle);
     if (!checked.ok) {
       evidenceFailure = true;
@@ -340,10 +438,12 @@ function evaluateCriterion(
       continue;
     }
     if (verdict.verdict === "unknown" || verdict.verdict === "insufficient") {
-      const evidenceState = requiredEvidenceState(criterion, observation.evidenceBundle);
-      if (evidenceState === "unsupported") evidenceFailure = true;
-      if (evidenceState === "missing") missingRequiredEvidence = true;
-      if (evidenceState === "unavailable") unavailableRequiredEvidence = true;
+      if (currentEvidenceStatuses.some((entry) => entry.status === "unsupported"))
+        evidenceFailure = true;
+      if (currentEvidenceStatuses.some((entry) => entry.status === "missing"))
+        missingRequiredEvidence = true;
+      if (currentEvidenceStatuses.some((entry) => entry.status === "unavailable"))
+        unavailableRequiredEvidence = true;
     }
     for (const evidenceId of verdict.evidenceIds) evidenceIds.add(evidenceId);
     votes.push(verdict.verdict);
@@ -395,6 +495,12 @@ function evaluateCriterion(
       reason === "unsupported_evidence")
       ? criterion.evidence.map((selector) => selector.evidenceId)
       : [];
+  const normalizedEvidenceStatuses = [...evidenceStatusEntries.values()].sort((left, right) => {
+    if (left.evidenceId !== right.evidenceId) return left.evidenceId < right.evidenceId ? -1 : 1;
+    if (left.status !== right.status) return left.status < right.status ? -1 : 1;
+    return 0;
+  });
+  const hasEvidenceIssue = normalizedEvidenceStatuses.some((entry) => entry.status !== "available");
   const normalizedFailureCategories = [...failureCategories].sort();
   let message = findingMessage(
     criterion,
@@ -402,6 +508,7 @@ function evaluateCriterion(
     reason,
     prediction,
     normalizedFailureCategories,
+    normalizedEvidenceStatuses,
     requiredEvidenceIds,
     locale,
   );
@@ -419,6 +526,14 @@ function evaluateCriterion(
         : `Some repeated reviews could not be used: ${describeFailureCategories(normalizedFailureCategories, locale).join(", ")}.`;
     message = `${message} ${note}`;
   }
+  if (prediction !== undefined && hasEvidenceIssue) {
+    const details = describeEvidenceStatuses(normalizedEvidenceStatuses, locale);
+    const note =
+      locale === "zh-CN"
+        ? `部分重复评审的证据状态：${details.join("；")}。`
+        : `Evidence status across repeated reviews: ${details.join("; ")}.`;
+    message = `${message} ${note}`;
+  }
   return {
     mandatory: criterion.mandatory,
     finding: {
@@ -431,8 +546,17 @@ function evaluateCriterion(
         ? { failureCategories: normalizedFailureCategories }
         : {}),
       evidenceIds: [...evidenceIds],
+      ...((prediction === undefined || hasEvidenceIssue) && normalizedEvidenceStatuses.length > 0
+        ? { evidenceStatuses: normalizedEvidenceStatuses }
+        : {}),
       requiredEvidenceIds,
-      nextStep: nextStep(reason, outcome, normalizedFailureCategories, locale),
+      nextStep: nextStep(
+        reason,
+        outcome,
+        normalizedFailureCategories,
+        prediction === undefined || hasEvidenceIssue ? normalizedEvidenceStatuses : [],
+        locale,
+      ),
     },
   };
 }

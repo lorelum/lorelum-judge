@@ -17,6 +17,10 @@ reason: ("acceptable" | "unacceptable" | "missing_evidence" | "unavailable_evide
 failureCategories?: ("rubric" | "fixture_label" | "evidence" | "prompt" | "provider" | "threshold" | "measurement_noise" | "execution" | "unattributed")[]
 message: string
 evidenceIds: string[]
+evidenceStatuses?: {
+evidenceId: string
+status: ("missing" | "unavailable" | "unsupported" | "available")
+}[]
 requiredEvidenceIds: string[]
 nextStep: string
 }[]

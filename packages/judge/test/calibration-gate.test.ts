@@ -899,8 +899,11 @@ describe("calibration and gate behavior", () => {
       "当前不可读取",
     );
     expect(unavailableDecision.ok && unavailableDecision.value.findings[0]?.nextStep).toContain(
-      "检查证据来源",
+      "恢复不可读取证据的访问",
     );
+    expect(
+      unavailableDecision.ok && unavailableDecision.value.findings[0]?.evidenceStatuses,
+    ).toEqual([{ evidenceId: "e1", status: "unavailable" }]);
 
     const noEvidenceBundle = {
       schema: "lorelum.judge.evidence-bundle/v1",
@@ -908,9 +911,10 @@ describe("calibration and gate behavior", () => {
     };
     const absentDecision = makeDecision(noEvidenceBundle, "unknown", "no-evidence");
     expect(absentDecision.ok && absentDecision.value.findings[0]?.reason).toBe("missing_evidence");
-    expect(absentDecision.ok && absentDecision.value.findings[0]?.message).toContain(
-      "尚未提供或采集",
-    );
+    expect(absentDecision.ok && absentDecision.value.findings[0]?.message).toContain("e1：未采集");
+    expect(absentDecision.ok && absentDecision.value.findings[0]?.evidenceStatuses).toEqual([
+      { evidenceId: "e1", status: "missing" },
+    ]);
 
     const unknownWithEvidence = makeDecision(bundle(["e1"]), "unknown", "unknown-with-evidence");
     expect(unknownWithEvidence.ok && unknownWithEvidence.value.qualityOutcome).toBe(
@@ -922,6 +926,9 @@ describe("calibration and gate behavior", () => {
     expect(
       unknownWithEvidence.ok && unknownWithEvidence.value.findings[0]?.requiredEvidenceIds,
     ).toEqual([]);
+    expect(
+      unknownWithEvidence.ok && unknownWithEvidence.value.findings[0]?.evidenceStatuses,
+    ).toEqual([{ evidenceId: "e1", status: "available" }]);
     expect(unknownWithEvidence.ok && unknownWithEvidence.value.findings[0]?.message).toContain(
       "Judge 返回了",
     );
@@ -1054,6 +1061,71 @@ describe("calibration and gate behavior", () => {
     });
     expect(tied.ok && tied.value.qualityOutcome).toBe("indeterminate");
     expect(tied.ok && tied.value.findings[0]?.reason).toBe("disagreement");
+  });
+
+  test("retains per-item status and remediation for mixed required evidence", () => {
+    const baseDefinition = definition();
+    const [firstCriterion, ...remainingCriteria] = baseDefinition.criteria;
+    if (firstCriterion === undefined) throw new Error("expected a criterion");
+    const measuredDefinition: MeasurementDefinition = {
+      ...baseDefinition,
+      criteria: [
+        {
+          ...firstCriterion,
+          evidence: [
+            { evidenceId: "e1", role: "primary" },
+            { evidenceId: "e2", role: "reference" },
+            { evidenceId: "e3", role: "reference" },
+          ],
+        },
+        ...remainingCriteria,
+      ],
+    };
+    const measuredInstrument = instrument();
+    const policy = makePolicy(measuredDefinition, measuredInstrument);
+    const evidenceBundle = {
+      schema: "lorelum.judge.evidence-bundle/v1",
+      items: [
+        { schema: "lorelum.judge.evidence-item/v1", id: "e1", status: "unavailable" },
+        { schema: "lorelum.judge.evidence-item/v1", id: "e2", status: "no_evidence" },
+        {
+          schema: "lorelum.judge.evidence-item/v1",
+          id: "e3",
+          status: "present",
+          contentIdentity: hex("3"),
+          render: { state: "rendered", originalLength: 8, renderedLength: 8 },
+        },
+      ],
+    };
+    const decision = evaluateGate({
+      id: "mixed-evidence-statuses",
+      definition: measuredDefinition,
+      instrument: measuredInstrument,
+      policy,
+      taskClass: "backend",
+      evidenceShape: "test-results",
+      observations: Array.from({ length: 3 }, (_unused, index) => ({
+        id: `mixed-evidence-statuses-${index}`,
+        status: "completed" as const,
+        run: run(measuredDefinition, measuredInstrument, `mixed-evidence-statuses-${index}`, {
+          c1: "unknown",
+        }),
+        evidenceBundle,
+      })),
+      now: "2026-10-13T00:00:00Z",
+    });
+
+    expect(decision.ok && decision.value.findings[0]?.reason).toBe("unavailable_evidence");
+    expect(decision.ok && decision.value.findings[0]?.evidenceStatuses).toEqual([
+      { evidenceId: "e1", status: "unavailable" },
+      { evidenceId: "e2", status: "missing" },
+      { evidenceId: "e3", status: "available" },
+    ]);
+    expect(decision.ok && decision.value.findings[0]?.message).toContain(
+      "e1：当前不可读取；e2：未采集；e3：可读取",
+    );
+    expect(decision.ok && decision.value.findings[0]?.nextStep).toContain("补充尚未采集的证据");
+    expect(decision.ok && decision.value.findings[0]?.nextStep).toContain("恢复不可读取证据的访问");
   });
 
   test("rejects duplicate measurement runs and excess observations instead of replacing them", () => {

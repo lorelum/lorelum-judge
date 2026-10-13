@@ -80,6 +80,19 @@
             "uniqueItems": true,
             "items": { "type": "string", "minLength": 1 }
           },
+          "evidenceStatuses": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["evidenceId", "status"],
+              "properties": {
+                "evidenceId": { "type": "string", "minLength": 1 },
+                "status": { "enum": ["missing", "unavailable", "unsupported", "available"] }
+              }
+            }
+          },
           "requiredEvidenceIds": {
             "type": "array",
             "uniqueItems": true,

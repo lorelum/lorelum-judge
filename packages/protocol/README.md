@@ -83,6 +83,9 @@ the Judge package formats them into user-readable Chinese or English. Localizati
 not change measurement identity. A v1 artifact remains readable but cannot establish v2
 calibration eligibility.
 
+Indeterminate evidence-based findings retain the status of each required evidence ID
+(`missing`, `unavailable`, `unsupported`, or `available`) so mixed conditions remain visible.
+
 ## Evidence
 
 - An `EvidenceBundle` records what evidence existed and what the judge was shown of

@@ -76,7 +76,7 @@ Only holdout cases MUST contribute to qualification. Variants and repetitions in
 
 The decision MUST include `pass`, `fail`, or `indeterminate`, execution mode, a deterministic localized summary, criterion-level messages, evidence IDs, and next steps. Any mandatory supported unacceptable finding MUST make the overall quality outcome fail even if another criterion is indeterminate; all remaining indeterminate findings MUST still be shown. Without a supported failure, any mandatory indeterminate finding MUST make the overall outcome indeterminate. Only all-supported acceptable mandatory criteria may pass. Missing, unavailable, truncated, contradictory, or unsupported evidence and execution failures MUST NOT by themselves become quality failures. Optional findings MUST remain advisory. Chinese is the default display language; English MUST be supported without changing calibration identity. A decision MUST contain at most one finding per criterion, and its validator MUST reject an overall quality outcome that conflicts with the findings.
 
-A decisive unacceptable result for an optional criterion MUST show the matching anchor while remaining explicitly non-blocking. When valid evidence is present but repeated verdicts are `unknown` or `insufficient`, the finding MUST identify a Judge abstention rather than claim evidence is missing; it MUST remain indeterminate and MUST NOT request evidence as though absence were established. Evidence marked `no_evidence` MUST be distinguished from evidence marked `unavailable`, with next steps appropriate to the recorded status.
+A decisive unacceptable result for an optional criterion MUST show the matching anchor while remaining explicitly non-blocking. When valid evidence is present but repeated verdicts are `unknown` or `insufficient`, the finding MUST identify a Judge abstention rather than claim evidence is missing; it MUST remain indeterminate and MUST NOT request evidence as though absence were established. Evidence marked `no_evidence` MUST be distinguished from evidence marked `unavailable`, with next steps appropriate to the recorded status. For indeterminate evidence-based findings, decisions MUST retain the status of each required evidence ID so mixed states are not collapsed into one action.
 
 When no declared task scope applies, the overall result MUST remain `indeterminate` even if every criterion is optional and its finding is advisory; the absence of scope MUST NOT be represented as successful assessment.
 
@@ -94,6 +94,11 @@ When no declared task scope applies, the overall result MUST remain `indetermina
 
 - **WHEN** a required evidence item is recorded as `unavailable`
 - **THEN** the result remains indeterminate and tells the user to restore access or collection instead of claiming the evidence was never provided
+
+#### Scenario: Mixed evidence states retain per-item status
+
+- **WHEN** one required item is unavailable and another has not been collected
+- **THEN** the finding identifies each evidence ID with its own status and recommends restoring access and collecting the missing item separately
 
 #### Scenario: Judge abstains despite available evidence
 
