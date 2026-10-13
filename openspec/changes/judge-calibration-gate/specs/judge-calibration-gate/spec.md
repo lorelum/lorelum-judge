@@ -76,6 +76,8 @@ Only holdout cases MUST contribute to qualification. Variants and repetitions in
 
 The decision MUST include `pass`, `fail`, or `indeterminate`, execution mode, a deterministic localized summary, criterion-level messages, evidence IDs, and next steps. Any mandatory supported unacceptable finding MUST make the overall quality outcome fail even if another criterion is indeterminate; all remaining indeterminate findings MUST still be shown. Without a supported failure, any mandatory indeterminate finding MUST make the overall outcome indeterminate. Only all-supported acceptable mandatory criteria may pass. Missing, unavailable, truncated, contradictory, or unsupported evidence and execution failures MUST NOT by themselves become quality failures. Optional findings MUST remain advisory. Chinese is the default display language; English MUST be supported without changing calibration identity. A decision MUST contain at most one finding per criterion, and its validator MUST reject an overall quality outcome that conflicts with the findings.
 
+A decisive unacceptable result for an optional criterion MUST show the matching anchor while remaining explicitly non-blocking. When valid evidence is present but repeated verdicts are `unknown` or `insufficient`, the finding MUST identify a Judge abstention rather than claim evidence is missing; it MUST remain indeterminate and MUST NOT request evidence as though absence were established.
+
 #### Scenario: Supported failure takes precedence while other items remain visible
 
 - **WHEN** one mandatory criterion is evidence-backed unacceptable and another lacks evidence
@@ -85,6 +87,16 @@ The decision MUST include `pass`, `fail`, or `indeterminate`, execution mode, a 
 
 - **WHEN** a mandatory criterion has no supported decisive verdict and no other mandatory failure exists
 - **THEN** the result is indeterminate and names the evidence needed next
+
+#### Scenario: Judge abstains despite available evidence
+
+- **WHEN** valid, available evidence is present but all repeated verdicts are `unknown` or `insufficient`
+- **THEN** the result is indeterminate, reports a Judge abstention, and does not mislabel the evidence as missing
+
+#### Scenario: Optional unacceptable result stays advisory and specific
+
+- **WHEN** an optional criterion has a clear verdict outside the accepted range
+- **THEN** its finding names the matching anchor, remains advisory, and says it does not block overall acceptance
 
 #### Scenario: Uncalibrated judge gives a reference result
 

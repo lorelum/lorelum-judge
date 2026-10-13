@@ -113,3 +113,8 @@ The protocol rejects duplicate criterion findings and a total quality result tha
 with those findings. Supplied failure categories remain machine-readable and are described
 in human-readable Chinese or English; unknown causes stay explicitly unattributed. Without applicable verified calibration, an informative result is
 still returned in the policy fallback mode and cannot block.
+
+If valid evidence is available but every repeated verdict is `unknown` or `insufficient`,
+the finding reports a Judge abstention rather than claiming evidence is missing. An
+unacceptable optional criterion includes its matching anchor but remains advisory and does
+not block overall acceptance.

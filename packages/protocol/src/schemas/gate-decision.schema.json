@@ -47,6 +47,7 @@
               "unacceptable",
               "missing_evidence",
               "unsupported_evidence",
+              "abstention",
               "disagreement",
               "execution_failure",
               "measurement_failure",

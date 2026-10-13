@@ -414,7 +414,7 @@ export function buildCalibration(input: BuildCalibrationInput): BuildCalibration
           { path: scopeIdentity.error.path, code: "schema", message: scopeIdentity.error.reason },
         ],
       };
-    artifacts.push({
+    const artifact = {
       schema: "lorelum.judge.calibration-artifact/v2",
       id: `${policyResult.value.id}:${scope.taskClass}:${scope.evidenceShape}`,
       definitionIdentity: definitionIdentityValue,
@@ -427,7 +427,10 @@ export function buildCalibration(input: BuildCalibrationInput): BuildCalibration
       status: "shadow",
       validFrom: input.validFrom,
       validUntil: input.validUntil,
-    });
+    } satisfies CalibrationArtifactV2;
+    const checkedArtifact = validateCalibrationArtifactV2(artifact);
+    if (!checkedArtifact.ok) return checkedArtifact;
+    artifacts.push(checkedArtifact.value);
   }
   return { ok: true, value: { report: checkedReport.value, artifacts } };
 }

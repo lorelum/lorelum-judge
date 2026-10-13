@@ -416,6 +416,29 @@ describe("calibration protocol", () => {
     categoryScope.failureCounts.guessed_root_cause = 1;
     expect(validateCalibrationReport(unknownFailureCategory).ok).toBe(false);
   });
+
+  test("builds only artifacts with schema-valid timestamps", () => {
+    const fixture = fullCalibrationFixture();
+    const shared = {
+      definition: fixture.measuredDefinition,
+      instrument: fixture.measuredInstrument,
+      policy: fixture.policy,
+      dataset: fixture.dataset,
+      validFrom: "2026-01-01T00:00:00Z",
+      validUntil: "2027-01-01T00:00:00Z",
+    };
+    const dateOnlyFrom = buildCalibration({ ...shared, validFrom: "2026-01-01" });
+    expect(dateOnlyFrom.ok).toBe(false);
+    expect(
+      !dateOnlyFrom.ok && dateOnlyFrom.issues.some((issue) => issue.path.endsWith("validFrom")),
+    ).toBe(true);
+
+    const dateOnlyUntil = buildCalibration({ ...shared, validUntil: "2027-01-01" });
+    expect(dateOnlyUntil.ok).toBe(false);
+    expect(
+      !dateOnlyUntil.ok && dateOnlyUntil.issues.some((issue) => issue.path.endsWith("validUntil")),
+    ).toBe(true);
+  });
 });
 
 describe("calibration and gate behavior", () => {
@@ -705,6 +728,56 @@ describe("calibration and gate behavior", () => {
     }
   });
 
+  test("optional unacceptable findings show their anchor without blocking acceptance", () => {
+    const requiredDefinition = definition();
+    const [firstCriterion, ...remainingCriteria] = requiredDefinition.criteria;
+    if (firstCriterion === undefined) throw new Error("expected a criterion");
+    const measuredDefinition: MeasurementDefinition = {
+      ...requiredDefinition,
+      criteria: [
+        { ...firstCriterion, mandatory: false },
+        ...remainingCriteria.map((item) => ({ ...item, mandatory: false })),
+      ],
+    };
+    const measuredInstrument = instrument();
+    const policy = makePolicy(measuredDefinition, measuredInstrument);
+    const evaluate = (locale: "zh-CN" | "en-US", id: string) =>
+      evaluateGate({
+        id,
+        definition: measuredDefinition,
+        instrument: measuredInstrument,
+        policy,
+        taskClass: "backend",
+        evidenceShape: "test-results",
+        observations: Array.from({ length: 3 }, (_unused, index) => ({
+          id: `${id}-${index}`,
+          status: "completed" as const,
+          run: run(measuredDefinition, measuredInstrument, `${id}-${index}`, { c1: "unmet" }),
+          evidenceBundle: bundle(["e1"]),
+        })),
+        now: "2026-10-13T00:00:00Z",
+        locale,
+      });
+
+    const chinese = evaluate("zh-CN", "optional-unmet-zh");
+    expect(chinese.ok && chinese.value.qualityOutcome).toBe("pass");
+    expect(chinese.ok && chinese.value.findings[0]?.outcome).toBe("advisory");
+    expect(chinese.ok && chinese.value.findings[0]?.reason).toBe("unacceptable");
+    expect(chinese.ok && chinese.value.findings[0]?.message).toContain(
+      "The requirement is not met",
+    );
+    expect(chinese.ok && chinese.value.findings[0]?.message).toContain("可选建议");
+    expect(chinese.ok && chinese.value.findings[0]?.nextStep).toContain("不是必选阻塞项");
+
+    const english = evaluate("en-US", "optional-unmet-en");
+    expect(english.ok && english.value.findings[0]?.message).toContain(
+      "The requirement is not met",
+    );
+    expect(english.ok && english.value.findings[0]?.message).toContain(
+      "does not block overall acceptance",
+    );
+  });
+
   test("custom agreement threshold is part of policy identity and changes the result", () => {
     const measuredDefinition = definition();
     const measuredInstrument = instrument();
@@ -738,7 +811,7 @@ describe("calibration and gate behavior", () => {
     const policy = makePolicy(measuredDefinition, measuredInstrument);
     const makeDecision = (
       evidenceBundle: unknown,
-      verdict: "met" | "unmet" | "unknown",
+      verdict: "met" | "unmet" | "unknown" | "insufficient",
       id: string,
     ) =>
       evaluateGate({
@@ -801,6 +874,32 @@ describe("calibration and gate behavior", () => {
     );
     expect(unavailableDecision.ok && unavailableDecision.value.findings[0]?.message).toContain(
       "不足以形成明确结论",
+    );
+
+    const unknownWithEvidence = makeDecision(bundle(["e1"]), "unknown", "unknown-with-evidence");
+    expect(unknownWithEvidence.ok && unknownWithEvidence.value.qualityOutcome).toBe(
+      "indeterminate",
+    );
+    expect(unknownWithEvidence.ok && unknownWithEvidence.value.findings[0]?.reason).toBe(
+      "abstention",
+    );
+    expect(
+      unknownWithEvidence.ok && unknownWithEvidence.value.findings[0]?.requiredEvidenceIds,
+    ).toEqual([]);
+    expect(unknownWithEvidence.ok && unknownWithEvidence.value.findings[0]?.message).toContain(
+      "Judge 返回了",
+    );
+    expect(unknownWithEvidence.ok && unknownWithEvidence.value.findings[0]?.nextStep).toContain(
+      "复核本次判断",
+    );
+
+    const insufficientWithEvidence = makeDecision(
+      bundle(["e1"]),
+      "insufficient",
+      "insufficient-with-evidence",
+    );
+    expect(insufficientWithEvidence.ok && insufficientWithEvidence.value.findings[0]?.reason).toBe(
+      "abstention",
     );
 
     const invalidReferenceDecision = makeDecision(bundle(["e2"]), "unmet", "invalid-reference");
