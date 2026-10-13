@@ -46,6 +46,7 @@
               "acceptable",
               "unacceptable",
               "missing_evidence",
+              "unavailable_evidence",
               "unsupported_evidence",
               "abstention",
               "disagreement",

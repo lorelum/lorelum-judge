@@ -117,4 +117,5 @@ still returned in the policy fallback mode and cannot block.
 If valid evidence is available but every repeated verdict is `unknown` or `insufficient`,
 the finding reports a Judge abstention rather than claiming evidence is missing. An
 unacceptable optional criterion includes its matching anchor but remains advisory and does
-not block overall acceptance.
+not block overall acceptance. Evidence marked `no_evidence` and evidence marked `unavailable`
+receive different reasons and next steps.

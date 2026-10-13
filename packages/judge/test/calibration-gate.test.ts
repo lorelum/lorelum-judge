@@ -870,10 +870,23 @@ describe("calibration and gate behavior", () => {
       "indeterminate",
     );
     expect(unavailableDecision.ok && unavailableDecision.value.findings[0]?.reason).toBe(
-      "missing_evidence",
+      "unavailable_evidence",
     );
     expect(unavailableDecision.ok && unavailableDecision.value.findings[0]?.message).toContain(
-      "不足以形成明确结论",
+      "当前不可读取",
+    );
+    expect(unavailableDecision.ok && unavailableDecision.value.findings[0]?.nextStep).toContain(
+      "检查证据来源",
+    );
+
+    const noEvidenceBundle = {
+      schema: "lorelum.judge.evidence-bundle/v1",
+      items: [{ schema: "lorelum.judge.evidence-item/v1", id: "e1", status: "no_evidence" }],
+    };
+    const absentDecision = makeDecision(noEvidenceBundle, "unknown", "no-evidence");
+    expect(absentDecision.ok && absentDecision.value.findings[0]?.reason).toBe("missing_evidence");
+    expect(absentDecision.ok && absentDecision.value.findings[0]?.message).toContain(
+      "尚未提供或采集",
     );
 
     const unknownWithEvidence = makeDecision(bundle(["e1"]), "unknown", "unknown-with-evidence");

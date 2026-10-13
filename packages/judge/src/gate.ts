@@ -150,7 +150,9 @@ function nextStep(
     if (reason === "abstention")
       return "复核本次判断及其依据；必要时增加独立评审或补充针对性材料。这不表示质量不合格。";
     if (reason === "unsupported_evidence") return "补充可读取且能支持判断的证据后重新评审。";
-    if (reason === "missing_evidence") return "补充或核实该项证据后重新评审。";
+    if (reason === "unavailable_evidence")
+      return "检查证据来源、访问权限或采集过程，确认材料可读取后重新评审。";
+    if (reason === "missing_evidence") return "补充或核实尚未提供的证据后重新评审。";
     if (reason === "unattributed_failure")
       return "检查评审记录和相关输入；原因未确认前，不要把它当作品质量失败。";
     return "无需处理。";
@@ -171,8 +173,10 @@ function nextStep(
     return "Review the judgment and its basis; collect another independent review or targeted evidence if needed. This is not a quality failure.";
   if (reason === "unsupported_evidence")
     return "Provide readable evidence that supports the judgment, then rerun.";
+  if (reason === "unavailable_evidence")
+    return "Check access to the evidence source or its collection, restore availability, then rerun the review.";
   if (reason === "missing_evidence")
-    return "Add or verify evidence for this criterion, then rerun the review.";
+    return "Provide or verify the evidence that has not been collected, then rerun the review.";
   if (reason === "unattributed_failure")
     return "Check the review record and its inputs; do not treat an unattributed failure as a quality failure.";
   return "No action required.";
@@ -203,8 +207,11 @@ function findingMessage(
         return `${base}${verdict === undefined ? "" : `当前多数判断：${description}。`}重复评审结论不一致。`;
       if (failureDetails.length > 0) return `${base}评审记录：${failureDetails.join("、")}。`;
       if (reason === "abstention") return `${base}Judge 未能作出明确判断；这不表示质量不合格。`;
-      if (reason === "missing_evidence" || reason === "unsupported_evidence")
-        return `${base}现有信息不足以形成明确结论。`;
+      if (reason === "unavailable_evidence")
+        return `${base}所需证据当前不可读取（${requiredEvidenceIds.join("、")}）。`;
+      if (reason === "missing_evidence")
+        return `${base}尚未提供或采集所需证据（${requiredEvidenceIds.join("、")}）。`;
+      if (reason === "unsupported_evidence") return `${base}现有证据无法支持明确结论。`;
       return base;
     }
     if (reason === "disagreement")
@@ -213,15 +220,17 @@ function findingMessage(
       return `暂时无法判断“${criterion.description}”：${failureDetails.length > 0 ? failureDetails.join("、") : "评审未能完整执行"}。`;
     if (reason === "unsupported_evidence")
       return `暂时无法判断“${criterion.description}”：现有证据无法支持该结论。`;
+    if (reason === "unavailable_evidence")
+      return `暂时无法判断“${criterion.description}”：所需证据当前不可读取（${requiredEvidenceIds.join("、")}）。`;
+    if (reason === "missing_evidence")
+      return `暂时无法判断“${criterion.description}”：尚未提供或采集所需证据（${requiredEvidenceIds.join("、")}）。`;
     if (reason === "measurement_failure")
       return `暂时无法判断“${criterion.description}”：评审发现${failureDetails.join("、")}。`;
     if (reason === "unattributed_failure")
       return `暂时无法判断“${criterion.description}”：评审过程中出现问题，原因未能确定。`;
     if (reason === "abstention")
       return `暂时无法判断“${criterion.description}”：Judge 返回了“未知 / 证据不足”，未能作出明确判断。请复核现有依据或重新评审；这不表示质量不合格。`;
-    const missing =
-      requiredEvidenceIds.length > 0 ? `（需要：${requiredEvidenceIds.join("、")}）` : "";
-    return `暂时无法判断“${criterion.description}”：现有信息不足以形成明确结论${missing}。`;
+    return `暂时无法判断“${criterion.description}”：现有信息不足以形成明确结论。`;
   }
   if (outcome === "pass") return `${criterion.description}: satisfied.`;
   if (outcome === "fail") return `${criterion.description}: ${description}`;
@@ -236,8 +245,12 @@ function findingMessage(
     if (failureDetails.length > 0) return `${base} Review record: ${failureDetails.join(", ")}.`;
     if (reason === "abstention")
       return `${base} The judge did not reach a clear conclusion; this is not a quality failure.`;
-    if (reason === "missing_evidence" || reason === "unsupported_evidence")
-      return `${base} Available information is not sufficient to reach a clear conclusion.`;
+    if (reason === "unavailable_evidence")
+      return `${base} Required evidence is currently unavailable (${requiredEvidenceIds.join(", ")}).`;
+    if (reason === "missing_evidence")
+      return `${base} Required evidence has not been provided or collected (${requiredEvidenceIds.join(", ")}).`;
+    if (reason === "unsupported_evidence")
+      return `${base} The available evidence does not support a clear conclusion.`;
     return base;
   }
   if (reason === "disagreement")
@@ -246,27 +259,32 @@ function findingMessage(
     return `Unable to determine ${criterion.description}: ${failureDetails.length > 0 ? failureDetails.join(", ") : "the review did not complete"}.`;
   if (reason === "unsupported_evidence")
     return `Unable to determine ${criterion.description}: the available evidence does not support a conclusion.`;
+  if (reason === "unavailable_evidence")
+    return `Unable to determine ${criterion.description}: required evidence is currently unavailable (${requiredEvidenceIds.join(", ")}).`;
+  if (reason === "missing_evidence")
+    return `Unable to determine ${criterion.description}: required evidence has not been provided or collected (${requiredEvidenceIds.join(", ")}).`;
   if (reason === "measurement_failure")
     return `Unable to determine ${criterion.description}: review issues were reported (${failureDetails.join(", ")}).`;
   if (reason === "unattributed_failure")
     return `Unable to determine ${criterion.description}: a review problem occurred, but its cause is unknown.`;
   if (reason === "abstention")
     return `Unable to determine ${criterion.description}: the judge returned an unknown or insufficient verdict and did not reach a clear conclusion. Review the current basis or rerun the review; this is not a quality failure.`;
-  const missing =
-    requiredEvidenceIds.length > 0 ? ` (needed: ${requiredEvidenceIds.join(", ")})` : "";
-  return `Unable to determine ${criterion.description}: the available information is not sufficient to reach a clear conclusion${missing}.`;
+  return `Unable to determine ${criterion.description}: the available information is not sufficient to reach a clear conclusion.`;
 }
 
 function requiredEvidenceState(
   criterion: Criterion,
   bundle: EvidenceBundle,
-): "available" | "missing" | "unsupported" {
+): "available" | "missing" | "unavailable" | "unsupported" {
   let missing = false;
+  let unavailable = false;
   let unsupported = false;
   for (const selector of criterion.evidence) {
     const item = bundle.items.find((entry) => entry.id === selector.evidenceId);
-    if (item === undefined || item.status === "no_evidence" || item.status === "unavailable") {
+    if (item === undefined || item.status === "no_evidence") {
       missing = true;
+    } else if (item.status === "unavailable") {
+      unavailable = true;
     } else if (
       item.status === "contradiction" ||
       item.render?.state === "withheld" ||
@@ -276,6 +294,7 @@ function requiredEvidenceState(
     }
   }
   if (unsupported) return "unsupported";
+  if (unavailable) return "unavailable";
   return missing ? "missing" : "available";
 }
 
@@ -294,6 +313,7 @@ function evaluateCriterion(
   let measurementFailure = false;
   let unattributedFailure = false;
   let missingRequiredEvidence = false;
+  let unavailableRequiredEvidence = false;
   for (const observation of observations) {
     if (observation.failure !== undefined) {
       failureCategories.add(observation.failure);
@@ -323,6 +343,7 @@ function evaluateCriterion(
       const evidenceState = requiredEvidenceState(criterion, observation.evidenceBundle);
       if (evidenceState === "unsupported") evidenceFailure = true;
       if (evidenceState === "missing") missingRequiredEvidence = true;
+      if (evidenceState === "unavailable") unavailableRequiredEvidence = true;
     }
     for (const evidenceId of verdict.evidenceIds) evidenceIds.add(evidenceId);
     votes.push(verdict.verdict);
@@ -353,11 +374,13 @@ function evaluateCriterion(
             ? "measurement_failure"
             : unattributedFailure
               ? "unattributed_failure"
-              : missingRequiredEvidence
-                ? "missing_evidence"
-                : abstained
-                  ? "abstention"
-                  : "missing_evidence";
+              : unavailableRequiredEvidence
+                ? "unavailable_evidence"
+                : missingRequiredEvidence
+                  ? "missing_evidence"
+                  : abstained
+                    ? "abstention"
+                    : "missing_evidence";
   } else if (!policy.acceptedVerdicts.some((verdict) => verdict === prediction)) {
     outcome = criterion.mandatory ? "fail" : "advisory";
     reason = disagrees ? "disagreement" : "unacceptable";
@@ -366,7 +389,10 @@ function evaluateCriterion(
     reason = disagrees ? "disagreement" : "acceptable";
   }
   const requiredEvidenceIds =
-    prediction === undefined && (reason === "missing_evidence" || reason === "unsupported_evidence")
+    prediction === undefined &&
+    (reason === "missing_evidence" ||
+      reason === "unavailable_evidence" ||
+      reason === "unsupported_evidence")
       ? criterion.evidence.map((selector) => selector.evidenceId)
       : [];
   const normalizedFailureCategories = [...failureCategories].sort();
