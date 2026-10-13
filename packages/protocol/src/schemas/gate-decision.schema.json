@@ -49,10 +49,28 @@
               "unsupported_evidence",
               "disagreement",
               "execution_failure",
+              "measurement_failure",
               "unattributed_failure",
               "calibration_unavailable",
               "not_applicable"
             ]
+          },
+          "failureCategories": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "rubric",
+                "fixture_label",
+                "evidence",
+                "prompt",
+                "provider",
+                "threshold",
+                "measurement_noise",
+                "execution",
+                "unattributed"
+              ]
+            }
           },
           "message": { "type": "string", "minLength": 1 },
           "evidenceIds": {

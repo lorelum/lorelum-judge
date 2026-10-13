@@ -8,11 +8,11 @@ Calibrate Judge against known outcomes and return understandable gate decisions 
 
 ### Requirement: Calibration cases preserve labels, evidence, repetitions, and task grouping
 
-A calibration dataset MUST bind a measurement definition and instrument. Each task group MUST declare one split, task class, evidence shape, and one or more labeled cases. Each case MUST declare a criterion, kind-valid expected verdict, category (`decisive`, `equivalent`, `anti`, or `partial`), label provenance, evidence references, and exactly `InstrumentProfile.repetitions` observations. Each successful observation MUST contain a validated run and evidence bundle matching the bound identities; execution failures MUST be represented distinctly from verdicts and MAY retain an evidence bundle collected before failure. A task group MUST occur in only one split.
+A calibration dataset MUST bind a measurement definition and instrument. Each task group MUST declare a stable source `taskIdentity`, one split, task class, evidence shape, and one or more labeled cases. A source task identity MUST appear in only one task group, so its variants cannot be split across development and holdout by changing a record ID. Each case MUST declare a criterion, kind-valid expected verdict, category (`decisive`, `equivalent`, `anti`, or `partial`), label provenance, evidence references, and exactly `InstrumentProfile.repetitions` observations with distinct measurement run identities. Each successful observation MUST contain a validated run and evidence bundle matching the bound identities; execution failures MUST be represented distinctly from verdicts and MAY retain an evidence bundle collected before failure. A task group MUST occur in only one split.
 
 #### Scenario: Split leakage is rejected
 
-- **WHEN** a task group or its behavior variants appear in both development and holdout
+- **WHEN** the same source task identity appears in more than one group or split, even if record IDs differ
 - **THEN** dataset validation fails and no calibration qualifies
 
 #### Scenario: Missing label or evidence reference is rejected
@@ -93,7 +93,7 @@ The decision MUST include `pass`, `fail`, or `indeterminate`, execution mode, a 
 
 ### Requirement: Failure causes are evidence-based
 
-Reports MUST distinguish quality errors, abstentions, execution failures, input/label failures, and disagreement. More specific rubric, fixture, evidence, prompt, provider, threshold, or noise attribution MUST be emitted only when supplied diagnostics support it; otherwise the cause remains unassigned. A gate decision MUST use `unattributed_failure` when the supplied failure category does not establish a user-actionable cause, and its message MUST NOT guess the root cause.
+Reports MUST distinguish quality errors, abstentions, execution failures, input/label failures, and disagreement. More specific rubric, fixture, evidence, prompt, provider, threshold, or noise attribution MUST be emitted only when supplied diagnostics support it; otherwise the cause remains unassigned. Gate findings MUST retain supplied failure categories and render them in human-readable language. A gate decision MUST use `unattributed_failure` when the supplied failure category does not establish a more specific cause, and its message MUST NOT guess the root cause.
 
 #### Scenario: Root cause is not inferable
 

@@ -22,6 +22,10 @@ import {
 import { isVerifiedCalibration } from "./calibration.js";
 
 export type GateLocale = "zh-CN" | "en-US";
+type GateFailureCategory = Extract<
+  CalibrationObservation,
+  { readonly status: "failed" }
+>["failureCategory"];
 
 export type GateObservation =
   | {
@@ -48,10 +52,7 @@ export interface EvaluateGateInput {
 interface ParsedObservation {
   readonly run?: MeasurementRun;
   readonly evidenceBundle?: EvidenceBundle;
-  readonly failure?: Extract<
-    CalibrationObservation,
-    { readonly status: "failed" }
-  >["failureCategory"];
+  readonly failure?: GateFailureCategory;
 }
 
 interface CriterionResult {
@@ -95,11 +96,53 @@ function anchorDescription(criterion: Criterion, verdict: Verdict["verdict"]): s
   );
 }
 
-function nextStep(reason: GateDecision["findings"][number]["reason"], locale: GateLocale): string {
+const failureLabels: Record<GateLocale, Record<GateFailureCategory, string>> = {
+  "zh-CN": {
+    rubric: "评审规则问题",
+    fixture_label: "校准标签问题",
+    evidence: "证据问题",
+    prompt: "提示配置问题",
+    provider: "评审服务问题",
+    threshold: "决策门槛配置问题",
+    measurement_noise: "重复评审波动",
+    execution: "评审未完成",
+    unattributed: "原因未确认",
+  },
+  "en-US": {
+    rubric: "rubric issue",
+    fixture_label: "calibration label issue",
+    evidence: "evidence issue",
+    prompt: "review prompt configuration issue",
+    provider: "review service issue",
+    threshold: "decision threshold configuration issue",
+    measurement_noise: "repeated review variation",
+    execution: "incomplete review",
+    unattributed: "unattributed cause",
+  },
+};
+
+function describeFailureCategories(
+  categories: readonly GateFailureCategory[],
+  locale: GateLocale,
+): string[] {
+  return [...new Set(categories)].sort().map((category) => failureLabels[locale][category]);
+}
+
+function nextStep(
+  reason: GateDecision["findings"][number]["reason"],
+  categories: readonly GateFailureCategory[],
+  locale: GateLocale,
+): string {
+  const distinctCategories = new Set(categories);
   if (locale === "zh-CN") {
     if (reason === "unacceptable") return "修复该项并重新运行评审。";
     if (reason === "disagreement") return "复核分歧结果，或增加独立评审次数。";
-    if (reason === "execution_failure") return "检查评审失败记录后，重新运行未完成的评审。";
+    if (reason === "execution_failure")
+      return distinctCategories.has("provider")
+        ? "确认评审服务恢复后，重新运行未完成的评审。"
+        : "检查评审失败记录后，重新运行未完成的评审。";
+    if (reason === "measurement_failure")
+      return "根据列出的失败类别复核对应的结果或输入，再重新评审。";
     if (reason === "unsupported_evidence") return "补充可读取且能支持判断的证据后重新评审。";
     if (reason === "missing_evidence") return "补充或核实该项证据后重新评审。";
     if (reason === "unattributed_failure")
@@ -110,7 +153,11 @@ function nextStep(reason: GateDecision["findings"][number]["reason"], locale: Ga
   if (reason === "disagreement")
     return "Review the conflicting judgments or collect more independent reviews.";
   if (reason === "execution_failure")
-    return "Review the recorded failure details and rerun the incomplete evaluation.";
+    return distinctCategories.has("provider")
+      ? "Restore the review service and rerun the incomplete evaluation."
+      : "Review the recorded failure details and rerun the incomplete evaluation.";
+  if (reason === "measurement_failure")
+    return "Review the results or inputs indicated by the failure categories, then rerun.";
   if (reason === "unsupported_evidence")
     return "Provide readable evidence that supports the judgment, then rerun.";
   if (reason === "missing_evidence")
@@ -125,21 +172,32 @@ function findingMessage(
   outcome: GateDecision["findings"][number]["outcome"],
   reason: GateDecision["findings"][number]["reason"],
   verdict: Verdict["verdict"] | undefined,
+  failureCategories: readonly GateFailureCategory[],
   requiredEvidenceIds: readonly string[],
   locale: GateLocale,
 ): string {
+  const failureDetails = describeFailureCategories(failureCategories, locale);
   const description =
     verdict === undefined ? criterion.description : anchorDescription(criterion, verdict);
   if (locale === "zh-CN") {
     if (outcome === "pass") return `${criterion.description}：符合要求。`;
     if (outcome === "fail") return `${criterion.description}：${description}`;
-    if (outcome === "advisory") return `${criterion.description}：有待关注，但不是必选阻塞项。`;
+    if (outcome === "advisory") {
+      const base = `${criterion.description}：有待关注，但不是必选阻塞项。`;
+      if (reason === "disagreement") return `${base}重复评审结论不一致。`;
+      if (failureDetails.length > 0) return `${base}评审记录：${failureDetails.join("、")}。`;
+      if (reason === "missing_evidence" || reason === "unsupported_evidence")
+        return `${base}现有信息不足以形成明确结论。`;
+      return base;
+    }
     if (reason === "disagreement")
-      return `暂时无法判断“${criterion.description}”：重复评审结论不一致。`;
+      return `暂时无法判断“${criterion.description}”：重复评审结论不一致。${failureDetails.length > 0 ? ` 另有评审问题：${failureDetails.join("、")}。` : ""}`;
     if (reason === "execution_failure")
-      return `暂时无法判断“${criterion.description}”：评审未能完整执行。`;
+      return `暂时无法判断“${criterion.description}”：${failureDetails.length > 0 ? failureDetails.join("、") : "评审未能完整执行"}。`;
     if (reason === "unsupported_evidence")
       return `暂时无法判断“${criterion.description}”：现有证据无法支持该结论。`;
+    if (reason === "measurement_failure")
+      return `暂时无法判断“${criterion.description}”：评审发现${failureDetails.join("、")}。`;
     if (reason === "unattributed_failure")
       return `暂时无法判断“${criterion.description}”：评审过程中出现问题，原因未能确定。`;
     const missing =
@@ -148,14 +206,22 @@ function findingMessage(
   }
   if (outcome === "pass") return `${criterion.description}: satisfied.`;
   if (outcome === "fail") return `${criterion.description}: ${description}`;
-  if (outcome === "advisory")
-    return `${criterion.description}: needs attention but is not a mandatory blocker.`;
+  if (outcome === "advisory") {
+    const base = `${criterion.description}: needs attention but is not a mandatory blocker.`;
+    if (reason === "disagreement") return `${base} Repeated judgments disagree.`;
+    if (failureDetails.length > 0) return `${base} Review record: ${failureDetails.join(", ")}.`;
+    if (reason === "missing_evidence" || reason === "unsupported_evidence")
+      return `${base} Available information is not sufficient to reach a clear conclusion.`;
+    return base;
+  }
   if (reason === "disagreement")
-    return `Unable to determine ${criterion.description}: repeated judgments disagree.`;
+    return `Unable to determine ${criterion.description}: repeated judgments disagree.${failureDetails.length > 0 ? ` Other review issues: ${failureDetails.join(", ")}.` : ""}`;
   if (reason === "execution_failure")
-    return `Unable to determine ${criterion.description}: the review did not complete.`;
+    return `Unable to determine ${criterion.description}: ${failureDetails.length > 0 ? failureDetails.join(", ") : "the review did not complete"}.`;
   if (reason === "unsupported_evidence")
     return `Unable to determine ${criterion.description}: the available evidence does not support a conclusion.`;
+  if (reason === "measurement_failure")
+    return `Unable to determine ${criterion.description}: review issues were reported (${failureDetails.join(", ")}).`;
   if (reason === "unattributed_failure")
     return `Unable to determine ${criterion.description}: a review problem occurred, but its cause is unknown.`;
   const missing =
@@ -172,15 +238,19 @@ function evaluateCriterion(
 ): CriterionResult {
   const votes: Verdict["verdict"][] = [];
   const evidenceIds = new Set<string>();
+  const failureCategories = new Set<GateFailureCategory>();
   let evidenceFailure = false;
   let executionFailure = false;
+  let measurementFailure = false;
   let unattributedFailure = false;
   for (const observation of observations) {
     if (observation.failure !== undefined) {
+      failureCategories.add(observation.failure);
       if (observation.failure === "evidence") evidenceFailure = true;
       else if (observation.failure === "provider" || observation.failure === "execution")
         executionFailure = true;
-      else unattributedFailure = true;
+      else if (observation.failure === "unattributed") unattributedFailure = true;
+      else measurementFailure = true;
       continue;
     }
     if (observation.run === undefined || observation.evidenceBundle === undefined) {
@@ -195,6 +265,7 @@ function evaluateCriterion(
     const checked = validateVerdictEvidence(criterion, verdict, observation.evidenceBundle);
     if (!checked.ok) {
       evidenceFailure = true;
+      failureCategories.add("evidence");
       continue;
     }
     for (const evidenceId of verdict.evidenceIds) evidenceIds.add(evidenceId);
@@ -220,9 +291,11 @@ function evaluateCriterion(
         ? "unsupported_evidence"
         : executionFailure
           ? "execution_failure"
-          : unattributedFailure
-            ? "unattributed_failure"
-            : "missing_evidence";
+          : measurementFailure
+            ? "measurement_failure"
+            : unattributedFailure
+              ? "unattributed_failure"
+              : "missing_evidence";
   } else if (!policy.acceptedVerdicts.some((verdict) => verdict === prediction)) {
     outcome = criterion.mandatory ? "fail" : "advisory";
     reason = disagrees ? "disagreement" : "unacceptable";
@@ -234,7 +307,16 @@ function evaluateCriterion(
     prediction === undefined && (reason === "missing_evidence" || reason === "unsupported_evidence")
       ? criterion.evidence.map((selector) => selector.evidenceId)
       : [];
-  let message = findingMessage(criterion, outcome, reason, prediction, requiredEvidenceIds, locale);
+  const normalizedFailureCategories = [...failureCategories].sort();
+  let message = findingMessage(
+    criterion,
+    outcome,
+    reason,
+    prediction,
+    normalizedFailureCategories,
+    requiredEvidenceIds,
+    locale,
+  );
   if (prediction !== undefined && disagrees) {
     const note =
       locale === "zh-CN"
@@ -242,9 +324,11 @@ function evaluateCriterion(
         : "Repeated reviews disagree, but the result meets the configured agreement threshold.";
     message = `${message} ${note}`;
   }
-  if (prediction !== undefined && (executionFailure || evidenceFailure)) {
+  if (prediction !== undefined && normalizedFailureCategories.length > 0) {
     const note =
-      locale === "zh-CN" ? "部分重复评审未能使用。" : "Some repeated reviews could not be used.";
+      locale === "zh-CN"
+        ? `部分重复评审未能使用：${describeFailureCategories(normalizedFailureCategories, locale).join("、")}。`
+        : `Some repeated reviews could not be used: ${describeFailureCategories(normalizedFailureCategories, locale).join(", ")}.`;
     message = `${message} ${note}`;
   }
   return {
@@ -255,9 +339,12 @@ function evaluateCriterion(
       outcome,
       reason,
       message,
+      ...(normalizedFailureCategories.length > 0
+        ? { failureCategories: normalizedFailureCategories }
+        : {}),
       evidenceIds: [...evidenceIds],
       requiredEvidenceIds,
-      nextStep: nextStep(reason, locale),
+      nextStep: nextStep(reason, normalizedFailureCategories, locale),
     },
   };
 }
@@ -275,6 +362,18 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
     ];
     if (!definitionResult.ok || !instrumentResult.ok || !policyResult.ok)
       return { ok: false, issues };
+    if (input.observations.length > instrumentResult.value.repetitions) {
+      return {
+        ok: false,
+        issues: [
+          {
+            path: "$.observations",
+            code: "report_mismatch",
+            message: `expected at most ${instrumentResult.value.repetitions} observations`,
+          },
+        ],
+      };
+    }
     const definitionId = definitionIdentity(definitionResult.value);
     const instrumentId = instrumentIdentity(instrumentResult.value);
     const policyId = gatePolicyIdentityV2(policyResult.value);
@@ -328,10 +427,31 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
               ? "indeterminate"
               : policyResult.value.onUncalibrated;
 
-    const parsed: ParsedObservation[] = input.observations.map((observation) => {
+    const observationIds = new Set<string>();
+    const runIds = new Set<string>();
+    const observationIssues: ValidationIssue[] = [];
+    const parsed: ParsedObservation[] = input.observations.map((observation, index) => {
+      if (observationIds.has(observation.id)) {
+        observationIssues.push({
+          path: `$.observations[${index}].id`,
+          code: "duplicate_verdict",
+          message: `duplicate observation "${observation.id}"`,
+        });
+      }
+      observationIds.add(observation.id);
       if (observation.status === "failed") return { failure: observation.failureCategory };
       const run = validateRun(definitionResult.value, instrumentResult.value, observation.run);
       const bundle = validateEvidenceBundle(observation.evidenceBundle);
+      if (run.ok) {
+        if (runIds.has(run.value.id)) {
+          observationIssues.push({
+            path: `$.observations[${index}].run.id`,
+            code: "duplicate_verdict",
+            message: `measurement run "${run.value.id}" cannot count as multiple repetitions`,
+          });
+        }
+        runIds.add(run.value.id);
+      }
       if (!run.ok || !bundle.ok) {
         const evidenceFailure =
           !bundle.ok ||
@@ -340,6 +460,7 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
       }
       return { run: run.value, evidenceBundle: bundle.value };
     });
+    if (observationIssues.length > 0) return { ok: false, issues: observationIssues };
     if (input.observations.length < instrumentResult.value.repetitions) {
       for (
         let index = input.observations.length;
@@ -348,15 +469,6 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
       ) {
         parsed.push({ failure: "execution" });
       }
-    }
-    if (input.observations.length > instrumentResult.value.repetitions) {
-      parsed.splice(
-        0,
-        parsed.length,
-        ...Array.from({ length: instrumentResult.value.repetitions }, () => ({
-          failure: "unattributed" as const,
-        })),
-      );
     }
     const criteria = new Map(
       definitionResult.value.criteria.map((criterion) => [criterion.id, criterion]),

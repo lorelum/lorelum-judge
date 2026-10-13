@@ -72,10 +72,13 @@ interval. Their validators check cross-record identities, task-group split isola
 criterion verdict kinds, repetition counts, and evidence citations. TypeScript interfaces
 are generated from the versioned JSON schemas.
 
+Each group carries a stable source-task identity so variants cannot be moved between
+development and holdout by changing record IDs.
+
 Report rates require complete, count-consistent Wilson intervals (or no estimates when
 their denominator is zero). Failure counts preserve the supplied taxonomy and are limited
 to one event per task group. Gate-decision validation checks that the overall quality result
-agrees with its criterion findings. The protocol reports structured facts and reason codes;
+agrees with its criterion findings and retains supplied failure categories. The protocol reports structured facts and reason codes;
 the Judge package formats them into user-readable Chinese or English. Localization does
 not change measurement identity. A v1 artifact remains readable but cannot establish v2
 calibration eligibility.

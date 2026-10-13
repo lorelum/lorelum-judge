@@ -5,6 +5,7 @@ import {
   calibrationDatasetIdentity,
   definitionIdentity,
   type InstrumentProfile,
+  identityOf,
   instrumentIdentity,
   type MeasurementDefinition,
   type Verdict,
@@ -16,6 +17,7 @@ import {
 import {
   buildCalibration,
   createDefaultGatePolicyV2,
+  type EvaluateGateInput,
   evaluateGate,
   loadVerifiedCalibration,
 } from "../src/index.js";
@@ -164,13 +166,12 @@ function datasetFor(
   const defId = definitionIdentity(measuredDefinition);
   const instId = instrumentIdentity(measuredInstrument);
   if (!defId.ok || !instId.ok) throw new Error("test fixture identity failed");
-  return {
-    schema: "lorelum.judge.calibration-dataset/v1",
-    id: "known-cases",
-    definitionIdentity: defId.identity,
-    instrumentIdentity: instId.identity,
-    taskGroups: groups.map((group) => ({
+  const taskGroups = groups.map((group) => {
+    const taskId = identityOf("lorelum.judge.calibration-task/v1", { sourceTask: group.id });
+    if (!taskId.ok) throw new Error("test fixture task identity failed");
+    return {
       id: group.id,
+      taskIdentity: taskId.identity,
       split: group.split ?? "holdout",
       taskClass: "backend",
       evidenceShape: "test-results",
@@ -183,7 +184,14 @@ function datasetFor(
         group.prediction ?? group.expected,
         group.present ?? true,
       ),
-    })),
+    };
+  });
+  return {
+    schema: "lorelum.judge.calibration-dataset/v1",
+    id: "known-cases",
+    definitionIdentity: defId.identity,
+    instrumentIdentity: instId.identity,
+    taskGroups,
   } as unknown as CalibrationDataset;
 }
 
@@ -237,7 +245,10 @@ describe("calibration protocol", () => {
     if (firstGroup === undefined) throw new Error("expected a calibration task group");
     const leaked = {
       ...dataset,
-      taskGroups: [...dataset.taskGroups, { ...firstGroup, split: "development" as const }],
+      taskGroups: [
+        ...dataset.taskGroups,
+        { ...firstGroup, id: `${firstGroup.id}-copy`, split: "development" as const },
+      ],
     };
     expect(
       validateCalibrationDataset(leaked, measuredDefinition, measuredInstrument, policy).ok,
@@ -252,6 +263,18 @@ describe("calibration protocol", () => {
     shortCase.observations.pop();
     expect(
       validateCalibrationDataset(short, measuredDefinition, measuredInstrument, policy).ok,
+    ).toBe(false);
+    const repeatedRun = structuredClone(dataset);
+    const repeatedCase = repeatedRun.taskGroups[0]?.cases[0];
+    if (repeatedCase === undefined) throw new Error("expected a calibration case");
+    const firstObservation = repeatedCase.observations[0];
+    const secondObservation = repeatedCase.observations[1];
+    if (firstObservation?.status !== "completed" || secondObservation?.status !== "completed") {
+      throw new Error("expected completed observations");
+    }
+    secondObservation.run.id = firstObservation.run.id;
+    expect(
+      validateCalibrationDataset(repeatedRun, measuredDefinition, measuredInstrument, policy).ok,
     ).toBe(false);
     const absent = structuredClone(dataset);
     const absentCase = absent.taskGroups[0]?.cases[0];
@@ -810,7 +833,30 @@ describe("calibration and gate behavior", () => {
     });
     expect(failed.ok && failed.value.qualityOutcome).toBe("indeterminate");
     expect(failed.ok && failed.value.findings[0]?.reason).toBe("execution_failure");
-    expect(failed.ok && failed.value.findings[0]?.nextStep).toContain("评审失败记录");
+    expect(failed.ok && failed.value.findings[0]?.failureCategories).toEqual(["provider"]);
+    expect(failed.ok && failed.value.findings[0]?.nextStep).toContain("评审服务恢复");
+
+    const promptFailure = evaluateGate({
+      id: "prompt-failure",
+      definition: measuredDefinition,
+      instrument: measuredInstrument,
+      policy,
+      taskClass: "backend",
+      evidenceShape: "test-results",
+      observations: Array.from({ length: 3 }, (_unused, index) => ({
+        id: `prompt-failure-${index}`,
+        status: "failed" as const,
+        failureCategory: "prompt" as const,
+        message: "prompt configuration rejected",
+      })),
+      now: "2026-10-13T00:00:00Z",
+    });
+    expect(promptFailure.ok && promptFailure.value.qualityOutcome).toBe("indeterminate");
+    expect(promptFailure.ok && promptFailure.value.findings[0]?.reason).toBe("measurement_failure");
+    expect(promptFailure.ok && promptFailure.value.findings[0]?.failureCategories).toEqual([
+      "prompt",
+    ]);
+    expect(promptFailure.ok && promptFailure.value.findings[0]?.message).toContain("提示配置问题");
 
     const evidenceFailure = evaluateGate({
       id: "evidence-failure",
@@ -873,5 +919,45 @@ describe("calibration and gate behavior", () => {
     });
     expect(tied.ok && tied.value.qualityOutcome).toBe("indeterminate");
     expect(tied.ok && tied.value.findings[0]?.reason).toBe("disagreement");
+  });
+
+  test("rejects duplicate measurement runs and excess observations instead of replacing them", () => {
+    const measuredDefinition = definition();
+    const measuredInstrument = instrument();
+    const policy = makePolicy(measuredDefinition, measuredInstrument);
+    const decide = (observations: EvaluateGateInput["observations"]) =>
+      evaluateGate({
+        id: "invalid-current-observations",
+        definition: measuredDefinition,
+        instrument: measuredInstrument,
+        policy,
+        taskClass: "backend",
+        evidenceShape: "test-results",
+        observations,
+        now: "2026-10-13T00:00:00Z",
+      });
+    const repeatedRun = decide(
+      Array.from({ length: 3 }, (_unused, index) => ({
+        id: `observation-${index}`,
+        status: "completed" as const,
+        run: run(measuredDefinition, measuredInstrument, "same-run", { c1: "met" }),
+        evidenceBundle: bundle(["e1"]),
+      })),
+    );
+    expect(repeatedRun.ok).toBe(false);
+    expect(
+      !repeatedRun.ok && repeatedRun.issues.some((issue) => issue.code === "duplicate_verdict"),
+    ).toBe(true);
+
+    const excess = decide(
+      Array.from({ length: 4 }, (_unused, index) => ({
+        id: `excess-${index}`,
+        status: "completed" as const,
+        run: run(measuredDefinition, measuredInstrument, `excess-run-${index}`, { c1: "met" }),
+        evidenceBundle: bundle(["e1"]),
+      })),
+    );
+    expect(excess.ok).toBe(false);
+    expect(!excess.ok && excess.issues[0]?.code).toBe("report_mismatch");
   });
 });

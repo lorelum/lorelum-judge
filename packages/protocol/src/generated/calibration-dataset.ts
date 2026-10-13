@@ -11,6 +11,7 @@ instrumentIdentity: string
  */
 taskGroups: [{
 id: string
+taskIdentity: string
 split: ("development" | "holdout")
 taskClass: string
 evidenceShape: string
@@ -98,6 +99,7 @@ evidenceBundle?: EvidenceBundle
 })[]]
 }, ...({
 id: string
+taskIdentity: string
 split: ("development" | "holdout")
 taskClass: string
 evidenceShape: string

@@ -257,6 +257,7 @@ export function validateCalibrationDataset(
       policy.value.scopes.map((scope) => [`${scope.taskClass}\0${scope.evidenceShape}`, scope]),
     );
     const groupIds = new Set<string>();
+    const taskIdentities = new Set<string>();
     for (const [groupIndex, group] of dataset.value.taskGroups.entries()) {
       const groupPath = `$.taskGroups[${groupIndex}]`;
       if (groupIds.has(group.id))
@@ -266,6 +267,14 @@ export function validateCalibrationDataset(
           message: `task group "${group.id}" appears more than once`,
         });
       groupIds.add(group.id);
+      if (taskIdentities.has(group.taskIdentity))
+        issues.push({
+          path: `${groupPath}.taskIdentity`,
+          code: "duplicate_acceptance",
+          message:
+            "the same underlying task must have all variants in one task group and one split",
+        });
+      taskIdentities.add(group.taskIdentity);
       const scope = scopes.get(`${group.taskClass}\0${group.evidenceShape}`);
       if (group.split === "holdout" && scope === undefined) {
         issues.push({
@@ -358,6 +367,7 @@ export function validateCalibrationDataset(
             message: `expected ${instrument.value.repetitions} observations`,
           });
         }
+        const runIds = new Set<string>();
         for (const [observationIndex, observation] of item.observations.entries()) {
           const observationPath = `${itemPath}.observations[${observationIndex}]`;
           if (observationIds.has(observation.id))
@@ -385,6 +395,16 @@ export function validateCalibrationDataset(
           }
           const run = validateRun(definition.value, instrument.value, observation.run);
           const bundle = validateEvidenceBundle(observation.evidenceBundle);
+          if (run.ok) {
+            if (runIds.has(run.value.id))
+              issues.push({
+                path: `${observationPath}.run.id`,
+                code: "duplicate_verdict",
+                message:
+                  "the same measurement run cannot count as multiple repetitions of one case",
+              });
+            runIds.add(run.value.id);
+          }
           if (!run.ok)
             issues.push(
               ...run.issues.map((issue) => ({

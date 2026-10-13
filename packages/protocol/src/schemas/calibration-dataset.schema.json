@@ -16,9 +16,10 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "split", "taskClass", "evidenceShape", "cases"],
+        "required": ["id", "taskIdentity", "split", "taskClass", "evidenceShape", "cases"],
         "properties": {
           "id": { "type": "string", "minLength": 1 },
+          "taskIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
           "split": { "enum": ["development", "holdout"] },
           "taskClass": { "type": "string", "minLength": 1 },
           "evidenceShape": { "type": "string", "minLength": 1 },

@@ -110,5 +110,6 @@ findings, evidence IDs, and next steps. Quality is `pass`, `fail`, or `indetermi
 execution mode separately says whether the result is enforced or advisory. An evidence-
 backed mandatory failure takes precedence over other pending criteria, which remain visible.
 The protocol rejects duplicate criterion findings and a total quality result that conflicts
-with those findings. Without applicable verified calibration, an informative result is
+with those findings. Supplied failure categories remain machine-readable and are described
+in human-readable Chinese or English; unknown causes stay explicitly unattributed. Without applicable verified calibration, an informative result is
 still returned in the policy fallback mode and cannot block.
