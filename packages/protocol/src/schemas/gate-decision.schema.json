@@ -89,7 +89,16 @@
               "required": ["evidenceId", "status"],
               "properties": {
                 "evidenceId": { "type": "string", "minLength": 1 },
-                "status": { "enum": ["missing", "unavailable", "unsupported", "available"] }
+                "status": {
+                  "enum": [
+                    "missing",
+                    "unavailable",
+                    "truncated",
+                    "contradiction",
+                    "unsupported",
+                    "available"
+                  ]
+                }
               }
             }
           },

@@ -138,12 +138,16 @@ const evidenceStatusLabels: Record<GateLocale, Record<GateEvidenceStatus, string
   "zh-CN": {
     missing: "未采集",
     unavailable: "当前不可读取",
+    truncated: "内容已截断",
+    contradiction: "与其他证据矛盾",
     unsupported: "内容无法支持判断",
     available: "可读取",
   },
   "en-US": {
     missing: "not collected",
     unavailable: "currently unavailable",
+    truncated: "truncated",
+    contradiction: "contradicts other evidence",
     unsupported: "does not support the judgment",
     available: "available",
   },
@@ -207,6 +211,18 @@ function evidenceRemediation(
   if (distinctStatuses.has("unavailable"))
     actions.push(
       locale === "zh-CN" ? "恢复不可读取证据的访问" : "restore access to the unavailable evidence",
+    );
+  if (distinctStatuses.has("truncated"))
+    actions.push(
+      locale === "zh-CN"
+        ? "必要时提供未截断的完整材料"
+        : "provide the complete, untruncated material if needed",
+    );
+  if (distinctStatuses.has("contradiction"))
+    actions.push(
+      locale === "zh-CN"
+        ? "核对相互矛盾的证据并确认如何解释冲突"
+        : "review contradictory evidence and resolve or explain the conflict",
     );
   if (distinctStatuses.has("unsupported"))
     actions.push(
@@ -380,11 +396,9 @@ function requiredEvidenceStatuses(
     let status: GateEvidenceStatus;
     if (item === undefined || item.status === "no_evidence") status = "missing";
     else if (item.status === "unavailable") status = "unavailable";
-    else if (
-      item.status === "contradiction" ||
-      item.render?.state === "withheld" ||
-      item.render?.renderedLength === 0
-    )
+    else if (item.status === "contradiction") status = "contradiction";
+    else if (item.render?.state === "truncated") status = "truncated";
+    else if (item.render?.state === "withheld" || item.render?.renderedLength === 0)
       status = "unsupported";
     else status = "available";
     return { evidenceId: selector.evidenceId, status };
@@ -438,7 +452,11 @@ function evaluateCriterion(
       continue;
     }
     if (verdict.verdict === "unknown" || verdict.verdict === "insufficient") {
-      if (currentEvidenceStatuses.some((entry) => entry.status === "unsupported"))
+      if (
+        currentEvidenceStatuses.some(
+          (entry) => entry.status === "unsupported" || entry.status === "contradiction",
+        )
+      )
         evidenceFailure = true;
       if (currentEvidenceStatuses.some((entry) => entry.status === "missing"))
         missingRequiredEvidence = true;

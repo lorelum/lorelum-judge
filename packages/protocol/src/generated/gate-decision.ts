@@ -19,7 +19,7 @@ message: string
 evidenceIds: string[]
 evidenceStatuses?: {
 evidenceId: string
-status: ("missing" | "unavailable" | "unsupported" | "available")
+status: ("missing" | "unavailable" | "truncated" | "contradiction" | "unsupported" | "available")
 }[]
 requiredEvidenceIds: string[]
 nextStep: string

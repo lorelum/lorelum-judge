@@ -859,6 +859,15 @@ describe("calibration and gate behavior", () => {
     truncatedItem.render = { state: "truncated", originalLength: 10, renderedLength: 5 };
     const truncatedDecision = makeDecision(truncated, "unmet", "truncated");
     expect(truncatedDecision.ok && truncatedDecision.value.qualityOutcome).toBe("fail");
+    expect(truncatedDecision.ok && truncatedDecision.value.findings[0]?.evidenceStatuses).toEqual([
+      { evidenceId: "e1", status: "truncated" },
+    ]);
+    expect(truncatedDecision.ok && truncatedDecision.value.findings[0]?.message).toContain(
+      "e1：内容已截断",
+    );
+    expect(truncatedDecision.ok && truncatedDecision.value.findings[0]?.nextStep).toContain(
+      "未截断的完整材料",
+    );
 
     const contradictory = {
       schema: "lorelum.judge.evidence-bundle/v1",
@@ -886,6 +895,15 @@ describe("calibration and gate behavior", () => {
     );
     expect(contradictionDecision.ok && contradictionDecision.value.findings[0]?.reason).toBe(
       "unsupported_evidence",
+    );
+    expect(
+      contradictionDecision.ok && contradictionDecision.value.findings[0]?.evidenceStatuses,
+    ).toEqual([{ evidenceId: "e1", status: "contradiction" }]);
+    expect(contradictionDecision.ok && contradictionDecision.value.findings[0]?.message).toContain(
+      "e1：与其他证据矛盾",
+    );
+    expect(contradictionDecision.ok && contradictionDecision.value.findings[0]?.nextStep).toContain(
+      "核对相互矛盾的证据",
     );
 
     const unavailableDecision = makeDecision(bundle(["e1"], false), "unknown", "unavailable");
