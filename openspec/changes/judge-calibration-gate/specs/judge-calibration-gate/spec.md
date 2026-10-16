@@ -8,7 +8,7 @@ Calibrate Judge against known outcomes and return understandable gate decisions 
 
 ### Requirement: Calibration cases preserve labels, evidence, repetitions, and task grouping
 
-A calibration dataset MUST bind a measurement definition and instrument. Each task group MUST declare a stable source `taskIdentity`, one split, task class, evidence shape, and one or more labeled cases. A source task identity MUST appear in only one task group, so its variants cannot be split across development and holdout by changing a record ID. Each case MUST declare a criterion, kind-valid expected verdict, category (`decisive`, `equivalent`, `anti`, or `partial`), label provenance, evidence references, and exactly `InstrumentProfile.repetitions` observations with distinct measurement run identities. Each successful observation MUST contain a validated run and evidence bundle matching the bound identities; execution failures MUST be represented distinctly from verdicts and MAY retain an evidence bundle collected before failure. A task group MUST occur in only one split.
+A calibration dataset MUST bind a measurement definition and instrument. Each task group MUST declare a stable source `taskIdentity`, one split, task class, evidence shape, and one or more labeled cases. A source task identity MUST appear in only one task group, so its variants cannot be split across development and holdout by changing a record ID. Each case MUST declare a criterion, kind-valid expected verdict, category (`decisive`, `equivalent`, `anti`, or `partial`), label provenance, evidence references, and exactly `InstrumentProfile.repetitions` observations with distinct measurement run identities. Each completed measurement run identity MUST belong to only one task group in the dataset, while a run MAY be referenced by multiple criteria within that group. Each successful observation MUST contain a validated run and evidence bundle matching the bound identities; execution failures MUST be represented distinctly from verdicts and MAY retain an evidence bundle collected before failure. A task group MUST occur in only one split.
 
 #### Scenario: Split leakage is rejected
 
@@ -41,12 +41,16 @@ A calibration dataset MUST bind a measurement definition and instrument. Each ta
 
 ### Requirement: Calibration report uses held-out task groups and reports uncertainty
 
-Only holdout cases MUST contribute to qualification. Variants and repetitions in the same task group MUST count as at most one independent group per criterion and scope. The report MUST provide task-group and case counts plus numerator, denominator, point estimate, and a Wilson interval for false accept, false reject, abstention, and disagreement; the default confidence level is 95%. False-accept denominator is groups containing unacceptable gold cases; false-reject denominator is groups containing acceptable gold cases. Abstention and disagreement denominators are all groups in scope. Each group contributes at most one event to a metric, and each supplied failure category MUST be counted at most once per group. A zero denominator MUST have no estimate or interval; a non-zero denominator MUST have a complete count-consistent estimate and interval. No denominator, insufficient category coverage, under-minimum count, or an upper bound above policy MUST make the scope ineligible.
+Only holdout cases MUST contribute to qualification. Variants and repetitions in the same task group MUST count as at most one independent group per criterion and scope. A completed measurement run identity MUST belong to only one task group across the entire dataset, while reuse across criteria within that group is allowed. The report MUST provide task-group and case counts plus numerator, denominator, point estimate, and a Wilson interval for false accept, false reject, abstention, and disagreement; the default confidence level is 95%. False-accept denominator is groups containing unacceptable gold cases; false-reject denominator is groups containing acceptable gold cases. Abstention and disagreement denominators are all groups in scope. Each group contributes at most one event to a metric, and each supplied failure category MUST be counted at most once per group. A zero denominator MUST have no estimate or interval; a non-zero denominator MUST have a complete count-consistent estimate and interval. No denominator, insufficient category coverage, under-minimum count, or an upper bound above policy MUST make the scope ineligible.
 
 #### Scenario: Repetitions and variants do not inflate sample count
 
 - **WHEN** a task group has multiple behavior variants or repeated observations
 - **THEN** rates count the task group once per criterion and report cases and observations separately
+#### Scenario: Measurement runs cannot be reused across task groups
+
+- **WHEN** one completed run identity appears under cases in different task groups
+- **THEN** dataset validation rejects the data so one run cannot inflate independent sample counts
 
 #### Scenario: Development data cannot change qualification
 
@@ -79,6 +83,7 @@ The decision MUST include `pass`, `fail`, or `indeterminate`, execution mode, a 
 A decisive unacceptable result for an optional criterion MUST show the matching anchor while remaining explicitly non-blocking. When valid evidence is present but repeated verdicts are `unknown` or `insufficient`, the finding MUST identify a Judge abstention rather than claim evidence is missing; it MUST remain indeterminate and MUST NOT request evidence as though absence were established. Evidence marked `no_evidence`, `unavailable`, `truncated`, and `contradiction` MUST retain distinct per-ID statuses and appropriate next steps. For evidence-based findings, decisions MUST retain the status of each required evidence ID so mixed states are not collapsed into one action.
 
 When no declared task scope applies, the overall result MUST remain `indeterminate` even if every criterion is optional and its finding is advisory; the absence of scope MUST NOT be represented as successful assessment.
+Failed observations MAY include a validated evidence bundle. The gate MUST retain its per-ID states when producing the criterion finding; known missing or unavailable evidence MUST yield the corresponding collection or access remediation instead of being collapsed into a generic unsupported-evidence reason.
 
 #### Scenario: Supported failure takes precedence while other items remain visible
 

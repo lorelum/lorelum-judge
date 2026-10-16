@@ -1,11 +1,11 @@
 import type { Criterion, Verdict } from "@lorelum/judge-protocol";
 import {
+  aggregateVerdicts,
   type CalibrationArtifactV2,
   type CalibrationCase,
   type CalibrationReport,
   calibrationDatasetIdentity,
   calibrationReportIdentity,
-  decisiveVerdicts,
   definitionIdentity,
   type GatePolicyV2,
   gatePolicyIdentityV2,
@@ -23,6 +23,7 @@ import {
   validateGatePolicyV2,
   validateInstrument,
   validateVerdictEvidence,
+  wilsonInterval,
 } from "@lorelum/judge-protocol";
 
 export const DEFAULT_CALIBRATION_REPETITIONS = 3;
@@ -136,24 +137,6 @@ interface CaseResult {
   readonly failureCategories: readonly string[];
 }
 
-function interval(
-  rate: number,
-  n: number,
-  confidence: GatePolicyV2["confidenceLevel"],
-): readonly [number, number] {
-  const z =
-    confidence === 0.9
-      ? 1.6448536269514722
-      : confidence === 0.95
-        ? 1.959963984540054
-        : 2.5758293035489004;
-  const z2 = z * z;
-  const denominator = 1 + z2 / n;
-  const center = (rate + z2 / (2 * n)) / denominator;
-  const radius = (z * Math.sqrt((rate * (1 - rate)) / n + z2 / (4 * n * n))) / denominator;
-  return [Math.max(0, center - radius), Math.min(1, center + radius)];
-}
-
 function rate(
   numerator: number,
   denominator: number,
@@ -161,7 +144,7 @@ function rate(
 ): Rate {
   if (denominator === 0) return { numerator, denominator };
   const estimate = numerator / denominator;
-  const [lowerBound, upperBound] = interval(estimate, denominator, confidence);
+  const [lowerBound, upperBound] = wilsonInterval(numerator, denominator, confidence);
   return { numerator, denominator, estimate, lowerBound, upperBound };
 }
 
@@ -189,19 +172,10 @@ function evaluateCase(
     }
     verdicts.push(verdict.verdict);
   }
-  const counts = new Map<Verdict["verdict"], number>();
-  for (const verdict of verdicts) counts.set(verdict, (counts.get(verdict) ?? 0) + 1);
-  const highest = Math.max(0, ...counts.values());
-  const leaders = [...counts.entries()].filter(([, count]) => count === highest);
-  const prediction =
-    leaders.length === 1 &&
-    decisiveVerdicts[criterion.kind].includes(leaders[0]?.[0] as Verdict["verdict"]) &&
-    highest / repetitions >= minimumAgreement
-      ? leaders[0]?.[0]
-      : undefined;
+  const aggregate = aggregateVerdicts(criterion.kind, verdicts, repetitions, minimumAgreement);
   return {
-    prediction,
-    disagreement: new Set(verdicts).size > 1,
+    prediction: aggregate.prediction,
+    disagreement: aggregate.disagreement,
     failureCategories: failures,
   };
 }

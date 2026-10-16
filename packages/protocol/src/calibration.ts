@@ -15,6 +15,7 @@ import {
   validateInstrument,
   validateRun,
 } from "./measurement.js";
+import { wilsonInterval } from "./measurement-aggregation.js";
 import artifactSchema from "./schemas/calibration-artifact-v2.schema.json" with { type: "json" };
 import datasetSchema from "./schemas/calibration-dataset.schema.json" with { type: "json" };
 import reportSchema from "./schemas/calibration-report.schema.json" with { type: "json" };
@@ -258,6 +259,7 @@ export function validateCalibrationDataset(
     );
     const groupIds = new Set<string>();
     const taskIdentities = new Set<string>();
+    const runTaskGroups = new Map<string, string>();
     for (const [groupIndex, group] of dataset.value.taskGroups.entries()) {
       const groupPath = `$.taskGroups[${groupIndex}]`;
       if (groupIds.has(group.id))
@@ -396,6 +398,14 @@ export function validateCalibrationDataset(
           const run = validateRun(definition.value, instrument.value, observation.run);
           const bundle = validateEvidenceBundle(observation.evidenceBundle);
           if (run.ok) {
+            const owningGroup = runTaskGroups.get(run.value.id);
+            if (owningGroup !== undefined && owningGroup !== group.id)
+              issues.push({
+                path: `${observationPath}.run.id`,
+                code: "duplicate_verdict",
+                message: "the same measurement run cannot be counted in multiple task groups",
+              });
+            else runTaskGroups.set(run.value.id, group.id);
             if (runIds.has(run.value.id))
               issues.push({
                 path: `${observationPath}.run.id`,
@@ -537,7 +547,7 @@ export function validateCalibrationReport(raw: unknown): ValidationResult<Calibr
         }
         const estimate = rate.numerator / rate.denominator;
         const [lowerBound, upperBound] = wilsonInterval(
-          estimate,
+          rate.numerator,
           rate.denominator,
           result.value.confidenceLevel,
         );
@@ -583,27 +593,6 @@ export function validateCalibrationReport(raw: unknown): ValidationResult<Calibr
 
 function close(actual: number, expected: number): boolean {
   return Math.abs(actual - expected) <= 1e-12;
-}
-
-function wilsonInterval(
-  estimate: number,
-  denominator: number,
-  confidenceLevel: CalibrationReport["confidenceLevel"],
-): readonly [number, number] {
-  const z =
-    confidenceLevel === 0.9
-      ? 1.6448536269514722
-      : confidenceLevel === 0.95
-        ? 1.959963984540054
-        : 2.5758293035489004;
-  const z2 = z * z;
-  const adjustedDenominator = 1 + z2 / denominator;
-  const center = (estimate + z2 / (2 * denominator)) / adjustedDenominator;
-  const radius =
-    (z *
-      Math.sqrt((estimate * (1 - estimate)) / denominator + z2 / (4 * denominator * denominator))) /
-    adjustedDenominator;
-  return [Math.max(0, center - radius), Math.min(1, center + radius)];
 }
 
 export function validateCalibrationArtifactV2(

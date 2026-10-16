@@ -5,6 +5,7 @@ export * from "./evidence.js";
 export * from "./identity.js";
 export * from "./json.js";
 export * from "./measurement.js";
+export * from "./measurement-aggregation.js";
 export * from "./rubric.js";
 export * from "./task-contract.js";
 export type { IssueCode, ValidationIssue, ValidationResult } from "./validation.js";
