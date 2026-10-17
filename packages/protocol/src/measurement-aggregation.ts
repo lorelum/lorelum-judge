@@ -6,6 +6,13 @@ export interface VerdictAggregation {
   readonly abstained: boolean;
 }
 
+/**
+ * Majority vote with an agreement threshold. `denominator` is the planned
+ * repetition count, not the number of surviving votes: padded execution
+ * failures shrink the ratio instead of disappearing. A non-positive
+ * denominator never yields a prediction; callers validate repetition counts
+ * against the instrument schema before aggregating.
+ */
 export function aggregateVerdicts(
   kind: CriterionKind,
   verdicts: readonly VerdictValue[],
@@ -19,6 +26,7 @@ export function aggregateVerdicts(
   const leader = leaders.length === 1 ? leaders[0]?.[0] : undefined;
   const prediction =
     leader !== undefined &&
+    denominator > 0 &&
     decisiveVerdicts[kind].includes(leader) &&
     highest / denominator >= minimumAgreement
       ? leader
@@ -35,6 +43,12 @@ export function aggregateVerdicts(
 
 export type ConfidenceLevel = 0.9 | 0.95 | 0.99;
 
+/**
+ * Wilson score interval for `numerator` successes in `denominator` trials.
+ * Throws `RangeError` unless `0 <= numerator <= denominator` and
+ * `denominator > 0`. Callers outside a validator MUST pre-check counts or
+ * catch; validators route failures through structured issues instead.
+ */
 export function wilsonInterval(
   numerator: number,
   denominator: number,

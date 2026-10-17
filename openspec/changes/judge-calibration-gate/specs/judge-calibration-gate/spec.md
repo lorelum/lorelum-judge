@@ -100,6 +100,11 @@ Failed observations MAY include a validated evidence bundle. The gate MUST retai
 - **WHEN** a required evidence item is recorded as `unavailable`
 - **THEN** the result remains indeterminate and tells the user to restore access or collection instead of claiming the evidence was never provided
 
+#### Scenario: Known missing or unavailable evidence outranks generic unsupported evidence
+
+- **WHEN** required evidence is known missing or unavailable alongside an unsupported-citation failure
+- **THEN** the finding keeps reason `missing_evidence` or `unavailable_evidence` with the corresponding collection or access remediation, rather than collapsing into `unsupported_evidence`
+
 #### Scenario: Mixed evidence states retain per-item status
 
 - **WHEN** one required item is unavailable and another has not been collected

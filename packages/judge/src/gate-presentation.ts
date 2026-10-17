@@ -1,3 +1,9 @@
+/**
+ * Internal presentation layer for gate findings: the decision in `gate.ts`
+ * owns the outcome/reason semantics, this module only renders deterministic
+ * bilingual messages from the presentation model. Not exported from the
+ * package entrypoint; external consumers use `evaluateGate` results.
+ */
 import type { Criterion, GateDecision, Verdict } from "@lorelum/judge-protocol";
 
 type Finding = GateDecision["findings"][number];
