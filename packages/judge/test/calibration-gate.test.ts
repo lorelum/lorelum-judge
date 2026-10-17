@@ -1,16 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
-  type CalibrationDataset,
-  type Criterion,
-  calibrationDatasetIdentity,
-  definitionIdentity,
-  type InstrumentProfile,
-  identityOf,
-  instrumentIdentity,
+  type EvidenceBundle,
   type MeasurementDefinition,
-  type Verdict,
-  validateCalibrationDataset,
-  validateCalibrationReport,
   validateGateDecision,
   validateGatePolicyForV2,
 } from "@lorelum/judge-protocol";
@@ -21,425 +12,16 @@ import {
   evaluateGate,
   loadVerifiedCalibration,
 } from "../src/index.js";
-
-const hex = (character: string) => `sha256:${character.repeat(64)}`;
-
-function criterion(id: string, evidenceId: string): Criterion {
-  return {
-    schema: "lorelum.judge.criterion/v1",
-    id,
-    kind: "contract",
-    description: `The implementation satisfies ${id}`,
-    mandatory: true,
-    source: { origin: "contract", ref: `AC-${id}` },
-    anchors: [
-      { verdict: "met", description: "The requirement is met" },
-      { verdict: "unmet", description: "The requirement is not met" },
-    ],
-    evidence: [{ evidenceId, role: "primary" }],
-  };
-}
-
-function definition(ids = ["c1"]): MeasurementDefinition {
-  return {
-    schema: "lorelum.judge.measurement-definition/v1",
-    id: "measurement",
-    criteria: ids.map((id, index) => criterion(id, `e${index + 1}`)),
-  } as unknown as MeasurementDefinition;
-}
-
-function instrument(repetitions = 3): InstrumentProfile {
-  return {
-    schema: "lorelum.judge.instrument-profile/v1",
-    model: { provider: "test", name: "deterministic", version: "1" },
-    decoding: { temperature: 0, seed: 1 },
-    promptIdentity: hex("a"),
-    runtime: { name: "test-runtime", version: "1" },
-    repetitions,
-  };
-}
-
-function bundle(ids: readonly string[], present = true): Record<string, unknown> {
-  return {
-    schema: "lorelum.judge.evidence-bundle/v1",
-    items: ids.map((id, index) =>
-      present
-        ? {
-            schema: "lorelum.judge.evidence-item/v1",
-            id,
-            status: "present",
-            contentIdentity: hex(String(index + 1)),
-            render: { state: "rendered", originalLength: 5, renderedLength: 5 },
-          }
-        : { schema: "lorelum.judge.evidence-item/v1", id, status: "unavailable" },
-    ),
-  };
-}
-
-function run(
-  measuredDefinition: MeasurementDefinition,
-  measuredInstrument: InstrumentProfile,
-  id: string,
-  verdicts: Readonly<Record<string, Verdict["verdict"]>>,
-): Record<string, unknown> {
-  const defId = definitionIdentity(measuredDefinition);
-  const instId = instrumentIdentity(measuredInstrument);
-  if (!defId.ok || !instId.ok) throw new Error("test fixture identity failed");
-  return {
-    schema: "lorelum.judge.measurement-run/v1",
-    id,
-    definitionIdentity: defId.identity,
-    instrumentIdentity: instId.identity,
-    instrumentSource: "declared",
-    verdicts: measuredDefinition.criteria.map((item, index) => ({
-      schema: "lorelum.judge.verdict/v1",
-      criterionId: item.id,
-      verdict: verdicts[item.id] ?? "unknown",
-      evidenceIds:
-        verdicts[item.id] === "unknown" || verdicts[item.id] === "insufficient"
-          ? []
-          : [`e${index + 1}`],
-    })),
-  };
-}
-
-function makePolicy(
-  measuredDefinition: MeasurementDefinition,
-  measuredInstrument: InstrumentProfile,
-) {
-  const result = createDefaultGatePolicyV2({
-    id: "default-v1",
-    definition: measuredDefinition,
-    instrument: measuredInstrument,
-    scopes: [
-      {
-        taskClass: "backend",
-        evidenceShape: "test-results",
-        criterionIds: measuredDefinition.criteria.map((item) => item.id),
-      },
-    ],
-  });
-  if (!result.ok) throw new Error(JSON.stringify(result.issues));
-  return result.value;
-}
-
-function caseFor(
-  measuredDefinition: MeasurementDefinition,
-  measuredInstrument: InstrumentProfile,
-  groupId: string,
-  caseKind: "decisive" | "equivalent" | "anti" | "partial",
-  expected: "met" | "unmet",
-  prediction: "met" | "unmet" | "unknown" = expected,
-  present = true,
-) {
-  const evidenceIds = measuredDefinition.criteria.map((_item, index) => `e${index + 1}`);
-  return measuredDefinition.criteria.map((item, criterionIndex) => ({
-    id: `${groupId}-${item.id}-${caseKind}`,
-    criterionId: item.id,
-    expectedVerdict: expected,
-    caseKind,
-    provenance: { origin: "user", ref: `gold:${groupId}` },
-    evidenceIds: [evidenceIds[criterionIndex] ?? "e1"],
-    observations: Array.from({ length: measuredInstrument.repetitions }, (_unused, repetition) => ({
-      id: `${groupId}-${item.id}-${repetition}`,
-      status: "completed",
-      run: run(measuredDefinition, measuredInstrument, `${groupId}-${repetition}`, {
-        [item.id]: prediction,
-      }),
-      evidenceBundle: bundle(evidenceIds, present),
-    })),
-  }));
-}
-
-function datasetFor(
-  measuredDefinition: MeasurementDefinition,
-  measuredInstrument: InstrumentProfile,
-  groups: Array<{
-    id: string;
-    split?: "development" | "holdout";
-    kind: "decisive" | "equivalent" | "anti" | "partial";
-    expected: "met" | "unmet";
-    prediction?: "met" | "unmet" | "unknown";
-    present?: boolean;
-  }>,
-): CalibrationDataset {
-  const defId = definitionIdentity(measuredDefinition);
-  const instId = instrumentIdentity(measuredInstrument);
-  if (!defId.ok || !instId.ok) throw new Error("test fixture identity failed");
-  const taskGroups = groups.map((group) => {
-    const taskId = identityOf("lorelum.judge.calibration-task/v1", { sourceTask: group.id });
-    if (!taskId.ok) throw new Error("test fixture task identity failed");
-    return {
-      id: group.id,
-      taskIdentity: taskId.identity,
-      split: group.split ?? "holdout",
-      taskClass: "backend",
-      evidenceShape: "test-results",
-      cases: caseFor(
-        measuredDefinition,
-        measuredInstrument,
-        group.id,
-        group.kind,
-        group.expected,
-        group.prediction ?? group.expected,
-        group.present ?? true,
-      ),
-    };
-  });
-  return {
-    schema: "lorelum.judge.calibration-dataset/v1",
-    id: "known-cases",
-    definitionIdentity: defId.identity,
-    instrumentIdentity: instId.identity,
-    taskGroups,
-  } as unknown as CalibrationDataset;
-}
-
-function fullCalibrationFixture() {
-  const measuredDefinition = definition();
-  const measuredInstrument = instrument();
-  const policy = makePolicy(measuredDefinition, measuredInstrument);
-  const groups = [
-    ...Array.from({ length: 80 }, (_unused, index) => ({
-      id: `negative-${index}`,
-      kind: "anti" as const,
-      expected: "unmet" as const,
-    })),
-    ...Array.from({ length: 40 }, (_unused, index) => ({
-      id: `positive-${index}`,
-      kind: "decisive" as const,
-      expected: "met" as const,
-    })),
-    ...Array.from({ length: 40 }, (_unused, index) => ({
-      id: `equivalent-${index}`,
-      kind: "equivalent" as const,
-      expected: "met" as const,
-    })),
-  ];
-  const dataset = datasetFor(measuredDefinition, measuredInstrument, groups);
-  const built = buildCalibration({
-    definition: measuredDefinition,
-    instrument: measuredInstrument,
-    policy,
-    dataset,
-    validFrom: "2026-01-01T00:00:00Z",
-    validUntil: "2027-01-01T00:00:00Z",
-  });
-  if (!built.ok) throw new Error(JSON.stringify(built.issues));
-  return { measuredDefinition, measuredInstrument, policy, dataset, built };
-}
-
-describe("calibration protocol", () => {
-  test("validates task-group identity, provenance, repetitions, and evidence references", () => {
-    const measuredDefinition = definition();
-    const measuredInstrument = instrument();
-    const policy = makePolicy(measuredDefinition, measuredInstrument);
-    const dataset = datasetFor(measuredDefinition, measuredInstrument, [
-      { id: "one", kind: "equivalent", expected: "met" },
-    ]);
-    expect(
-      validateCalibrationDataset(dataset, measuredDefinition, measuredInstrument, policy).ok,
-    ).toBe(true);
-    expect(calibrationDatasetIdentity(dataset).ok).toBe(true);
-    const firstGroup = dataset.taskGroups[0];
-    if (firstGroup === undefined) throw new Error("expected a calibration task group");
-    const leaked = {
-      ...dataset,
-      taskGroups: [
-        ...dataset.taskGroups,
-        { ...firstGroup, id: `${firstGroup.id}-copy`, split: "development" as const },
-      ],
-    };
-    expect(
-      validateCalibrationDataset(leaked, measuredDefinition, measuredInstrument, policy).ok,
-    ).toBe(false);
-    const wrongIdentity = { ...dataset, instrumentIdentity: hex("f") };
-    expect(
-      validateCalibrationDataset(wrongIdentity, measuredDefinition, measuredInstrument, policy).ok,
-    ).toBe(false);
-    const short = structuredClone(dataset);
-    const shortCase = short.taskGroups[0]?.cases[0];
-    if (shortCase === undefined) throw new Error("expected a calibration case");
-    shortCase.observations.pop();
-    expect(
-      validateCalibrationDataset(short, measuredDefinition, measuredInstrument, policy).ok,
-    ).toBe(false);
-    const repeatedRun = structuredClone(dataset);
-    const repeatedCase = repeatedRun.taskGroups[0]?.cases[0];
-    if (repeatedCase === undefined) throw new Error("expected a calibration case");
-    const firstObservation = repeatedCase.observations[0];
-    const secondObservation = repeatedCase.observations[1];
-    if (firstObservation?.status !== "completed" || secondObservation?.status !== "completed") {
-      throw new Error("expected completed observations");
-    }
-    secondObservation.run.id = firstObservation.run.id;
-    expect(
-      validateCalibrationDataset(repeatedRun, measuredDefinition, measuredInstrument, policy).ok,
-    ).toBe(false);
-    const absent = structuredClone(dataset);
-    const absentCase = absent.taskGroups[0]?.cases[0];
-    if (absentCase === undefined) throw new Error("expected a calibration case");
-    absentCase.evidenceIds = ["not-in-bundle"];
-    expect(
-      validateCalibrationDataset(absent, measuredDefinition, measuredInstrument, policy).ok,
-    ).toBe(false);
-    const missingLabel = structuredClone(dataset);
-    const unlabeledCase = missingLabel.taskGroups[0]?.cases[0];
-    if (unlabeledCase === undefined) throw new Error("expected a calibration case");
-    Reflect.deleteProperty(unlabeledCase, "expectedVerdict");
-    expect(
-      validateCalibrationDataset(missingLabel, measuredDefinition, measuredInstrument, policy).ok,
-    ).toBe(false);
-  });
-
-  test("does not treat unsupported decisive evidence as a calibration failure label", () => {
-    const measuredDefinition = definition();
-    const measuredInstrument = instrument();
-    const policy = makePolicy(measuredDefinition, measuredInstrument);
-    const dataset = datasetFor(measuredDefinition, measuredInstrument, [
-      { id: "unsupported", kind: "anti", expected: "unmet", present: false },
-    ]);
-    const taskGroup = dataset.taskGroups[0];
-    const originalCase = taskGroup?.cases[0];
-    if (taskGroup === undefined || originalCase === undefined) {
-      throw new Error("expected the unsupported-evidence fixture");
-    }
-    const variant = structuredClone(originalCase);
-    variant.id = "unsupported-variant";
-    for (const [index, observation] of variant.observations.entries()) {
-      observation.id = `unsupported-variant-${index}`;
-    }
-    taskGroup.cases.push(variant);
-    expect(
-      validateCalibrationDataset(dataset, measuredDefinition, measuredInstrument, policy).ok,
-    ).toBe(true);
-    const built = buildCalibration({
-      definition: measuredDefinition,
-      instrument: measuredInstrument,
-      policy,
-      dataset,
-      validFrom: "2026-01-01T00:00:00Z",
-      validUntil: "2027-01-01T00:00:00Z",
-    });
-    expect(built.ok).toBe(true);
-    if (built.ok) {
-      expect(built.value.report.scopes[0]?.taskGroups).toBe(1);
-      expect(built.value.report.scopes[0]?.cases).toBe(2);
-      expect(built.value.report.scopes[0]?.observations).toBe(6);
-      expect(built.value.report.scopes[0]?.abstention.numerator).toBe(1);
-      expect(built.value.report.scopes[0]?.falseAccept.numerator).toBe(0);
-      expect(built.value.report.scopes[0]?.failureCounts.evidence).toBe(1);
-    }
-  });
-
-  test("preserves fully failed repetitions and their evidence without assigning a verdict", () => {
-    const measuredDefinition = definition();
-    const measuredInstrument = instrument();
-    const policy = makePolicy(measuredDefinition, measuredInstrument);
-    const dataset = datasetFor(measuredDefinition, measuredInstrument, [
-      { id: "provider-failed", kind: "anti", expected: "unmet" },
-    ]);
-    const taskGroup = dataset.taskGroups[0];
-    const calibrationCase = taskGroup?.cases[0];
-    if (taskGroup === undefined || calibrationCase === undefined) {
-      throw new Error("expected a failed-measurement fixture");
-    }
-    calibrationCase.observations = calibrationCase.observations.map((_observation, index) => ({
-      id: `provider-failed-${index}`,
-      status: "failed",
-      failureCategory: "provider",
-      message: "provider unavailable",
-      evidenceBundle: bundle(["e1"]),
-    })) as unknown as typeof calibrationCase.observations;
-    expect(
-      validateCalibrationDataset(dataset, measuredDefinition, measuredInstrument, policy).ok,
-    ).toBe(true);
-    const built = buildCalibration({
-      definition: measuredDefinition,
-      instrument: measuredInstrument,
-      policy,
-      dataset,
-      validFrom: "2026-01-01T00:00:00Z",
-      validUntil: "2027-01-01T00:00:00Z",
-    });
-    expect(built.ok).toBe(true);
-    if (built.ok) {
-      const scope = built.value.report.scopes[0];
-      expect(scope?.observations).toBe(3);
-      expect(scope?.abstention.numerator).toBe(1);
-      expect(scope?.falseAccept.numerator).toBe(0);
-      expect(scope?.failureCounts.provider).toBe(1);
-    }
-  });
-
-  test("validates complete rates, zero denominators, and task-group count bounds", () => {
-    const report = fullCalibrationFixture().built.value.report;
-    expect(validateCalibrationReport(report).ok).toBe(true);
-
-    const incomplete = structuredClone(report);
-    const incompleteScope = incomplete.scopes[0];
-    if (incompleteScope === undefined) throw new Error("expected a report scope");
-    delete incompleteScope.falseAccept.upperBound;
-    expect(validateCalibrationReport(incomplete).ok).toBe(false);
-
-    const inconsistent = structuredClone(report);
-    const inconsistentScope = inconsistent.scopes[0];
-    if (inconsistentScope === undefined) throw new Error("expected a report scope");
-    inconsistentScope.falseAccept.estimate = 0.25;
-    expect(validateCalibrationReport(inconsistent).ok).toBe(false);
-
-    const missingDenominator = structuredClone(report);
-    const missingScope = missingDenominator.scopes[0];
-    if (missingScope === undefined) throw new Error("expected a report scope");
-    const zeroRate = missingScope.falseAccept;
-    zeroRate.numerator = 0;
-    zeroRate.denominator = 0;
-    delete zeroRate.estimate;
-    delete zeroRate.lowerBound;
-    delete zeroRate.upperBound;
-    missingScope.eligible = false;
-    missingScope.reasons.push("missing_denominator");
-    expect(validateCalibrationReport(missingDenominator).ok).toBe(true);
-
-    zeroRate.estimate = 0;
-    expect(validateCalibrationReport(missingDenominator).ok).toBe(false);
-
-    const inflatedGroups = structuredClone(report);
-    const inflatedScope = inflatedGroups.scopes[0];
-    if (inflatedScope === undefined) throw new Error("expected a report scope");
-    inflatedScope.failureCounts.provider = inflatedScope.taskGroups + 1;
-    expect(validateCalibrationReport(inflatedGroups).ok).toBe(false);
-
-    const unknownFailureCategory = structuredClone(report);
-    const categoryScope = unknownFailureCategory.scopes[0];
-    if (categoryScope === undefined) throw new Error("expected a report scope");
-    categoryScope.failureCounts.guessed_root_cause = 1;
-    expect(validateCalibrationReport(unknownFailureCategory).ok).toBe(false);
-  });
-
-  test("builds only artifacts with schema-valid timestamps", () => {
-    const fixture = fullCalibrationFixture();
-    const shared = {
-      definition: fixture.measuredDefinition,
-      instrument: fixture.measuredInstrument,
-      policy: fixture.policy,
-      dataset: fixture.dataset,
-      validFrom: "2026-01-01T00:00:00Z",
-      validUntil: "2027-01-01T00:00:00Z",
-    };
-    const dateOnlyFrom = buildCalibration({ ...shared, validFrom: "2026-01-01" });
-    expect(dateOnlyFrom.ok).toBe(false);
-    expect(
-      !dateOnlyFrom.ok && dateOnlyFrom.issues.some((issue) => issue.path.endsWith("validFrom")),
-    ).toBe(true);
-
-    const dateOnlyUntil = buildCalibration({ ...shared, validUntil: "2027-01-01" });
-    expect(dateOnlyUntil.ok).toBe(false);
-    expect(
-      !dateOnlyUntil.ok && dateOnlyUntil.issues.some((issue) => issue.path.endsWith("validUntil")),
-    ).toBe(true);
-  });
-});
+import {
+  bundle,
+  datasetFor,
+  definition,
+  fullCalibrationFixture,
+  hex,
+  instrument,
+  makePolicy,
+  run,
+} from "./calibration-gate.fixtures.js";
 
 describe("calibration and gate behavior", () => {
   test("publishes the agreed default policy and qualifies only with held-out evidence", () => {
@@ -1048,6 +630,31 @@ describe("calibration and gate behavior", () => {
     expect(evidenceFailure.ok && evidenceFailure.value.qualityOutcome).toBe("indeterminate");
     expect(evidenceFailure.ok && evidenceFailure.value.findings[0]?.reason).toBe(
       "unsupported_evidence",
+    );
+    const failedWithEvidence = evaluateGate({
+      id: "evidence-failure-with-bundle",
+      definition: measuredDefinition,
+      instrument: measuredInstrument,
+      policy,
+      taskClass: "backend",
+      evidenceShape: "test-results",
+      observations: Array.from({ length: 3 }, (_unused, index) => ({
+        id: `evidence-failure-with-bundle-${index}`,
+        status: "failed" as const,
+        failureCategory: "evidence" as const,
+        message: "evidence could not be read",
+        evidenceBundle: bundle(["e1"], false) as unknown as EvidenceBundle,
+      })),
+      now: "2026-10-13T00:00:00Z",
+    });
+    expect(failedWithEvidence.ok && failedWithEvidence.value.findings[0]?.reason).toBe(
+      "unavailable_evidence",
+    );
+    expect(failedWithEvidence.ok && failedWithEvidence.value.findings[0]?.evidenceStatuses).toEqual(
+      [{ evidenceId: "e1", status: "unavailable" }],
+    );
+    expect(failedWithEvidence.ok && failedWithEvidence.value.findings[0]?.nextStep).toContain(
+      "恢复不可读取证据的访问",
     );
 
     const unattributed = evaluateGate({
