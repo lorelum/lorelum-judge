@@ -6,7 +6,7 @@
 
 - [x] 1.1 读取 #10、#11、现有契约和用户已确认决定，明确默认单次与 #11 边界。
 - [x] 1.2 从最新 origin/main 建立独立 codex/judge-review-execution-plan 分支，保留 #9 修复分支。
-- [ ] 1.3 完成 strict validation 和规划检查，建立同一长期 OpenSpec-first PR，记录规划验证。
+- [x] 1.3 完成 strict validation 和规划检查，建立同一长期 OpenSpec-first PR，记录规划验证。
 - [ ] 1.4 实现前确认 PR #50 最终状态及合并后的修复契约；更新本分支到含修复的 main，不复制未合并修复或混入其范围。若依赖仍未合并，可做不依赖部分，不能宣称集成验收完成。
 
 ## 2. Protocol

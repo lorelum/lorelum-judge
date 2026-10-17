@@ -9,7 +9,7 @@
 - 工作树：C:/Users/HP/.codex/worktrees/judge-review-execution/lorelum-judge
 - 分支：codex/judge-review-execution-plan
 - OpenSpec change：openspec/changes/judge-review-execution-plan/
-- 本规划 PR：启动后用 gh pr view codex/judge-review-execution-plan --repo lorelum/lorelum-judge 查询，继续这一个 PR。
+- 本规划 PR：https://github.com/lorelum/lorelum-judge/pull/51（draft）；启动后重新查询状态，继续这一个 PR，不另开实现 PR。
 - 先读 AGENTS.md、CONTRIBUTING.md、本 change 的 proposal.md、design.md、specs/judge-review-execution/spec.md 和 tasks.md；再读 protocol schemas、相关 stable specs、docs/architecture 与 docs/decisions。
 - 规则优先级依 AGENTS.md；本 prompt 记录本轮用户明确决定。未提交旧草稿不是规范。若发现真正冲突，指出具体来源，不静默改语义。
 - E:/lorelum-judge 是独立 #9 修复工作树，不能在里面实现 #10。E:/lorelum-judge-review-execution 存在旧的未跟踪草稿与 codex/judge-review-execution 分支；不要覆盖、清理、提交或将其旧方案当作当前决定。
