@@ -119,20 +119,23 @@ function evaluateCriterion(
   for (const observation of observations) {
     if (observation.status === "failed") {
       failureCategories.add(observation.failure);
-      if (observation.failure === "evidence") {
-        evidenceFailure = true;
-        if (observation.evidenceBundle !== undefined) {
-          const statuses = requiredEvidenceStatuses(criterion, observation.evidenceBundle);
-          for (const entry of statuses)
-            evidenceStatusEntries.set(`${entry.evidenceId}\0${entry.status}`, entry);
+      if (observation.evidenceBundle !== undefined) {
+        const statuses = requiredEvidenceStatuses(criterion, observation.evidenceBundle);
+        for (const entry of statuses)
+          evidenceStatusEntries.set(`${entry.evidenceId}\0${entry.status}`, entry);
+        if (observation.failure === "evidence") {
+          evidenceFailure = true;
           missingRequiredEvidence ||= statuses.some((entry) => entry.status === "missing");
           unavailableRequiredEvidence ||= statuses.some((entry) => entry.status === "unavailable");
         }
-      } else if (observation.failure === "provider" || observation.failure === "execution") {
+      } else if (observation.failure === "evidence") {
+        evidenceFailure = true;
+      }
+      if (observation.failure === "provider" || observation.failure === "execution") {
         executionFailure = true;
       } else if (observation.failure === "unattributed") {
         unattributedFailure = true;
-      } else {
+      } else if (observation.failure !== "evidence") {
         measurementFailure = true;
       }
       continue;

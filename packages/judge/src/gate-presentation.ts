@@ -207,7 +207,7 @@ const evidenceLabels: Record<GateLocale, Record<EvidenceStatus["status"], string
 function localized(locale: GateLocale, chinese: string, english: string): string {
   return locale === "zh-CN" ? chinese : english;
 }
-export function formatFailureCategories(
+function formatFailureCategories(
   categories: readonly FailureCategory[],
   locale: GateLocale,
 ): string {
@@ -216,10 +216,7 @@ export function formatFailureCategories(
     .map((category) => failureLabels[locale][category])
     .join(localized(locale, "、", ", "));
 }
-export function formatEvidenceStatuses(
-  statuses: readonly EvidenceStatus[],
-  locale: GateLocale,
-): string {
+function formatEvidenceStatuses(statuses: readonly EvidenceStatus[], locale: GateLocale): string {
   return statuses
     .map(
       (entry) =>
@@ -229,25 +226,8 @@ export function formatEvidenceStatuses(
     )
     .join(localized(locale, "；", "; "));
 }
-
-function failureDetails(model: FindingPresentationModel, locale: GateLocale): string {
-  return [...new Set(model.failureCategories)]
-    .sort()
-    .map((category) => failureLabels[locale][category])
-    .join(localized(locale, "、", ", "));
-}
-function evidenceDetails(model: FindingPresentationModel, locale: GateLocale): string {
-  return model.evidenceStatuses
-    .map(
-      (entry) =>
-        entry.evidenceId +
-        (locale === "zh-CN" ? "：" : ": ") +
-        evidenceLabels[locale][entry.status],
-    )
-    .join(localized(locale, "；", "; "));
-}
 function evidenceFinding(model: FindingPresentationModel, locale: GateLocale): string {
-  const details = evidenceDetails(model, locale);
+  const details = formatEvidenceStatuses(model.evidenceStatuses, locale);
   if (details.length > 0) {
     const summary = localized(
       locale,
@@ -307,20 +287,24 @@ const messageTemplates: Record<
         "：有待关注，但不是必选阻塞项。" +
         (m.hasVerdict ? `当前多数判断：${m.detail}。` : "") +
         "重复评审结论不一致。" +
-        (evidenceDetails(m, l) ? `证据状态：${evidenceDetails(m, l)}。` : ""),
+        (formatEvidenceStatuses(m.evidenceStatuses, l)
+          ? `证据状态：${formatEvidenceStatuses(m.evidenceStatuses, l)}。`
+          : ""),
       m.criterion +
         ": needs attention but is not a mandatory blocker." +
         (m.hasVerdict ? ` Current majority judgment: ${m.detail}.` : "") +
         " Repeated judgments disagree." +
-        (evidenceDetails(m, l) ? ` Evidence status: ${evidenceDetails(m, l)}.` : ""),
+        (formatEvidenceStatuses(m.evidenceStatuses, l)
+          ? ` Evidence status: ${formatEvidenceStatuses(m.evidenceStatuses, l)}.`
+          : ""),
     ),
   optional_failure: (m, l) =>
     localized(
       l,
-      `${m.criterion}：有待关注，但不是必选阻塞项。评审记录：${failureDetails(m, l)}。`,
+      `${m.criterion}：有待关注，但不是必选阻塞项。评审记录：${formatFailureCategories(m.failureCategories, l)}。`,
       m.criterion +
         ": needs attention but is not a mandatory blocker. Review record: " +
-        failureDetails(m, l) +
+        formatFailureCategories(m.failureCategories, l) +
         ".",
     ),
   optional_evidence: (m, l) =>
@@ -334,11 +318,15 @@ const messageTemplates: Record<
       l,
       m.criterion +
         "：有待关注，但不是必选阻塞项。Judge 未能作出明确判断；" +
-        (evidenceDetails(m, l) ? `证据状态：${evidenceDetails(m, l)}。` : "") +
+        (formatEvidenceStatuses(m.evidenceStatuses, l)
+          ? `证据状态：${formatEvidenceStatuses(m.evidenceStatuses, l)}。`
+          : "") +
         "这不表示质量不合格。",
       m.criterion +
         ": needs attention but is not a mandatory blocker. The judge did not reach a clear conclusion." +
-        (evidenceDetails(m, l) ? ` Evidence status: ${evidenceDetails(m, l)}.` : "") +
+        (formatEvidenceStatuses(m.evidenceStatuses, l)
+          ? ` Evidence status: ${formatEvidenceStatuses(m.evidenceStatuses, l)}.`
+          : "") +
         " This is not a quality failure.",
     ),
   optional_other: (m, l) =>
@@ -353,22 +341,30 @@ const messageTemplates: Record<
       "暂时无法判断“" +
         m.criterion +
         "”：重复评审结论不一致。" +
-        (failureDetails(m, l) ? ` 另有评审问题：${failureDetails(m, l)}。` : "") +
-        (evidenceDetails(m, l) ? ` 所需证据状态：${evidenceDetails(m, l)}。` : ""),
+        (formatFailureCategories(m.failureCategories, l)
+          ? ` 另有评审问题：${formatFailureCategories(m.failureCategories, l)}。`
+          : "") +
+        (formatEvidenceStatuses(m.evidenceStatuses, l)
+          ? ` 所需证据状态：${formatEvidenceStatuses(m.evidenceStatuses, l)}。`
+          : ""),
       "Unable to determine " +
         m.criterion +
         ": repeated judgments disagree." +
-        (failureDetails(m, l) ? ` Other review issues: ${failureDetails(m, l)}.` : "") +
-        (evidenceDetails(m, l) ? ` Required evidence status: ${evidenceDetails(m, l)}.` : ""),
+        (formatFailureCategories(m.failureCategories, l)
+          ? ` Other review issues: ${formatFailureCategories(m.failureCategories, l)}.`
+          : "") +
+        (formatEvidenceStatuses(m.evidenceStatuses, l)
+          ? ` Required evidence status: ${formatEvidenceStatuses(m.evidenceStatuses, l)}.`
+          : ""),
     ),
   execution_failure: (m, l) =>
     localized(
       l,
-      `暂时无法判断“${m.criterion}”：${failureDetails(m, l) || "评审未能完整执行"}。`,
+      `暂时无法判断“${m.criterion}”：${formatFailureCategories(m.failureCategories, l) || "评审未能完整执行"}。`,
       "Unable to determine " +
         m.criterion +
         ": " +
-        (failureDetails(m, l) || "the review did not complete") +
+        (formatFailureCategories(m.failureCategories, l) || "the review did not complete") +
         ".",
     ),
   evidence_failure: (m, l) =>
@@ -380,11 +376,11 @@ const messageTemplates: Record<
   measurement_failure: (m, l) =>
     localized(
       l,
-      `暂时无法判断“${m.criterion}”：评审发现${failureDetails(m, l)}。`,
+      `暂时无法判断“${m.criterion}”：评审发现${formatFailureCategories(m.failureCategories, l)}。`,
       "Unable to determine " +
         m.criterion +
         ": review issues were reported (" +
-        failureDetails(m, l) +
+        formatFailureCategories(m.failureCategories, l) +
         ").",
     ),
   unattributed_failure: (m, l) =>
@@ -401,12 +397,16 @@ const messageTemplates: Record<
       "暂时无法判断“" +
         m.criterion +
         "”：Judge 返回了“未知 / 证据不足”，未能作出明确判断。" +
-        (evidenceDetails(m, l) ? `证据状态：${evidenceDetails(m, l)}。` : "") +
+        (formatEvidenceStatuses(m.evidenceStatuses, l)
+          ? `证据状态：${formatEvidenceStatuses(m.evidenceStatuses, l)}。`
+          : "") +
         "请复核现有依据或重新评审；这不表示质量不合格。",
       "Unable to determine " +
         m.criterion +
         ": the judge returned an unknown or insufficient verdict and did not reach a clear conclusion." +
-        (evidenceDetails(m, l) ? ` Evidence status: ${evidenceDetails(m, l)}.` : "") +
+        (formatEvidenceStatuses(m.evidenceStatuses, l)
+          ? ` Evidence status: ${formatEvidenceStatuses(m.evidenceStatuses, l)}.`
+          : "") +
         " Review the current basis or rerun the review; this is not a quality failure.",
     ),
   indeterminate: (m, l) =>

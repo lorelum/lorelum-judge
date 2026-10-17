@@ -505,6 +505,7 @@ export function validateCalibrationReport(raw: unknown): ValidationResult<Calibr
         const path = `$.scopes[${index}].${name}`;
         if (rate.numerator > rate.denominator) {
           issues.push({ path, code: "report_mismatch", message: "numerator exceeds denominator" });
+          continue;
         }
         if (rate.denominator === 0) {
           hasMissingDenominator = true;
