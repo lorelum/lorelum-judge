@@ -62,6 +62,52 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
 - `measurementKey(definition, instrument, evidenceIdentities)` is a cache key.
   Evidence order and duplicates do not change it.
 
+## Review definitions, methods and executions (v2)
+
+`MeasurementDefinition/v2`, `InstrumentProfile/v2`, `MeasurementRun/v2`, and
+`ReviewExecution/v1` are additive. The v1 schemas, validators, and identities
+above keep their behavior; `validateAnyDefinition`, `validateAnyInstrument`,
+`validateAnyRun`, `anyDefinitionIdentity`, and `anyInstrumentIdentity` dispatch
+on the record's `schema`.
+
+- A v2 definition carries the same criteria plus one metadata record per
+  criterion: `criterionId`, `role` (`decisive` or `advisory`), and optional
+  `covers` and `appliesTo`. Metadata must match criteria one to one. The
+  original `criterion.mandatory` is never rewritten. A criterion is required
+  only when `role` is `decisive` and `mandatory` is true; `isRequiredCriterion`
+  and `requiredCriterionIds` expose that rule. `provenance` records either a
+  source rubric (`rubricId`, `rubricIdentity`, `contractIdentity`) or an
+  explicit v1 migration (`migratedFrom`, `sourceIdentity`).
+- `frozenRubricToDefinition(rubric, { id? })` accepts only a frozen `RubricSet`.
+  It preserves criteria, role, covers, appliesTo, contract identity, and the
+  computed rubric identity. A proposal is refused.
+- `migrateDefinitionV1(definition)` creates a v2 definition with `role:
+  decisive` and a migration source. Its identity differs from the v1 identity,
+  so an old calibration cannot silently bind to it.
+- `InstrumentProfile/v2.method` is either `program` or `llm`. A program method
+  names its checker and version or content identity, implementation, result
+  protocol, parser, runtime, and repetitions; it has no model, decoding, or
+  prompt fields. An LLM method adds provider protocol and adapter version,
+  endpoint identity, requested model, explicit decoding, prompt/compiler/render
+  and parser identities. Credentials are not fields of any record.
+- `validateMeasurementRunV2(definition, instrument, run)` still requires
+  exactly one valid verdict per criterion, matches both identities, and requires
+  `executionId` and `evidenceIdentity`. An LLM run also requires
+  `renderIdentity`; a program run must not carry one. A partial execution is
+  never a `MeasurementRun/v2`.
+- `ReviewExecution/v1` records `plannedCount` and one attempt per plan slot,
+  including `not_started`. Statuses are `completed`, `partial`, `failed`,
+  `cancelled`, and `not_started`. A completed attempt carries a complete v2 run;
+  a partial attempt carries only legal verdicts and explicit issues; a failed
+  attempt carries a structured failure; `not_started` carries no start time,
+  response, or run. LLM request and response metadata are whitelisted, and
+  unknowns are listed separately. `validateReviewExecution` enforces these
+  invariants against the definition and instrument.
+- Calibration dataset observations accept either v1 or v2 runs. `#9`
+  cross-record validators and the Judge verified loader use the version
+  dispatchers, so v1 artifacts keep their identity and a v2 method is not
+  silently treated as the v1 record.
+
 ## Calibration and gate records
 
 Calibration datasets, reports, and user-facing gate decisions are new v1 records.

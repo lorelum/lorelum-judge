@@ -27,7 +27,8 @@ boundaries.
 Framework implementations use `packages/runtime-*` and may depend on protocol
 and runtime. Concrete provider SDKs use `packages/provider-*` and may depend on
 protocol and runtime. Neither package type may leak SDK types into public
-contracts.
+contracts. The first provider is `@lorelum/provider-openai-compatible`, a
+non-streaming Chat Completions text transport with no judge dependency.
 
 ## Package Responsibilities
 

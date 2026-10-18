@@ -1,23 +1,26 @@
 import type { Criterion, Verdict } from "@lorelum/judge-protocol";
 import {
   aggregateVerdicts,
+  anyDefinitionIdentity,
+  anyInstrumentIdentity,
   type CalibrationObservation,
-  definitionIdentity,
   type EvidenceBundle,
   type GateDecision,
   type GatePolicyV2,
   gatePolicyIdentityV2,
   identityOf,
-  instrumentIdentity,
+  instrumentRepetitions,
+  isRequiredCriterion,
   type MeasurementRun,
+  type MeasurementRunV2,
   type ValidationIssue,
   type ValidationResult,
-  validateDefinition,
+  validateAnyDefinition,
+  validateAnyInstrument,
+  validateAnyRun,
   validateEvidenceBundle,
   validateGateDecision,
   validateGatePolicyForV2,
-  validateInstrument,
-  validateRun,
   validateVerdictEvidence,
 } from "@lorelum/judge-protocol";
 import { isVerifiedCalibration } from "./calibration.js";
@@ -49,6 +52,12 @@ export type GateObservation =
       readonly run: unknown;
       readonly evidenceBundle: unknown;
     }
+  | {
+      readonly status: "partial";
+      readonly id: string;
+      readonly verdicts: readonly Verdict[];
+      readonly evidenceBundle: unknown;
+    }
   | Extract<CalibrationObservation, { readonly status: "failed" }>;
 
 export interface EvaluateGateInput {
@@ -67,7 +76,12 @@ export interface EvaluateGateInput {
 type ParsedObservation =
   | {
       readonly status: "completed";
-      readonly run: MeasurementRun;
+      readonly run: MeasurementRun | MeasurementRunV2;
+      readonly evidenceBundle: EvidenceBundle;
+    }
+  | {
+      readonly status: "partial";
+      readonly verdicts: readonly Verdict[];
       readonly evidenceBundle: EvidenceBundle;
     }
   | {
@@ -101,6 +115,7 @@ function requiredEvidenceStatuses(
 
 function evaluateCriterion(
   criterion: Criterion,
+  required: boolean,
   policy: GatePolicyV2["criteria"][number],
   observations: readonly ParsedObservation[],
   minimumAgreement: number,
@@ -140,8 +155,11 @@ function evaluateCriterion(
       }
       continue;
     }
-    const { run, evidenceBundle } = observation;
-    const verdict = run.verdicts.find((entry) => entry.criterionId === criterion.id);
+    const evidenceBundle = observation.evidenceBundle;
+    const verdict =
+      observation.status === "completed"
+        ? observation.run.verdicts.find((entry) => entry.criterionId === criterion.id)
+        : observation.verdicts.find((entry) => entry.criterionId === criterion.id);
     if (verdict === undefined) {
       executionFailure = true;
       continue;
@@ -178,7 +196,7 @@ function evaluateCriterion(
   let outcome: GateDecision["findings"][number]["outcome"];
   let reason: GateDecision["findings"][number]["reason"];
   if (prediction === undefined) {
-    outcome = criterion.mandatory ? "indeterminate" : "advisory";
+    outcome = required ? "indeterminate" : "advisory";
     reason = disagrees
       ? "disagreement"
       : unavailableRequiredEvidence
@@ -197,10 +215,10 @@ function evaluateCriterion(
                     ? "abstention"
                     : "missing_evidence";
   } else if (!policy.acceptedVerdicts.some((verdict) => verdict === prediction)) {
-    outcome = criterion.mandatory ? "fail" : "advisory";
+    outcome = required ? "fail" : "advisory";
     reason = disagrees ? "disagreement" : "unacceptable";
   } else {
-    outcome = criterion.mandatory ? "pass" : "advisory";
+    outcome = required ? "pass" : "advisory";
     reason = disagrees ? "disagreement" : "acceptable";
   }
   const requiredEvidenceIds =
@@ -232,7 +250,7 @@ function evaluateCriterion(
   });
   const rendered = renderFinding(presentation, locale);
   return {
-    mandatory: criterion.mandatory,
+    mandatory: required,
     finding: {
       criterionId: criterion.id,
       criterionDescription: criterion.description,
@@ -255,8 +273,8 @@ function evaluateCriterion(
 export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDecision> {
   try {
     const locale = input.locale ?? "zh-CN";
-    const definitionResult = validateDefinition(input.definition);
-    const instrumentResult = validateInstrument(input.instrument);
+    const definitionResult = validateAnyDefinition(input.definition);
+    const instrumentResult = validateAnyInstrument(input.instrument);
     const policyResult = validateGatePolicyForV2(input.policy, input.definition, input.instrument);
     const issues: ValidationIssue[] = [
       ...(!definitionResult.ok ? definitionResult.issues : []),
@@ -265,20 +283,21 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
     ];
     if (!definitionResult.ok || !instrumentResult.ok || !policyResult.ok)
       return { ok: false, issues };
-    if (input.observations.length > instrumentResult.value.repetitions) {
+    const repetitions = instrumentRepetitions(instrumentResult.value);
+    if (input.observations.length > repetitions) {
       return {
         ok: false,
         issues: [
           {
             path: "$.observations",
             code: "report_mismatch",
-            message: `expected at most ${instrumentResult.value.repetitions} observations`,
+            message: `expected at most ${repetitions} observations`,
           },
         ],
       };
     }
-    const definitionId = definitionIdentity(definitionResult.value);
-    const instrumentId = instrumentIdentity(instrumentResult.value);
+    const definitionId = anyDefinitionIdentity(definitionResult.value);
+    const instrumentId = anyInstrumentIdentity(instrumentResult.value);
     const policyId = gatePolicyIdentityV2(policyResult.value);
     if (!definitionId.ok || !instrumentId.ok || !policyId.ok) {
       return {
@@ -333,6 +352,9 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
     const observationIds = new Set<string>();
     const runIds = new Set<string>();
     const observationIssues: ValidationIssue[] = [];
+    const criteria = new Map(
+      definitionResult.value.criteria.map((criterion) => [criterion.id, criterion]),
+    );
     const parsed: ParsedObservation[] = input.observations.map((observation, index) => {
       if (observationIds.has(observation.id)) {
         observationIssues.push({
@@ -362,7 +384,46 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
           evidenceBundle: bundle.value,
         };
       }
-      const run = validateRun(definitionResult.value, instrumentResult.value, observation.run);
+      if (observation.status === "partial") {
+        const bundle = validateEvidenceBundle(observation.evidenceBundle);
+        if (!bundle.ok) {
+          observationIssues.push(
+            ...bundle.issues.map((issue) => ({
+              ...issue,
+              path: `$.observations[${index}].evidenceBundle${issue.path.slice(1)}`,
+            })),
+          );
+          return { status: "failed", failure: "evidence" };
+        }
+        const seen = new Set<string>();
+        for (const [verdictIndex, verdict] of observation.verdicts.entries()) {
+          const criterion = criteria.get(verdict.criterionId);
+          if (criterion === undefined || seen.has(verdict.criterionId)) {
+            observationIssues.push({
+              path: `$.observations[${index}].verdicts[${verdictIndex}].criterionId`,
+              code: criterion === undefined ? "unknown_criterion" : "duplicate_verdict",
+              message: `invalid partial verdict "${verdict.criterionId}"`,
+            });
+            continue;
+          }
+          seen.add(verdict.criterionId);
+          const checked = validateVerdictEvidence(criterion, verdict, bundle.value);
+          if (!checked.ok) {
+            observationIssues.push(
+              ...checked.issues.map((issue) => ({
+                ...issue,
+                path: `$.observations[${index}].verdicts[${verdictIndex}]${issue.path.slice(1)}`,
+              })),
+            );
+          }
+        }
+        return {
+          status: "partial",
+          verdicts: observation.verdicts,
+          evidenceBundle: bundle.value,
+        };
+      }
+      const run = validateAnyRun(definitionResult.value, instrumentResult.value, observation.run);
       const bundle = validateEvidenceBundle(observation.evidenceBundle);
       if (run.ok) {
         if (runIds.has(run.value.id)) {
@@ -391,18 +452,11 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
       return { status: "completed", run: run.value, evidenceBundle: bundle.value };
     });
     if (observationIssues.length > 0) return { ok: false, issues: observationIssues };
-    if (input.observations.length < instrumentResult.value.repetitions) {
-      for (
-        let index = input.observations.length;
-        index < instrumentResult.value.repetitions;
-        index += 1
-      ) {
+    if (input.observations.length < repetitions) {
+      for (let index = input.observations.length; index < repetitions; index += 1) {
         parsed.push({ status: "failed", failure: "execution" });
       }
     }
-    const criteria = new Map(
-      definitionResult.value.criteria.map((criterion) => [criterion.id, criterion]),
-    );
     const rules = new Map(policyResult.value.criteria.map((rule) => [rule.criterionId, rule]));
     const applicableIds = selectedScope?.criterionIds ?? [];
     const results: CriterionResult[] = applicableIds.flatMap((criterionId) => {
@@ -410,7 +464,16 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
       const rule = rules.get(criterionId);
       return criterion === undefined || rule === undefined
         ? []
-        : [evaluateCriterion(criterion, rule, parsed, policyResult.value.minimumAgreement, locale)];
+        : [
+            evaluateCriterion(
+              criterion,
+              isRequiredCriterion(definitionResult.value, criterionId),
+              rule,
+              parsed,
+              policyResult.value.minimumAgreement,
+              locale,
+            ),
+          ];
     });
     const findings: GateDecision["findings"][number][] = results.map((result) => result.finding);
     if (selectedScope === undefined) {

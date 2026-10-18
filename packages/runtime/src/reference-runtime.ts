@@ -1,6 +1,6 @@
 import { toRuntimeFailure } from "./errors.js";
 import type { JsonObject, JsonValue } from "./json.js";
-import type { ModelResponse, RuntimeMessage } from "./model.js";
+import type { ModelGenerationConfig, ModelResponse, RuntimeMessage } from "./model.js";
 import type { RuntimePorts } from "./ports.js";
 import type {
   ResumeRequest,
@@ -318,6 +318,7 @@ async function executeRun(
   initialRun: RuntimeRun,
   signal: AbortSignal,
   ports: RuntimePorts,
+  modelConfig?: ModelGenerationConfig,
 ): Promise<RuntimeRun> {
   let run = initialRun;
 
@@ -358,6 +359,7 @@ async function executeRun(
             inputSchema: tool.inputSchema,
           })),
           signal,
+          ...(modelConfig === undefined ? {} : { config: modelConfig }),
         });
       } catch (error) {
         if (signal.aborted) {
@@ -444,7 +446,7 @@ export class ReferenceRuntime implements AgentRuntime {
         ...eventBase(run, ports),
         type: "run_started",
       });
-      return await executeRun(run, request.signal, ports);
+      return await executeRun(run, request.signal, ports, request.modelConfig);
     } catch (error) {
       return finishFailed(
         run ?? createFallbackRun(request),

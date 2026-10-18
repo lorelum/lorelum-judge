@@ -1,5 +1,5 @@
 import type { JsonValue } from "./json.js";
-import type { RuntimeMessage } from "./model.js";
+import type { ModelGenerationConfig, RuntimeMessage } from "./model.js";
 
 export type RuntimeStatus = "running" | "paused" | "completed" | "failed" | "cancelled";
 
@@ -86,6 +86,7 @@ export interface RuntimeRequest {
   readonly messages: readonly RuntimeMessage[];
   readonly maxSteps?: number;
   readonly signal: AbortSignal;
+  readonly modelConfig?: ModelGenerationConfig;
 }
 
 export interface ResumeRequest {

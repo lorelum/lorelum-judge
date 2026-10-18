@@ -7,15 +7,17 @@ import type { CalibrationReport, Rate } from "./generated/calibration-report.js"
 import type { GateDecision } from "./generated/gate-decision.js";
 import type { GatePolicyV2 } from "./generated/gate-policy-v2.js";
 import { identityOf } from "./identity.js";
-import {
-  definitionIdentity,
-  type IdentityOutcome,
-  instrumentIdentity,
-  validateDefinition,
-  validateInstrument,
-  validateRun,
-} from "./measurement.js";
+import type { IdentityOutcome } from "./measurement.js";
 import { wilsonInterval } from "./measurement-aggregation.js";
+import {
+  anyDefinitionIdentity,
+  anyInstrumentIdentity,
+  instrumentRepetitions,
+  isRequiredCriterion,
+  validateAnyDefinition,
+  validateAnyInstrument,
+  validateAnyRun,
+} from "./measurement-v2.js";
 import artifactSchema from "./schemas/calibration-artifact-v2.schema.json" with { type: "json" };
 import datasetSchema from "./schemas/calibration-dataset.schema.json" with { type: "json" };
 import reportSchema from "./schemas/calibration-report.schema.json" with { type: "json" };
@@ -84,16 +86,16 @@ export function validateGatePolicyForV2(
 ): ValidationResult<GatePolicyV2> {
   return guarded<ValidationResult<GatePolicyV2>>(() => {
     const policy = validateGatePolicyV2(raw);
-    const definition = validateDefinition(definitionInput);
-    const instrument = validateInstrument(instrumentInput);
+    const definition = validateAnyDefinition(definitionInput);
+    const instrument = validateAnyInstrument(instrumentInput);
     const issues: ValidationIssue[] = [];
     if (!policy.ok) issues.push(...policy.issues);
     if (!definition.ok) issues.push(...definition.issues);
     if (!instrument.ok) issues.push(...instrument.issues);
     if (!policy.ok || !definition.ok || !instrument.ok) return { ok: false, issues };
 
-    const definitionId = definitionIdentity(definition.value);
-    const instrumentId = instrumentIdentity(instrument.value);
+    const definitionId = anyDefinitionIdentity(definition.value);
+    const instrumentId = anyInstrumentIdentity(instrument.value);
     if (!definitionId.ok || !instrumentId.ok) {
       return {
         ok: false,
@@ -136,7 +138,7 @@ export function validateGatePolicyForV2(
       }
       if (
         criterion.kind === "contract" &&
-        criterion.mandatory &&
+        isRequiredCriterion(definition.value, criterion.id) &&
         (rule.acceptedVerdicts.length !== 1 || rule.acceptedVerdicts[0] !== "met")
       ) {
         issues.push({
@@ -189,7 +191,10 @@ export function validateGatePolicyForV2(
         covered.add(criterionId);
       }
       for (const criterion of definition.value.criteria) {
-        if (criterion.mandatory && !scope.criterionIds.includes(criterion.id)) {
+        if (
+          isRequiredCriterion(definition.value, criterion.id) &&
+          !scope.criterionIds.includes(criterion.id)
+        ) {
           issues.push({
             path: `$.scopes[${index}].criterionIds`,
             code: "invalid_applicability",
@@ -218,8 +223,8 @@ export function validateCalibrationDataset(
 ): ValidationResult<CalibrationDataset> {
   return guarded<ValidationResult<CalibrationDataset>>(() => {
     const dataset = simple(raw, checkDataset);
-    const definition = validateDefinition(definitionInput);
-    const instrument = validateInstrument(instrumentInput);
+    const definition = validateAnyDefinition(definitionInput);
+    const instrument = validateAnyInstrument(instrumentInput);
     const policy = validateGatePolicyForV2(policyInput, definitionInput, instrumentInput);
     const issues: ValidationIssue[] = [];
     if (!dataset.ok) issues.push(...dataset.issues);
@@ -228,8 +233,8 @@ export function validateCalibrationDataset(
     if (!policy.ok) issues.push(...policy.issues);
     if (!dataset.ok || !definition.ok || !instrument.ok || !policy.ok) return { ok: false, issues };
 
-    const definitionId = definitionIdentity(definition.value);
-    const instrumentId = instrumentIdentity(instrument.value);
+    const definitionId = anyDefinitionIdentity(definition.value);
+    const instrumentId = anyInstrumentIdentity(instrument.value);
     if (!definitionId.ok || !instrumentId.ok) {
       return {
         ok: false,
@@ -362,11 +367,11 @@ export function validateCalibrationDataset(
             message: "criterion is outside this scope",
           });
         }
-        if (item.observations.length !== instrument.value.repetitions) {
+        if (item.observations.length !== instrumentRepetitions(instrument.value)) {
           issues.push({
             path: `${itemPath}.observations`,
             code: "report_mismatch",
-            message: `expected ${instrument.value.repetitions} observations`,
+            message: `expected ${instrumentRepetitions(instrument.value)} observations`,
           });
         }
         const runIds = new Set<string>();
@@ -395,7 +400,7 @@ export function validateCalibrationDataset(
             }
             continue;
           }
-          const run = validateRun(definition.value, instrument.value, observation.run);
+          const run = validateAnyRun(definition.value, instrument.value, observation.run);
           const bundle = validateEvidenceBundle(observation.evidenceBundle);
           if (run.ok) {
             const owningGroup = runTaskGroups.get(run.value.id);

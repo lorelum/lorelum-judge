@@ -6,6 +6,66 @@ collection, judgment, calibration, and gate decisions.
 It consumes `@lorelum/judge-protocol` and `@lorelum/judge-runtime`. It does not own
 provider SDKs, framework orchestration, or the engineering implementation workflow.
 
+## Review execution
+
+`review(input, ports)` is the one-call entry for ordinary users: it executes the
+review once by default and returns the execution, findings, completeness, and a
+gate result with quality outcome, enforcement mode, reasons, and a localised
+explanation. When no policy is supplied it derives an advisory policy, so the
+caller still learns that the result cannot automatically gate delivery.
+`executeReview(input, ports)` exposes the same execution without the gate step;
+`evaluateReviewGate(input)` projects an existing execution when the caller owns
+that composition.
+
+- `input` carries a `MeasurementDefinition/v2` (or the result of
+  `frozenRubricToDefinition`), caller evidence, one method, optional explicit
+  `repetitions`, `timeoutMs`, `signal`, and an optional execution `id`. Ports
+  supply either a program checker or a `ModelPort`, plus an optional clock and ID
+  generator.
+- Inputs are snapshotted and identities are computed before any checker or model
+  call. Invalid input returns issues and invokes nothing. Repeated execution is
+  explicit and sequential: the default is one call, with no retry, cache, or
+  replacement attempt.
+- Program checkers receive the frozen definition, normalized evidence, and an
+  `AbortSignal`, and return a verdict list. Judge applies the same per-criterion
+  and evidence validation as the LLM path. Thrown errors and rejections become a
+  failed attempt; a pre-cancelled signal starts nothing; a late result cannot
+  replace `cancelled`.
+- The LLM path compiles a deterministic trusted rule prompt with `compilePrompt`
+  and calls the injected `ModelPort` once per attempt. The provider is
+  responsible only for transport.
+- The default reader accepts bare JSON or exactly one complete `json` or
+  unlabelled Markdown code block with surrounding whitespace. Text outside a
+  block, multiple blocks, duplicate JSON keys, malformed JSON, unknown envelope
+  fields, and non-array verdicts are refused. Nothing is repaired and no extra
+  model call is made.
+- Each criterion is validated independently. Legal findings stay visible;
+  missing, duplicate, unknown, illegal-verdict, and illegal-evidence entries get
+  explicit issues. Duplicates are never resolved by picking one. A completed
+  attempt carries a `MeasurementRun/v2`; a partial attempt carries legal
+  verdicts and issues but no run; an attempt with no legal verdict fails.
+- `ReviewExecution/v1` retains every planned slot: `completed`, `partial`,
+  `failed`, `cancelled`, or `not_started`, with request facts, server-declared
+  metadata, and unknowns kept separate. Evidence and rendered messages change
+  execution identity; they do not expire calibration by themselves.
+- `evaluateReviewGate(input)` projects the execution onto #9. It reuses the
+  verified-calibration loader, aggregation, evidence statuses, and localised
+  findings. Partial findings remain visible and a supported required failure can
+  keep the overall result failed, but an incomplete execution cannot pass and
+  cannot gain enforced mode. It also compares the actual model/provider,
+  endpoint, and explicit parameters with the instrument, and reports known
+  response-model conflicts or missing response information instead of assuming
+  a match. Without applicable calibration the review is advisory and never
+  blocks delivery by itself.
+
+The v1 definition/instrument/run helpers and the v1 calibration artifacts keep
+their behavior. `validateAny*` and the `#9` validators dispatch on the schema;
+an old calibration is not relabelled as verified for a migrational v2 identity.
+
+This package stops at review results. It does not produce code changes,
+suggestion workflows, automatic evidence collection, benchmark migration, or a
+workflow package skeleton; those belong to #11.
+
 ## Prompt compiler
 
 `compilePrompt({ prompt, evidence })` turns rules and raw evidence into:

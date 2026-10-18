@@ -23,6 +23,6 @@ Issue #10 补齐真实执行入口：调用方提供确定的规则、代码等�
 
 - 对应 issue：lorelum/lorelum-judge#10；依赖 #6–#9，后续 #11。
 - 规划基于 origin/main 的 0908b12c705f03c9b50ff287ab0f6d4de6b50c49。
-- 2026-10-17 查询时 PR #50 仍开放，head 为 593ac0d491c2d8519d7441a05916d2f4b624f366。#10 实现和验收必须接入其最终合并后的去重、证据状态保留和聚合修复；本规划不复制其代码，也不声称这些修复已进入 main。
+- PR #50 已于 2026-10-17 合并为 main 上的 9ce3fc40a70ef9db5ef33f14b3e2d8c49b4f211d，head 为 593ac0d491c2d8519d7441a05916d2f4b624f366。#10 分支已合入该 main 并接入其去重、证据状态保留和聚合修复。
 - 本轮仅交付 OpenSpec 与交接 prompt；同一 codex/judge-review-execution-plan 分支和同一 PR 后续继续实现。
 - AI assistance：用户与 AI 讨论收敛产品边界，AI 编写本规划；尚未实现，也尚未完成独立实现 review。

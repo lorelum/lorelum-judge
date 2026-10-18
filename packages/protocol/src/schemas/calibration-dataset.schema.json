@@ -81,7 +81,12 @@
                         "properties": {
                           "id": { "type": "string", "minLength": 1 },
                           "status": { "const": "completed" },
-                          "run": { "$ref": "urn:lorelum:judge:measurement-run:v1" },
+                          "run": {
+                            "oneOf": [
+                              { "$ref": "urn:lorelum:judge:measurement-run:v1" },
+                              { "$ref": "urn:lorelum:judge:measurement-run:v2" }
+                            ]
+                          },
                           "evidenceBundle": { "$ref": "urn:lorelum:judge:evidence-bundle:v1" }
                         }
                       },
