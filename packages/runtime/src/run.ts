@@ -77,6 +77,7 @@ export interface RuntimeRun {
   readonly events: readonly RuntimeEvent[];
   readonly output?: JsonValue;
   readonly failure?: RuntimeFailure;
+  readonly modelConfig?: ModelGenerationConfig;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -93,6 +94,8 @@ export interface ResumeRequest {
   readonly runId: string;
   readonly maxSteps?: number;
   readonly signal: AbortSignal;
+  /** Supplied only to override the configuration stored with the run. */
+  readonly modelConfig?: ModelGenerationConfig;
 }
 
 export type ResumeResult =

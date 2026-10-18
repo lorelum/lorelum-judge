@@ -73,6 +73,7 @@ function createRun(request: RuntimeRequest, ports: RuntimePorts): RuntimeRun {
     messages: [...request.messages],
     steps: [],
     events: [],
+    ...(request.modelConfig === undefined ? {} : { modelConfig: request.modelConfig }),
     createdAt: now,
     updatedAt: now,
   };
@@ -88,6 +89,7 @@ function createFallbackRun(request: RuntimeRequest): RuntimeRun {
     messages: [...request.messages],
     steps: [],
     events: [],
+    ...(request.modelConfig === undefined ? {} : { modelConfig: request.modelConfig }),
     createdAt: FALLBACK_TIMESTAMP,
     updatedAt: FALLBACK_TIMESTAMP,
   };
@@ -521,7 +523,12 @@ export class ReferenceRuntime implements AgentRuntime {
       maxSteps: nextMaxSteps,
       updatedAt,
     };
-    const run = await executeRun(resumable, request.signal, ports);
+    const run = await executeRun(
+      resumable,
+      request.signal,
+      ports,
+      request.modelConfig ?? stored.modelConfig,
+    );
     return { ok: true, run };
   }
 }

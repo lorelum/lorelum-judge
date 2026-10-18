@@ -166,6 +166,28 @@ describe("v2 calibration records", () => {
     expect(result.ok).toBe(true);
   });
 
+  test("a v2 run must match its evidence bundle", () => {
+    const value = fixtures();
+    const group = value.dataset.taskGroups[0];
+    const observation = group?.cases[0]?.observations[0];
+    if (observation === undefined || observation.status !== "completed") {
+      throw new Error("fixture observation missing");
+    }
+    const item = observation.evidenceBundle.items[0];
+    if (item === undefined) throw new Error("fixture evidence missing");
+    observation.evidenceBundle.items[0] = { ...item, contentIdentity: hex("9") };
+    const result = validateCalibrationDataset(
+      value.dataset,
+      value.definition,
+      value.instrument,
+      value.policy,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.map((issue) => issue.code)).toContain("identity_mismatch");
+    }
+  });
+
   test("verified loading recomputes v2 report and identities", () => {
     const value = fixtures();
     const built = buildCalibration({

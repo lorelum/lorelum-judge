@@ -14,6 +14,7 @@ import {
   anyInstrumentIdentity,
   instrumentRepetitions,
   isRequiredCriterion,
+  measurementRunEvidenceIdentityMatches,
   validateAnyDefinition,
   validateAnyInstrument,
   validateAnyRun,
@@ -437,6 +438,13 @@ export function validateCalibrationDataset(
             continue;
           }
           if (!run.ok) continue;
+          if (!measurementRunEvidenceIdentityMatches(run.value, bundle.value)) {
+            issues.push({
+              path: `${observationPath}.run.evidenceIdentity`,
+              code: "identity_mismatch",
+              message: "run was not measured with this evidence bundle",
+            });
+          }
           const byId = new Map(run.value.verdicts.map((verdict) => [verdict.criterionId, verdict]));
           for (const [criterionId, verdict] of byId) {
             const owner = criteria.get(criterionId);

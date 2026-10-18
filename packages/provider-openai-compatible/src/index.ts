@@ -258,7 +258,6 @@ export function createOpenAiCompatibleModel(config: OpenAiCompatibleConfig): Mod
               controller.abort();
             }, config.timeoutMs);
 
-      let response: Response;
       try {
         const headers: Record<string, string> = {
           "content-type": "application/json",
@@ -267,49 +266,58 @@ export function createOpenAiCompatibleModel(config: OpenAiCompatibleConfig): Mod
         if (config.apiKey !== undefined) {
           headers.authorization = `Bearer ${config.apiKey}`;
         }
-        response = await fetchImpl(url, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-      } catch {
-        if (timedOut) {
-          throw new ProviderTransportError("timeout", "the model request timed out");
+        let response: Response;
+        try {
+          response = await fetchImpl(url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          });
+        } catch {
+          if (timedOut) {
+            throw new ProviderTransportError("timeout", "the model request timed out");
+          }
+          if (request.signal.aborted) {
+            throw new ProviderTransportError("cancelled", "the request was cancelled");
+          }
+          throw new ProviderTransportError(
+            "network_error",
+            "the model endpoint could not be reached",
+          );
         }
-        if (request.signal.aborted) {
-          throw new ProviderTransportError("cancelled", "the request was cancelled");
+
+        if (!response.ok) {
+          await response.body?.cancel();
+          throw new ProviderTransportError(
+            "http_error",
+            `the model endpoint returned HTTP ${response.status}`,
+            response.status,
+          );
         }
-        throw new ProviderTransportError(
-          "network_error",
-          "the model endpoint could not be reached",
-        );
+
+        let payload: unknown;
+        try {
+          payload = await response.json();
+        } catch {
+          if (timedOut) {
+            throw new ProviderTransportError("timeout", "the model request timed out");
+          }
+          if (request.signal.aborted) {
+            throw new ProviderTransportError("cancelled", "the request was cancelled");
+          }
+          throw new ProviderTransportError(
+            "invalid_response",
+            "the model endpoint did not return JSON",
+            response.status,
+          );
+        }
+        const facts = readResponse(payload, response.status);
+        return { kind: "message", content: facts.content, metadata: facts.metadata };
       } finally {
         clearTimeout(timer);
         request.signal.removeEventListener("abort", abort);
       }
-
-      if (!response.ok) {
-        await response.body?.cancel();
-        throw new ProviderTransportError(
-          "http_error",
-          `the model endpoint returned HTTP ${response.status}`,
-          response.status,
-        );
-      }
-
-      let payload: unknown;
-      try {
-        payload = await response.json();
-      } catch {
-        throw new ProviderTransportError(
-          "invalid_response",
-          "the model endpoint did not return JSON",
-          response.status,
-        );
-      }
-      const facts = readResponse(payload, response.status);
-      return { kind: "message", content: facts.content, metadata: facts.metadata };
     },
   };
 }

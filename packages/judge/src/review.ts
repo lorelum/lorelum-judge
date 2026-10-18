@@ -347,6 +347,7 @@ function withAttemptBoundary<T>(
   promise: Promise<T>,
   signal: AbortSignal,
   timeoutMs: number | undefined,
+  abortOnTimeout?: () => void,
 ): Promise<T> {
   if (signal.aborted) {
     return Promise.reject(new ReviewAbortError());
@@ -369,6 +370,7 @@ function withAttemptBoundary<T>(
         ? undefined
         : setTimeout(() => {
             finish(() => reject(new ReviewTimeoutError()));
+            abortOnTimeout?.();
           }, timeoutMs);
     promise.then(
       (value) => {
@@ -796,6 +798,10 @@ async function execute(input: unknown, ports: ReviewPorts): Promise<ExecuteRevie
       continue;
     }
     const startedAt = clock.now().toISOString();
+    const attemptController = new AbortController();
+    const abortAttempt = () => attemptController.abort();
+    activeSignal.addEventListener("abort", abortAttempt, { once: true });
+    if (activeSignal.aborted) attemptController.abort();
     try {
       let raw: readonly unknown[] | undefined;
       let responseMetadata: ModelResponseMetadata | undefined;
@@ -811,11 +817,12 @@ async function execute(input: unknown, ports: ReviewPorts): Promise<ExecuteRevie
             checker({
               definition: definition.value,
               evidence: materialCheck.materials,
-              signal: activeSignal,
+              signal: attemptController.signal,
             }),
           ),
-          activeSignal,
+          attemptController.signal,
           timeoutMs,
+          () => attemptController.abort(),
         );
         raw = readCheckerOutput(output);
         if (raw === undefined) {
@@ -843,11 +850,12 @@ async function execute(input: unknown, ports: ReviewPorts): Promise<ExecuteRevie
             stepIndex: index,
             messages: messages ?? [],
             tools: [],
-            signal: activeSignal,
+            signal: attemptController.signal,
             config: generation,
           }),
-          activeSignal,
+          attemptController.signal,
           timeoutMs,
+          () => attemptController.abort(),
         );
         const facts = responseFacts(response);
         if (facts === undefined) {
@@ -1024,6 +1032,8 @@ async function execute(input: unknown, ports: ReviewPorts): Promise<ExecuteRevie
           : {}),
         failure,
       });
+    } finally {
+      activeSignal.removeEventListener("abort", abortAttempt);
     }
   }
 

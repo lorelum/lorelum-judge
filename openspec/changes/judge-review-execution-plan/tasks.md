@@ -48,7 +48,7 @@
 
 - 实现内容：protocol v2 定义/方法/完整 run/执行记录及冻结 rubric 转换与 v1 迁移；#9 交叉校验与 verified loader 版本分派；runtime 模型配置与响应 metadata；`@lorelum/provider-openai-compatible` 非流式 HTTP provider；`executeReview`、默认读取器、逐项校验、显式多次与生命周期；`evaluateReviewGate` 与一次调用 `review`；离线 program/mock LLM/review-to-gate 示例。
 - `bun install --frozen-lockfile`：通过，Bun 1.4.2。
-- `bun run validate`：通过；`biome check`、repository baseline、layer check、生成类型 up-to-date、typecheck、678 tests / 0 fail、6 package builds、Loaded 6 built package exports in Node ESM、隔离消费者三类示例通过。
+- `bun run validate`：通过；`biome check`、repository baseline、layer check、生成类型 up-to-date、typecheck、685 tests / 0 fail、6 package builds、Loaded 6 built package exports in Node ESM、隔离消费者三类示例通过。
 - runtime conformance：passed=true，18/18。
 - `openspec validate judge-review-execution-plan --type change --strict`：Change 'judge-review-execution-plan' is valid。
 - 未执行：独立只读 review（待固定 commit SHA 后进行）；未使用真实 provider、key 或外部模型；合成 policy/示例不构成真实校准或质量证明。

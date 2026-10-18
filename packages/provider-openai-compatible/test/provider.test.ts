@@ -274,6 +274,26 @@ describe("OpenAI-compatible transport", () => {
     });
   });
 
+  test("times out while the response body is still streaming", async () => {
+    // Integration test of transport timing: headers arrive, body does not.
+    const server = await harness((_body, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.write('{"id":"resp","model":"model-1","choices":[');
+      setTimeout(() => {
+        response.end(
+          `${JSON.stringify({
+            message: { content: "late" },
+            finish_reason: "stop",
+          })}]}`,
+        );
+      }, 200);
+    });
+    const model = createOpenAiCompatibleModel({ endpoint: server.url, timeoutMs: 20 });
+    await expect(model.generate(request({ model: "model-1" }))).rejects.toMatchObject({
+      code: "timeout",
+    });
+  });
+
   test("cancellation stops the request without a retry", async () => {
     const server = await harness(() => {
       // Never responds; the abort signal is the only completion.

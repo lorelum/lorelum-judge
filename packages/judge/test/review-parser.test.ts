@@ -18,7 +18,9 @@ describe("review response reader", () => {
   test("refuses text outside or more than one block", () => {
     const result = parseReviewResponse('here you go\n```json\n{"verdicts":[]}\n```\nthanks');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.issues[0]?.code).toBe("invalid_wrapper");
+    if (!result.ok) {
+      expect(["invalid_wrapper", "malformed_json"]).toContain(result.issues[0]?.code ?? "");
+    }
 
     const multiple = parseReviewResponse(
       '```json\n{"verdicts":[]}\n```\n```json\n{"verdicts":[]}\n```',

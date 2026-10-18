@@ -13,6 +13,7 @@ import {
   isRequiredCriterion,
   type MeasurementRun,
   type MeasurementRunV2,
+  measurementRunEvidenceIdentityMatches,
   type ValidationIssue,
   type ValidationResult,
   validateAnyDefinition,
@@ -448,6 +449,9 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
           failure: evidenceFailure ? "evidence" : "unattributed",
           ...(bundle.ok ? { evidenceBundle: bundle.value } : {}),
         };
+      }
+      if (!measurementRunEvidenceIdentityMatches(run.value, bundle.value)) {
+        return { status: "failed", failure: "evidence", evidenceBundle: bundle.value };
       }
       return { status: "completed", run: run.value, evidenceBundle: bundle.value };
     });

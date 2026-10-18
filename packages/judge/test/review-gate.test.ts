@@ -7,7 +7,13 @@ import {
   validateGatePolicyV2,
 } from "@lorelum/judge-protocol";
 
-import { evaluateReviewGate, executeReview, type ProgramChecker, review } from "../src/index.js";
+import {
+  evaluateGate,
+  evaluateReviewGate,
+  executeReview,
+  type ProgramChecker,
+  review,
+} from "../src/index.js";
 
 function definition(roles: readonly ("decisive" | "advisory")[] = ["decisive", "decisive"]) {
   return {
@@ -315,7 +321,66 @@ describe("evaluateReviewGate", () => {
   });
 });
 
+describe("direct gate evidence binding", () => {
+  test("a v2 run is rejected when its evidence bundle differs", async () => {
+    const reviewed = await executionFor(() => ({
+      verdicts: [met("c1", "e1"), met("c2", "e2")],
+    }));
+    const attempt = reviewed.execution.attempts[0];
+    if (attempt?.run === undefined || attempt.evidenceBundle === undefined) {
+      throw new Error("fixture attempt incomplete");
+    }
+    const bundle = structuredClone(attempt.evidenceBundle);
+    const first = bundle.items[0];
+    if (first === undefined) throw new Error("fixture bundle empty");
+    first.contentIdentity = `sha256:${"9".repeat(64)}`;
+    const result = evaluateGate({
+      id: "decision",
+      definition: reviewed.definition,
+      instrument: reviewed.instrument,
+      policy: policy(reviewed.definition, reviewed.instrument),
+      taskClass: "code",
+      evidenceShape: "code",
+      observations: [
+        {
+          status: "completed",
+          id: attempt.id,
+          run: attempt.run,
+          evidenceBundle: bundle,
+        },
+      ],
+      now: "2026-10-18T00:00:00.000Z",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.qualityOutcome).toBe("indeterminate");
+    expect(result.value.findings.some((finding) => finding.reason === "unsupported_evidence")).toBe(
+      true,
+    );
+  });
+});
+
 describe("one-call review", () => {
+  test("rejects an invalid gate policy before calling the checker", async () => {
+    let calls = 0;
+    const result = await review(
+      {
+        definition: definition(),
+        evidence,
+        method: { kind: "program", checker: { id: "offline", version: "1" } },
+        gate: { policy: { schema: "not-a-policy" } },
+      },
+      {
+        checker: () => {
+          calls += 1;
+          return { verdicts: [met("c1", "e1"), met("c2", "e2")] };
+        },
+      },
+    );
+    expect(result.ok).toBe(false);
+    expect(calls).toBe(0);
+  });
+
   test("returns findings, completion and advisory gate information", async () => {
     let calls = 0;
     const result = await review(

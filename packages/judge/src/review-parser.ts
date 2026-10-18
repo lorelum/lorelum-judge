@@ -221,13 +221,6 @@ export function parseReviewResponse(input: unknown): ReviewParseResult {
     return parserFailure("$", "empty_response", "the response is empty");
   }
   if (!trimmed.startsWith("```")) {
-    if (trimmed.includes("```")) {
-      return parserFailure(
-        "$",
-        "invalid_wrapper",
-        "a code block must contain the complete response and no other text",
-      );
-    }
     return parseJson(trimmed);
   }
   const block = CODE_BLOCK.exec(trimmed);

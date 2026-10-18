@@ -777,4 +777,22 @@ export function validateAnyRun(
     : validateRun(definitionInput, instrumentInput, raw);
 }
 
+/**
+ * True when a completed run is bound to the supplied evidence bundle. v1 runs
+ * carry no evidence identity, so their existing semantics are unchanged.
+ */
+export function measurementRunEvidenceIdentityMatches(run: unknown, bundle: unknown): boolean {
+  if (typeof run !== "object" || run === null || !("schema" in run)) return false;
+  if (run.schema === "lorelum.judge.measurement-run/v1") return true;
+  if (
+    run.schema !== "lorelum.judge.measurement-run/v2" ||
+    !("evidenceIdentity" in run) ||
+    typeof run.evidenceIdentity !== "string"
+  ) {
+    return false;
+  }
+  const identity = evidenceBundleIdentity(bundle);
+  return identity.ok && identity.identity === run.evidenceIdentity;
+}
+
 export type ReviewEvidenceStatus = EvidenceItem["status"];

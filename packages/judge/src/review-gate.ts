@@ -64,6 +64,18 @@ const REASON_LABELS: Readonly<Record<string, { readonly zh: string; readonly en:
     zh: "服务端完成原因未知",
     en: "the finish reason is unknown",
   },
+  prompt_identity_unknown: {
+    zh: "实际规则提示身份未知",
+    en: "the actual rule prompt identity is unknown",
+  },
+  prompt_identity_conflict: {
+    zh: "实际规则提示与方法身份冲突",
+    en: "the actual rule prompt conflicts with the method",
+  },
+  render_identity_conflict: {
+    zh: "实际消息渲染与执行记录冲突",
+    en: "the rendered messages conflict with the execution record",
+  },
   execution_complete: { zh: "评审按计划完成", en: "the review completed" },
   execution_partial: { zh: "评审只得到部分结论", en: "the review is partial" },
   execution_failed: { zh: "评审没有产生可用结论", en: "the review failed" },
@@ -188,6 +200,22 @@ function requestIssues(
     ) {
       reasons.add("request_mismatch");
       blocking = true;
+    }
+    if (request.promptIdentity === undefined) {
+      reasons.add("prompt_identity_unknown");
+      blocking = true;
+    } else if (request.promptIdentity !== method.promptIdentity) {
+      reasons.add("prompt_identity_conflict");
+      blocking = true;
+    }
+    if (attempt.status === "completed") {
+      if (request.renderIdentity === undefined || attempt.run?.renderIdentity === undefined) {
+        reasons.add("render_identity_conflict");
+        blocking = true;
+      } else if (attempt.run.renderIdentity !== request.renderIdentity) {
+        reasons.add("render_identity_conflict");
+        blocking = true;
+      }
     }
     const response = attempt.llm.response;
     if (response === undefined) {

@@ -1,4 +1,12 @@
-import type { GatePolicyV2 } from "@lorelum/judge-protocol";
+import {
+  type GatePolicyV2,
+  measurementDefinitionIdentityV2,
+  snapshot,
+  validateGatePolicyV2,
+  validateMeasurementDefinitionV2,
+} from "@lorelum/judge-protocol";
+
+import { isRecord } from "./type-guards.js";
 
 type AcceptedVerdicts = GatePolicyV2["criteria"][number]["acceptedVerdicts"];
 
@@ -24,6 +32,97 @@ export interface ReviewGateRequest {
 
 export interface ReviewRequest extends ExecuteReviewInput {
   readonly gate?: ReviewGateRequest;
+}
+
+interface PreparedGate {
+  readonly id?: string;
+  readonly policy?: unknown;
+  readonly taskClass?: string;
+  readonly evidenceShape?: string;
+  readonly calibration?: unknown;
+  readonly now?: string;
+  readonly locale?: GateLocale;
+}
+
+function gateIssue(message: string): ReviewResult {
+  return { ok: false, issues: [{ path: "$.gate", code: "schema", message }] };
+}
+
+function prepareGate(raw: unknown, definition: unknown): PreparedGate | undefined | ReviewResult {
+  if (raw === undefined) return undefined;
+  if (!isRecord(raw)) return gateIssue("gate must be an object");
+  const calibration = raw.calibration;
+  const copied = snapshot({
+    ...(raw.id === undefined ? {} : { id: raw.id }),
+    ...(raw.policy === undefined ? {} : { policy: raw.policy }),
+    ...(raw.taskClass === undefined ? {} : { taskClass: raw.taskClass }),
+    ...(raw.evidenceShape === undefined ? {} : { evidenceShape: raw.evidenceShape }),
+    ...(raw.now === undefined ? {} : { now: raw.now }),
+    ...(raw.locale === undefined ? {} : { locale: raw.locale }),
+  });
+  if (!isRecord(copied)) return gateIssue("gate must be an object");
+  if (copied.id !== undefined && (typeof copied.id !== "string" || copied.id.length === 0)) {
+    return gateIssue("gate.id must be a non-empty string");
+  }
+  if (
+    copied.taskClass !== undefined &&
+    (typeof copied.taskClass !== "string" || copied.taskClass.length === 0)
+  ) {
+    return gateIssue("gate.taskClass must be a non-empty string");
+  }
+  if (
+    copied.evidenceShape !== undefined &&
+    (typeof copied.evidenceShape !== "string" || copied.evidenceShape.length === 0)
+  ) {
+    return gateIssue("gate.evidenceShape must be a non-empty string");
+  }
+  if (
+    copied.now !== undefined &&
+    (typeof copied.now !== "string" || !Number.isFinite(Date.parse(copied.now)))
+  ) {
+    return gateIssue("gate.now must be a parseable timestamp");
+  }
+  if (copied.locale !== undefined && copied.locale !== "zh-CN" && copied.locale !== "en-US") {
+    return gateIssue("gate.locale must be zh-CN or en-US");
+  }
+  if (copied.policy !== undefined) {
+    const policy = validateGatePolicyV2(copied.policy);
+    if (!policy.ok) {
+      return {
+        ok: false,
+        issues: policy.issues.map((issue) => ({
+          ...issue,
+          path: `$.gate.policy${issue.path.slice(1)}`,
+        })),
+      };
+    }
+    const parsedDefinition = validateMeasurementDefinitionV2(definition);
+    if (parsedDefinition.ok) {
+      const definitionId = measurementDefinitionIdentityV2(parsedDefinition.value);
+      if (definitionId.ok && policy.value.definitionIdentity !== definitionId.identity) {
+        return {
+          ok: false,
+          issues: [
+            {
+              path: "$.gate.policy.definitionIdentity",
+              code: "identity_mismatch",
+              message: "gate policy is for a different definition",
+            },
+          ],
+        };
+      }
+    }
+  }
+  const locale = copied.locale === "zh-CN" || copied.locale === "en-US" ? copied.locale : undefined;
+  return {
+    ...(copied.id === undefined ? {} : { id: copied.id }),
+    ...(copied.policy === undefined ? {} : { policy: copied.policy }),
+    ...(copied.taskClass === undefined ? {} : { taskClass: copied.taskClass }),
+    ...(copied.evidenceShape === undefined ? {} : { evidenceShape: copied.evidenceShape }),
+    ...(calibration === undefined ? {} : { calibration }),
+    ...(copied.now === undefined ? {} : { now: copied.now }),
+    ...(locale === undefined ? {} : { locale }),
+  };
 }
 
 export interface ReviewValue {
@@ -95,9 +194,27 @@ function advisoryPolicy(
  * so the caller still learns whether the result can automatically gate delivery.
  */
 export async function review(input: ReviewRequest, ports: ReviewPorts): Promise<ReviewResult> {
+  let prepared: PreparedGate | undefined | ReviewResult;
+  try {
+    prepared = prepareGate(input.gate, input.definition);
+  } catch (error) {
+    return {
+      ok: false,
+      issues: [
+        {
+          path: "$.gate",
+          code: "schema",
+          message: `gate input could not be read: ${
+            error instanceof Error ? error.message : "unknown error"
+          }`,
+        },
+      ],
+    };
+  }
+  if (prepared !== undefined && "ok" in prepared) return prepared;
   const reviewed = await executeReview(input, ports);
   if (!reviewed.ok) return reviewed;
-  const gate = input.gate;
+  const gate = prepared;
   const evaluated = evaluateReviewGate({
     id: gate?.id ?? `decision:${reviewed.value.execution.id}`,
     taskClass: gate?.taskClass ?? "default",

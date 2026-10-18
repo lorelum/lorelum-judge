@@ -6,7 +6,7 @@ import type {
   ProgramChecker,
   ReviewMethodInput,
 } from "../src/index.js";
-import { executeReview } from "../src/index.js";
+import { executeReview, REVIEW_SYSTEM_PROMPT } from "../src/index.js";
 
 const hex = (character: string) => `sha256:${character.repeat(64)}`;
 
@@ -291,6 +291,53 @@ describe("executeReview with an LLM", () => {
     expect(attempt?.llm?.request.model).toBe("model-1");
     expect(attempt?.llm?.response?.model).toBe("model-1");
     expect(result.value.instrument.method.kind).toBe("llm");
+  });
+
+  test("the documented verdict shape is accepted", async () => {
+    const exampleLine = REVIEW_SYSTEM_PROMPT.split("\n").find((line) =>
+      line.startsWith('{"verdicts"'),
+    );
+    expect(exampleLine).toBeDefined();
+    if (exampleLine === undefined) return;
+    const example = JSON.parse(exampleLine) as {
+      verdicts: Array<Record<string, unknown>>;
+    };
+    const first = example.verdicts[0];
+    if (first === undefined) throw new Error("prompt example has no verdict");
+    const model = new ScriptedModel([
+      {
+        kind: "message",
+        content: JSON.stringify({
+          verdicts: [
+            { ...first, criterionId: "c1", verdict: "met", evidenceIds: ["e1"] },
+            { ...first, criterionId: "c2", verdict: "met", evidenceIds: ["e2"] },
+          ],
+        }),
+      },
+    ]);
+    const result = await executeReview(input({ method: llmMethod }), { model });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.execution.attempts[0]?.status).toBe("completed");
+  });
+
+  test("a timeout aborts the underlying model call", async () => {
+    let aborted = false;
+    const model: ModelPort = {
+      generate: ({ signal }) => {
+        const { promise, reject } = Promise.withResolvers<ModelResponse>();
+        signal.addEventListener("abort", () => {
+          aborted = true;
+          reject(new Error("aborted"));
+        });
+        return promise;
+      },
+    };
+    const result = await executeReview(input({ method: llmMethod, timeoutMs: 10 }), { model });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(aborted).toBe(true);
+    expect(result.value.execution.attempts[0]?.failure?.code).toBe("timeout");
   });
 
   test("malformed JSON fails without a second call", async () => {
