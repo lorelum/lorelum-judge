@@ -195,10 +195,24 @@ function readResponse(payload: unknown, status: number): ResponseFacts {
   };
   const usage = payload.usage;
   if (isRecord(usage)) {
-    const promptTokens = typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : undefined;
+    const promptTokens =
+      typeof usage.prompt_tokens === "number" &&
+      Number.isSafeInteger(usage.prompt_tokens) &&
+      usage.prompt_tokens >= 0
+        ? usage.prompt_tokens
+        : undefined;
     const completionTokens =
-      typeof usage.completion_tokens === "number" ? usage.completion_tokens : undefined;
-    const totalTokens = typeof usage.total_tokens === "number" ? usage.total_tokens : undefined;
+      typeof usage.completion_tokens === "number" &&
+      Number.isSafeInteger(usage.completion_tokens) &&
+      usage.completion_tokens >= 0
+        ? usage.completion_tokens
+        : undefined;
+    const totalTokens =
+      typeof usage.total_tokens === "number" &&
+      Number.isSafeInteger(usage.total_tokens) &&
+      usage.total_tokens >= 0
+        ? usage.total_tokens
+        : undefined;
     if (promptTokens !== undefined || completionTokens !== undefined || totalTokens !== undefined) {
       return {
         content: message.content,

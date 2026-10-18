@@ -112,6 +112,7 @@ export interface ReviewFinding {
   readonly required: boolean;
   readonly status: "assessed" | "missing" | "invalid";
   readonly verdict?: Verdict;
+  readonly disagreement: boolean;
   readonly issues: readonly ReviewIssue[];
 }
 
@@ -162,6 +163,24 @@ type LlmRequestFacts = NonNullable<ReviewAttempt["llm"]>["request"];
 interface ResponseFacts {
   readonly content: string;
   readonly metadata: ModelResponseMetadata | undefined;
+  readonly invalidMetadata: boolean;
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function tokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function safeFailureMessage(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return "the checker failed";
+  return trimmed.replace(
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+    "\uFFFD",
+  );
 }
 
 class ReviewAbortError extends Error {
@@ -409,41 +428,65 @@ function responseFacts(response: ModelResponse): ResponseFacts | undefined {
   if (response.kind !== "message") return undefined;
   const metadata = response.metadata;
   if (metadata === undefined) {
-    return { content: response.content, metadata: undefined };
+    return { content: response.content, metadata: undefined, invalidMetadata: false };
   }
+  let invalidMetadata = false;
+  const provider = nonEmptyString(metadata.provider) ? metadata.provider : undefined;
+  if (metadata.provider !== undefined && provider === undefined) invalidMetadata = true;
+  const model = nonEmptyString(metadata.model) ? metadata.model : undefined;
+  if (metadata.model !== undefined && model === undefined) invalidMetadata = true;
+  const responseId = nonEmptyString(metadata.responseId) ? metadata.responseId : undefined;
+  if (metadata.responseId !== undefined && responseId === undefined) invalidMetadata = true;
+  const finishReason = nonEmptyString(metadata.finishReason) ? metadata.finishReason : undefined;
+  if (metadata.finishReason !== undefined && finishReason === undefined) invalidMetadata = true;
+  const status = nonEmptyString(metadata.status) ? metadata.status : undefined;
+  if (metadata.status !== undefined && status === undefined) invalidMetadata = true;
+
+  let usage: ModelResponseMetadata["usage"];
+  if (metadata.usage !== undefined) {
+    const promptTokens = tokenCount(metadata.usage.promptTokens);
+    const completionTokens = tokenCount(metadata.usage.completionTokens);
+    const totalTokens = tokenCount(metadata.usage.totalTokens);
+    if (
+      (metadata.usage.promptTokens !== undefined && promptTokens === undefined) ||
+      (metadata.usage.completionTokens !== undefined && completionTokens === undefined) ||
+      (metadata.usage.totalTokens !== undefined && totalTokens === undefined)
+    ) {
+      invalidMetadata = true;
+    }
+    if (promptTokens !== undefined || completionTokens !== undefined || totalTokens !== undefined) {
+      usage = {
+        ...(promptTokens === undefined ? {} : { promptTokens }),
+        ...(completionTokens === undefined ? {} : { completionTokens }),
+        ...(totalTokens === undefined ? {} : { totalTokens }),
+      };
+    }
+  }
+
   return {
     content: response.content,
+    invalidMetadata,
     metadata: {
-      ...(metadata.provider === undefined ? {} : { provider: metadata.provider }),
-      ...(metadata.model === undefined ? {} : { model: metadata.model }),
-      ...(metadata.responseId === undefined ? {} : { responseId: metadata.responseId }),
-      ...(metadata.finishReason === undefined ? {} : { finishReason: metadata.finishReason }),
-      ...(metadata.status === undefined ? {} : { status: metadata.status }),
-      ...(metadata.usage === undefined
-        ? {}
-        : {
-            usage: {
-              ...(metadata.usage.promptTokens === undefined
-                ? {}
-                : { promptTokens: metadata.usage.promptTokens }),
-              ...(metadata.usage.completionTokens === undefined
-                ? {}
-                : { completionTokens: metadata.usage.completionTokens }),
-              ...(metadata.usage.totalTokens === undefined
-                ? {}
-                : { totalTokens: metadata.usage.totalTokens }),
-            },
-          }),
+      ...(provider === undefined ? {} : { provider }),
+      ...(model === undefined ? {} : { model }),
+      ...(responseId === undefined ? {} : { responseId }),
+      ...(finishReason === undefined ? {} : { finishReason }),
+      ...(status === undefined ? {} : { status }),
+      ...(usage === undefined ? {} : { usage }),
     },
   };
 }
 
-function unknownFacts(metadata: ModelResponseMetadata | undefined): string[] {
+function unknownFacts(
+  metadata: ModelResponseMetadata | undefined,
+  invalidMetadata = false,
+): string[] {
   if (metadata === undefined) return ["response_metadata_missing"];
   return [
     ...(metadata.model === undefined ? ["response_model_unknown"] : []),
     ...(metadata.finishReason === undefined ? ["finish_reason_unknown"] : []),
     ...(metadata.usage === undefined ? ["usage_unknown"] : []),
+    ...(invalidMetadata ? ["response_metadata_invalid"] : []),
   ];
 }
 
@@ -462,6 +505,7 @@ function aggregateFindings(
     const verdict = verdicts[0];
     return {
       criterionId: criterion.id,
+      disagreement: new Set(verdicts.map((entry) => entry.verdict)).size > 1,
       role: metadata.get(criterion.id)?.role ?? "decisive",
       required: metadata.get(criterion.id)?.role === "decisive" && criterion.mandatory,
       status: verdict !== undefined ? "assessed" : issues.length > 0 ? "invalid" : "missing",
@@ -682,6 +726,12 @@ function prepare(input: unknown, ports: ReviewPorts): PrepareReviewResult {
   if (!isRecord(input)) {
     return { ok: false, issues: [validation("$", "input must be an object")] };
   }
+  if (input.signal !== undefined && !(input.signal instanceof AbortSignal)) {
+    return { ok: false, issues: [validation("$.signal", "signal must be an AbortSignal")] };
+  }
+  if (input.id !== undefined && (typeof input.id !== "string" || input.id.length === 0)) {
+    return { ok: false, issues: [validation("$.id", "id must be a non-empty string")] };
+  }
   const copied = snapshot({
     definition: input.definition,
     evidence: input.evidence,
@@ -710,6 +760,9 @@ function prepare(input: unknown, ports: ReviewPorts): PrepareReviewResult {
   if ("issues" in materialCheck) {
     return { ok: false, issues: materialCheck.issues };
   }
+  const materials = materialCheck.materials.map((material) =>
+    material.text === undefined ? material : { ...material, text: normalizeText(material.text) },
+  );
   const methodCheck = validateMethod(copied.method);
   if ("issues" in methodCheck) {
     return { ok: false, issues: methodCheck.issues };
@@ -748,7 +801,7 @@ function prepare(input: unknown, ports: ReviewPorts): PrepareReviewResult {
   if (method.kind === "llm") {
     const compiled = compilePrompt({
       prompt: buildReviewPrompt(definition.value),
-      evidence: materialCheck.materials,
+      evidence: materials,
     });
     if (!compiled.ok) {
       return {
@@ -765,7 +818,7 @@ function prepare(input: unknown, ports: ReviewPorts): PrepareReviewResult {
     renderIdentity = compiled.value.renderIdentity;
     messages = compiled.value.messages;
   } else {
-    const built = programManifest(materialCheck.materials);
+    const built = programManifest(materials);
     if ("issues" in built) {
       return { ok: false, issues: built.issues };
     }
@@ -790,7 +843,7 @@ function prepare(input: unknown, ports: ReviewPorts): PrepareReviewResult {
   }
   const inputIdentity = identityOf(INPUT_SCHEMA, {
     definition: definition.value,
-    evidence: materialCheck.materials,
+    evidence: materials,
     method,
     repetitions,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
@@ -810,7 +863,7 @@ function prepare(input: unknown, ports: ReviewPorts): PrepareReviewResult {
       definition: definition.value,
       instrument,
       manifest,
-      materials: materialCheck.materials,
+      materials,
       method,
       repetitions,
       timeoutMs,
@@ -881,6 +934,7 @@ async function runPreparedReviewInner(
     try {
       let raw: readonly unknown[] | undefined;
       let responseMetadata: ModelResponseMetadata | undefined;
+      let responseMetadataInvalid = false;
       const llmRequest =
         method.kind === "llm"
           ? llmRequestFacts(method, promptIdentity, renderIdentity, timeoutMs)
@@ -952,6 +1006,7 @@ async function runPreparedReviewInner(
           continue;
         }
         responseMetadata = facts.metadata;
+        responseMetadataInvalid = facts.invalidMetadata;
         if (facts.metadata?.finishReason === "length") {
           attempts.push({
             id,
@@ -966,7 +1021,7 @@ async function runPreparedReviewInner(
                   llm: {
                     request: llmRequest,
                     ...(facts.metadata === undefined ? {} : { response: facts.metadata }),
-                    unknowns: unknownFacts(facts.metadata),
+                    unknowns: unknownFacts(facts.metadata, facts.invalidMetadata),
                   },
                 }),
             failure: {
@@ -992,7 +1047,7 @@ async function runPreparedReviewInner(
                   llm: {
                     request: llmRequest,
                     ...(facts.metadata === undefined ? {} : { response: facts.metadata }),
-                    unknowns: unknownFacts(facts.metadata),
+                    unknowns: unknownFacts(facts.metadata, facts.invalidMetadata),
                   },
                 }),
             failure: {
@@ -1015,7 +1070,7 @@ async function runPreparedReviewInner(
           : {
               request: llmRequest,
               ...(responseMetadata === undefined ? {} : { response: responseMetadata }),
-              unknowns: unknownFacts(responseMetadata),
+              unknowns: unknownFacts(responseMetadata, responseMetadataInvalid),
             };
       if (assessed.issues.length === 0) {
         const runId = nextId("run");
@@ -1086,11 +1141,19 @@ async function runPreparedReviewInner(
                 ...(provider.status === undefined ? {} : { httpStatus: provider.status }),
               };
             })()
-          : {
-              category: "execution",
-              code: "checker_error",
-              message: error instanceof Error ? error.message : "the checker failed",
-            };
+          : (() => {
+              let rawMessage = "";
+              try {
+                rawMessage = error instanceof Error ? error.message : "";
+              } catch {
+                rawMessage = "";
+              }
+              return {
+                category: "execution",
+                code: "checker_error",
+                message: safeFailureMessage(rawMessage),
+              };
+            })();
       attempts.push({
         id,
         index,

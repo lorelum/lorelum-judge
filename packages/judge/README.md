@@ -27,10 +27,12 @@ that composition.
   explicit and sequential: the default is one call, with no retry, cache, or
   replacement attempt.
 - Program checkers receive the frozen definition, normalized evidence, and an
-  `AbortSignal`, and return a verdict list. Judge applies the same per-criterion
-  and evidence validation as the LLM path. Thrown errors and rejections become a
-  failed attempt; a pre-cancelled signal starts nothing; a late result cannot
-  replace `cancelled`.
+  `AbortSignal`, and return a verdict list. The same normalized text is hashed
+  into the evidence manifest, so content identity, lengths, and checker input
+  describe one material. Judge applies the same per-criterion and evidence
+  validation as the LLM path. Thrown errors and rejections become a failed
+  attempt; a pre-cancelled signal starts nothing; a late result cannot replace
+  `cancelled`.
 - The LLM path compiles a deterministic trusted rule prompt with `compilePrompt`
   and calls the injected `ModelPort` once per attempt. The provider is
   responsible only for transport.
@@ -44,6 +46,9 @@ that composition.
   explicit issues. Duplicates are never resolved by picking one. A completed
   attempt carries a `MeasurementRun/v2`; a partial attempt carries legal
   verdicts and issues but no run; an attempt with no legal verdict fails.
+  `ReviewFinding.disagreement` is true when the valid attempts for a criterion
+  contain more than one distinct verdict; the representative `verdict` is the
+  first valid one, not a majority prediction.
 - `ReviewExecution/v1` retains every planned slot: `completed`, `partial`,
   `failed`, `cancelled`, or `not_started`, with request facts, server-declared
   metadata, and unknowns kept separate. Evidence and rendered messages change
@@ -57,6 +62,11 @@ that composition.
   response-model conflicts or missing response information instead of assuming
   a match. Without applicable calibration the review is advisory and never
   blocks delivery by itself.
+- A caller-supplied gate policy is bound to the exact definition and instrument.
+  A mismatch, including a different repetition count, is a validation error
+  before any checker or model call. Calibration alone is different: if only a
+  calibration bound to another repetition count is supplied, the requested
+  execution still runs and the mismatched enforcement claim is declined.
 
 The v1 definition/instrument/run helpers and the v1 calibration artifacts keep
 their behavior. `validateAny*` and the `#9` validators dispatch on the schema;

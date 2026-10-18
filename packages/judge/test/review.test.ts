@@ -174,6 +174,43 @@ describe("executeReview with a program checker", () => {
     expect(result.value.execution.attempts[0]?.run?.verdicts[0]?.verdict).toBe("unknown");
   });
 
+  test("empty or unrepresentable checker messages fall back safely", async () => {
+    const cases: Array<[string, string]> = [
+      ["", "the checker failed"],
+      ["   ", "the checker failed"],
+      ["broken \uD800", "broken \uFFFD"],
+    ];
+    for (const [message, expected] of cases) {
+      const checker: ProgramChecker = () => {
+        throw new Error(message);
+      };
+      const result = await executeReview(input(), { checker });
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      const attempt = result.value.execution.attempts[0];
+      expect(attempt?.status).toBe("failed");
+      expect(attempt?.failure?.message).toBe(expected);
+    }
+  });
+
+  test("normalizes evidence once for the checker and its manifest", async () => {
+    let seen = "";
+    const checker: ProgramChecker = ({ evidence: copied }) => {
+      seen = copied[0]?.text ?? "";
+      return { verdicts: [met("c1", "e1"), met("c2", "e2")] };
+    };
+    const result = await executeReview(
+      input({ evidence: [{ id: "e1", status: "present", text: "a\r\nb \r\n" }] }),
+      { checker },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(seen).toBe("a\nb\n");
+    const item = result.value.execution.attempts[0]?.evidenceBundle?.items[0];
+    expect(item?.render?.originalLength).toBe(4);
+    expect(item?.render?.renderedLength).toBe(4);
+  });
+
   test("captures a checker exception as a failed attempt", async () => {
     const checker: ProgramChecker = () => {
       throw new Error("checker exploded");
@@ -340,6 +377,31 @@ describe("executeReview with an LLM", () => {
     expect(result.value.execution.attempts[0]?.failure?.code).toBe("timeout");
   });
 
+  test("malformed model metadata is omitted and recorded as unknown", async () => {
+    const model = new ScriptedModel([
+      {
+        kind: "message",
+        content: JSON.stringify({
+          verdicts: [met("c1", "e1"), met("c2", "e2")],
+        }),
+        metadata: {
+          provider: "",
+          model: "model-1",
+          finishReason: "stop",
+          usage: { promptTokens: 1.5, completionTokens: 2, totalTokens: 3.5 },
+        },
+      },
+    ]);
+    const result = await executeReview(input({ method: llmMethod }), { model });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const attempt = result.value.execution.attempts[0];
+    expect(attempt?.status).toBe("completed");
+    expect(attempt?.llm?.response?.provider).toBeUndefined();
+    expect(attempt?.llm?.response?.usage).toEqual({ completionTokens: 2 });
+    expect(attempt?.llm?.unknowns).toContain("response_metadata_invalid");
+  });
+
   test("malformed JSON fails without a second call", async () => {
     const model = new ScriptedModel([
       { kind: "message", content: "not json" },
@@ -449,6 +511,23 @@ describe("executeReview validation", () => {
       { checker },
     );
     expect(result.ok).toBe(false);
+    expect(calls).toBe(0);
+  });
+
+  test("rejects an invalid optional id or signal before execution", async () => {
+    let calls = 0;
+    const checker: ProgramChecker = () => {
+      calls += 1;
+      return { verdicts: [met("c1", "e1"), met("c2", "e2")] };
+    };
+    for (const id of [42, "", null, "\uD800"]) {
+      const invalidId = input({ id } as unknown as ExecuteReviewInput);
+      expect((await executeReview(invalidId, { checker })).ok).toBe(false);
+    }
+    for (const signal of [{}, 42, null]) {
+      const invalidSignal = input({ signal } as unknown as ExecuteReviewInput);
+      expect((await executeReview(invalidSignal, { checker })).ok).toBe(false);
+    }
     expect(calls).toBe(0);
   });
 

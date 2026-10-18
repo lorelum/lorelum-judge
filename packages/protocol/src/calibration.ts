@@ -106,14 +106,18 @@ export function validateGatePolicyForV2(
         ],
       };
     }
-    if (
-      policy.value.definitionIdentity !== definitionId.identity ||
-      policy.value.instrumentIdentity !== instrumentId.identity
-    ) {
+    if (policy.value.definitionIdentity !== definitionId.identity) {
       issues.push({
         path: "$.definitionIdentity",
         code: "identity_mismatch",
-        message: "gate policy does not match the definition and instrument",
+        message: "gate policy does not match the definition",
+      });
+    }
+    if (policy.value.instrumentIdentity !== instrumentId.identity) {
+      issues.push({
+        path: "$.instrumentIdentity",
+        code: "identity_mismatch",
+        message: "gate policy does not match the instrument",
       });
     }
     const criteria = new Map(

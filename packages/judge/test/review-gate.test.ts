@@ -4,6 +4,7 @@ import type { InstrumentProfileV2, MeasurementDefinitionV2 } from "@lorelum/judg
 import {
   instrumentIdentityV2,
   measurementDefinitionIdentityV2,
+  validateGatePolicyForV2,
   validateGatePolicyV2,
 } from "@lorelum/judge-protocol";
 
@@ -179,6 +180,60 @@ describe("evaluateReviewGate", () => {
     expect(result.value.decision.qualityOutcome).toBe("pass");
     const advisory = result.value.decision.findings.find((finding) => finding.criterionId === "c1");
     expect(advisory?.outcome).toBe("advisory");
+  });
+
+  test("votes above threshold cannot make an incomplete execution pass", async () => {
+    let calls = 0;
+    const reviewResult = await executeReview(
+      {
+        definition: definition(),
+        evidence,
+        repetitions: 3,
+        method: { kind: "program", checker: { id: "offline", version: "1" } },
+      },
+      {
+        checker: () => {
+          calls += 1;
+          if (calls === 3) throw new Error("third attempt failed");
+          return { verdicts: [met("c1", "e1"), met("c2", "e2")] };
+        },
+      },
+    );
+    expect(reviewResult.ok).toBe(true);
+    if (!reviewResult.ok) return;
+    const base = policy(reviewResult.value.definition, reviewResult.value.instrument);
+    const result = evaluateReviewGate({
+      id: "decision",
+      taskClass: "code",
+      evidenceShape: "code",
+      execution: reviewResult.value.execution,
+      definition: reviewResult.value.definition,
+      instrument: reviewResult.value.instrument,
+      policy: { ...base, minimumAgreement: 2 / 3 },
+      now: "2026-10-18T00:00:00.000Z",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.completeness).toBe("partial");
+    expect(result.value.decision.qualityOutcome).toBe("indeterminate");
+    expect(result.value.decision.executionMode).toBe("diagnostic");
+  });
+
+  test("policy identity mismatch reports the instrument path", async () => {
+    const reviewed = await executionFor(() => ({
+      verdicts: [met("c1", "e1"), met("c2", "e2")],
+    }));
+    const changed = structuredClone(reviewed.instrument);
+    changed.method.repetitions = 2;
+    const result = validateGatePolicyForV2(
+      policy(reviewed.definition, reviewed.instrument),
+      reviewed.definition,
+      changed,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.map((issue) => issue.path)).toContain("$.instrumentIdentity");
+    }
   });
 
   test("an incomplete review with acceptable required findings cannot pass", async () => {
@@ -361,6 +416,32 @@ describe("direct gate evidence binding", () => {
 });
 
 describe("one-call review", () => {
+  test("review findings expose disagreement across repetitions", async () => {
+    let calls = 0;
+    const result = await review(
+      {
+        definition: definition(),
+        evidence,
+        repetitions: 2,
+        method: { kind: "program", checker: { id: "offline", version: "1" } },
+      },
+      {
+        checker: () => {
+          calls += 1;
+          return {
+            verdicts:
+              calls === 1
+                ? [met("c1", "e1"), met("c2", "e2")]
+                : [unmet("c1", "e1"), unmet("c2", "e2")],
+          };
+        },
+      },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.review.findings[0]?.disagreement).toBe(true);
+  });
+
   test("rejects an invalid gate policy before calling the checker", async () => {
     let calls = 0;
     const result = await review(

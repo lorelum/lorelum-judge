@@ -380,17 +380,9 @@ export function evaluateReviewGate(
       completeness === "complete"
         ? resolved.findings
         : resolved.findings.map((finding) =>
-            finding.outcome === "advisory" &&
-            (finding.reason === "missing_evidence" ||
-              finding.reason === "unavailable_evidence" ||
-              finding.reason === "unsupported_evidence" ||
-              finding.reason === "execution_failure" ||
-              finding.reason === "measurement_failure" ||
-              finding.reason === "unattributed_failure" ||
-              finding.reason === "abstention" ||
-              finding.reason === "disagreement")
-              ? { ...finding, outcome: "indeterminate" as const }
-              : finding,
+            finding.outcome === "fail" || finding.reason === "not_applicable"
+              ? finding
+              : { ...finding, outcome: "indeterminate" as const },
           );
     const finalQuality: GateDecision["qualityOutcome"] = findings.some(
       (finding) => finding.outcome === "fail",

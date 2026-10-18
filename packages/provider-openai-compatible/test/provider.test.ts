@@ -240,6 +240,26 @@ describe("OpenAI-compatible transport", () => {
     expect(calls).toBe(1);
   });
 
+  test("omits malformed usage counts", async () => {
+    const server = await harness((_body, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          id: "resp-1",
+          model: "model-1",
+          choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1.5, completion_tokens: 2, total_tokens: 3.5 },
+        }),
+      );
+    });
+    const model = createOpenAiCompatibleModel({ endpoint: server.url });
+    const result = await model.generate(request({ model: "model-1" }));
+    expect(result.kind).toBe("message");
+    if (result.kind === "message") {
+      expect(result.metadata?.usage).toEqual({ completionTokens: 2 });
+    }
+  });
+
   test("distinguishes non-JSON and empty responses", async () => {
     const notJson = await harness((_body, response) => {
       response.writeHead(200, { "content-type": "application/json" });
