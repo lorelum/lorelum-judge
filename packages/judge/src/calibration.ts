@@ -108,7 +108,9 @@ export function createDefaultGatePolicyV2(
   return validateGatePolicyForV2(policy, definition.value, instrument.value);
 }
 
-function defaultAcceptedVerdicts(criterion: Criterion): Verdict["verdict"][] {
+export function defaultAcceptedVerdicts(
+  criterion: Criterion,
+): GatePolicyV2["criteria"][number]["acceptedVerdicts"] {
   if (criterion.kind === "contract") return ["met"];
   if (criterion.kind === "quality") return ["strong", "adequate"];
   return ["better", "equivalent"];

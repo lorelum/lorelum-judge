@@ -1,22 +1,28 @@
 import {
   type EvidenceBundle,
-  type EvidenceItem,
   type Identity,
   identityOf,
   type JsonValue,
-  validateEvidenceBundle,
 } from "@lorelum/judge-protocol";
 import type { RuntimeMessage } from "@lorelum/judge-runtime";
 
+import {
+  buildManifest,
+  type EvidenceMaterial,
+  type EvidenceStatus,
+  isWellFormed,
+  normalizeText,
+  validateMaterials,
+} from "./evidence.js";
 import { isRecord } from "./type-guards.js";
+
+export type { EvidenceMaterial } from "./evidence.js";
+export { escapeEvidenceText, normalizeText } from "./evidence.js";
 
 export const PROMPT_RENDER_VERSION = "lorelum.judge.prompt-render/v2";
 
 const PROMPT_SCHEMA = "lorelum.judge.prompt/v1";
 const RENDER_SCHEMA = "lorelum.judge.render/v1";
-const CONTENT_SCHEMA = "lorelum.judge.evidence-content/v1";
-const ITEM_SCHEMA = "lorelum.judge.evidence-item/v1";
-const BUNDLE_SCHEMA = "lorelum.judge.evidence-bundle/v1";
 
 /** Fixed text appended to every system message. It is part of the prompt identity. */
 export const UNTRUSTED_NOTICE =
@@ -26,18 +32,6 @@ const NO_EVIDENCE_SECTION = "No evidence was collected.";
 const RESERVED_VARIABLE = "evidence";
 const PLACEHOLDER = /\{\{([^{}]*)\}\}/g;
 const VARIABLE_NAME = /^[a-z][a-z0-9_]*$/;
-const EVIDENCE_ID = /^[A-Za-z0-9_.:-]+$/;
-
-export type EvidenceStatus = EvidenceItem["status"];
-
-export interface EvidenceMaterial {
-  readonly id: string;
-  readonly status: EvidenceStatus;
-  /** Required for `present` and `contradiction`; forbidden otherwise. */
-  readonly text?: string;
-  readonly conflictsWith?: readonly string[];
-}
-
 export interface PromptSpec {
   readonly system: string;
   /** Must contain `{{evidence}}` exactly once; every other `{{name}}` must be bound. */
@@ -90,29 +84,6 @@ export type CompileResult =
   | { readonly ok: true; readonly value: CompiledPrompt }
   | { readonly ok: false; readonly issues: readonly PromptIssue[] };
 
-/**
- * Mechanical normalization applied before rendering or hashing: NFC, LF line
- * endings, and no trailing spaces or tabs. Text that differs only in these ways
- * produces identical output and identities.
- */
-export function normalizeText(text: string): string {
-  return text
-    .normalize("NFC")
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .map((line) => line.replace(/[ \t]+$/, ""))
-    .join("\n");
-}
-
-/**
- * Candidate text can contain block markers. Neutralize `<evidence` and `</evidence`
- * so only the compiler writes headers. Applied before lengths and hashing, so the
- * record covers the escaped text the model actually sees.
- */
-export function escapeEvidenceText(text: string): string {
-  return text.replace(/<(\/?)(evidence)/gi, "&lt;$1$2");
-}
-
 function codePoints(text: string): string[] {
   return Array.from(text);
 }
@@ -141,10 +112,6 @@ interface ReadPrompt {
 }
 
 /** True when the text has no unpaired surrogate; such text cannot be canonicalized. */
-function isWellFormed(text: string): boolean {
-  return !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text);
-}
-
 function readPrompt(raw: unknown): ReadPrompt | CompileResult {
   if (!isRecord(raw)) {
     return fail("$.prompt", "invalid_input", "prompt must be an object");
@@ -260,60 +227,6 @@ function checkPlaceholders(
   return issues;
 }
 
-function readEvidence(raw: unknown): EvidenceMaterial[] | CompileResult {
-  if (!Array.isArray(raw)) {
-    return fail("$.evidence", "invalid_input", "evidence must be an array");
-  }
-  const materials: EvidenceMaterial[] = [];
-  for (const [index, entry] of raw.entries()) {
-    const path = `$.evidence[${index}]`;
-    if (!isRecord(entry)) {
-      return fail(path, "invalid_evidence", "evidence item must be an object");
-    }
-    const { id, status, text, conflictsWith } = entry;
-    if (typeof id !== "string" || !EVIDENCE_ID.test(id)) {
-      return fail(`${path}.id`, "invalid_evidence", "id must match ^[A-Za-z0-9_.:-]+$");
-    }
-    if (
-      status !== "present" &&
-      status !== "no_evidence" &&
-      status !== "unavailable" &&
-      status !== "contradiction"
-    ) {
-      return fail(`${path}.status`, "invalid_evidence", "unknown status");
-    }
-    if (typeof text === "string" && !isWellFormed(text)) {
-      return fail(`${path}.text`, "invalid_evidence", "text must be well-formed Unicode");
-    }
-    const hasText = status === "present" || status === "contradiction";
-    if (hasText && typeof text !== "string") {
-      return fail(`${path}.text`, "invalid_evidence", `status "${status}" requires text`);
-    }
-    if (!hasText && text !== undefined) {
-      return fail(`${path}.text`, "invalid_evidence", `status "${status}" must not carry text`);
-    }
-    if (conflictsWith !== undefined) {
-      if (
-        !Array.isArray(conflictsWith) ||
-        !conflictsWith.every((other) => typeof other === "string" && EVIDENCE_ID.test(other))
-      ) {
-        return fail(
-          `${path}.conflictsWith`,
-          "invalid_evidence",
-          "conflictsWith must be a list of valid ids",
-        );
-      }
-    }
-    materials.push({
-      id,
-      status,
-      ...(hasText ? { text: text as string } : {}),
-      ...(conflictsWith !== undefined ? { conflictsWith: [...conflictsWith] as string[] } : {}),
-    });
-  }
-  return materials;
-}
-
 function headerAttributes(
   id: string,
   status: EvidenceStatus,
@@ -322,82 +235,6 @@ function headerAttributes(
   const conflicts =
     conflictsWith === undefined ? "" : ` conflicts="${[...conflictsWith].sort().join(",")}"`;
   return `id="${id}" status="${status}"${conflicts}`;
-}
-
-/**
- * Renders evidence in id order under the evidence budget. The budget counts evidence
- * text only; headers and unavailable/no-evidence lines are not counted and grow with
- * item count. `sources[i]` is the caller's index of `items[i]`.
- */
-function renderEvidence(
-  materials: readonly EvidenceMaterial[],
-  budget: number,
-): { items: EvidenceItem[]; blocks: string[]; sources: number[] } | { issues: PromptIssue[] } {
-  const order = materials
-    .map((material, index) => ({ material, index }))
-    .sort((a, b) => (a.material.id < b.material.id ? -1 : a.material.id > b.material.id ? 1 : 0));
-  const items: EvidenceItem[] = [];
-  const blocks: string[] = [];
-  const sources: number[] = [];
-  let remaining = budget;
-
-  for (const { material, index } of order) {
-    const conflicts =
-      material.conflictsWith === undefined ? undefined : [...material.conflictsWith].sort();
-    sources.push(index);
-
-    if (material.text === undefined) {
-      items.push({
-        schema: ITEM_SCHEMA,
-        id: material.id,
-        status: material.status,
-        ...(conflicts !== undefined ? { conflictsWith: conflicts } : {}),
-      });
-      blocks.push(`<evidence ${headerAttributes(material.id, material.status, conflicts)}/>`);
-      continue;
-    }
-
-    // The content identity covers the normalized text before escaping: it records what
-    // the candidate said. Lengths and rendering use the escaped text the model sees.
-    const raw = normalizeText(material.text);
-    const contentIdentity = identityOrIssue(CONTENT_SCHEMA, raw);
-    if (typeof contentIdentity !== "string") {
-      return { issues: [contentIdentity] };
-    }
-
-    const text = escapeEvidenceText(raw);
-    const characters = codePoints(text);
-    const originalLength = characters.length;
-    let state: "rendered" | "truncated" | "withheld";
-    let kept: string;
-    if (remaining > 0 && originalLength <= remaining) {
-      state = "rendered";
-      kept = text;
-      remaining -= originalLength;
-    } else if (remaining > 0) {
-      state = "truncated";
-      kept = characters.slice(0, remaining).join("");
-      remaining = 0;
-    } else {
-      // Budget already spent: every later present item is withheld, even an empty one.
-      state = "withheld";
-      kept = "";
-    }
-    const renderedLength = codePoints(kept).length;
-
-    items.push({
-      schema: ITEM_SCHEMA,
-      id: material.id,
-      status: material.status,
-      contentIdentity,
-      render: { state, originalLength, renderedLength },
-      ...(conflicts !== undefined ? { conflictsWith: conflicts } : {}),
-    });
-
-    const header = `<evidence ${headerAttributes(material.id, material.status, conflicts)} render="${state}" original="${originalLength}" rendered="${renderedLength}"`;
-    blocks.push(state === "withheld" ? `${header}/>` : `${header}>\n${kept}\n</evidence>`);
-  }
-  return { items, blocks, sources };
 }
 
 /** Bindings as an object with sorted keys, so identity does not depend on insertion order. */
@@ -409,16 +246,6 @@ function sortedBindings(variables: ReadonlyMap<string, string>): Record<string, 
   return out;
 }
 
-/** Maps a manifest path `$.items[i]...` back to the caller's `$.evidence[j]...`. */
-function remapItemPath(path: string, sources: readonly number[]): string {
-  const match = /^\$\.items\[(\d+)\](.*)$/.exec(path);
-  if (match === null) {
-    return path;
-  }
-  const source = sources[Number(match[1])];
-  return source === undefined ? path : `$.evidence[${source}]${match[2] ?? ""}`;
-}
-
 function compile(raw: unknown): CompileResult {
   if (!isRecord(raw)) {
     return fail("$", "invalid_input", "input must be an object");
@@ -427,10 +254,17 @@ function compile(raw: unknown): CompileResult {
   if ("ok" in prompt) {
     return prompt;
   }
-  const materials = readEvidence(raw.evidence);
-  if (!Array.isArray(materials)) {
-    return materials;
+  const materialsResult = validateMaterials(raw.evidence);
+  if (!materialsResult.ok) {
+    return {
+      ok: false,
+      issues: materialsResult.issues.map((entry) => ({
+        ...entry,
+        code: "invalid_evidence",
+      })),
+    };
   }
+  const materials = materialsResult.value;
 
   const ruleCharacters = [prompt.system, prompt.template, ...prompt.variables.values()].reduce(
     (total, text) => total + codePoints(text).length,
@@ -449,23 +283,29 @@ function compile(raw: unknown): CompileResult {
     return { ok: false, issues: placeholderIssues };
   }
 
-  const rendered = renderEvidence(materials, prompt.evidenceBudget);
-  if ("issues" in rendered) {
-    return { ok: false, issues: rendered.issues };
-  }
-  const { items, blocks, sources } = rendered;
-  const manifest: EvidenceBundle = { schema: BUNDLE_SCHEMA, items };
-  const checked = validateEvidenceBundle(manifest);
-  if (!checked.ok) {
+  const built = buildManifest(materials, {
+    budget: prompt.evidenceBudget,
+    escape: true,
+    sort: true,
+  });
+  if (!built.ok) {
     return {
       ok: false,
-      issues: checked.issues.map((issue) => ({
-        path: remapItemPath(issue.path, sources),
+      issues: built.issues.map((issue) => ({
+        path: issue.path,
         code: "invalid_evidence",
-        message: `${issue.code}: ${issue.message}`,
+        message: issue.message,
       })),
     };
   }
+  const { manifest, rendered } = built.value;
+  const blocks = rendered.map((entry) => {
+    if (entry.text === undefined) {
+      return `<evidence ${headerAttributes(entry.id, entry.status, entry.conflictsWith)}/>`;
+    }
+    const header = `<evidence ${headerAttributes(entry.id, entry.status, entry.conflictsWith)} render="${entry.state}" original="${entry.originalLength}" rendered="${entry.renderedLength}"`;
+    return entry.state === "withheld" ? `${header}/>` : `${header}>\n${entry.text}\n</evidence>`;
+  });
 
   const evidenceSection = blocks.length === 0 ? NO_EVIDENCE_SECTION : blocks.join("\n\n");
   const system = `${prompt.system}\n\n${UNTRUSTED_NOTICE}`;

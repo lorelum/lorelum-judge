@@ -1,5 +1,11 @@
 import { identityOf } from "@lorelum/judge-protocol";
-import type { ModelPort, ModelRequest, ModelResponse } from "@lorelum/judge-runtime";
+import {
+  type ModelPort,
+  ModelPortError,
+  type ModelRequest,
+  type ModelResponse,
+  validateGenerationConfig,
+} from "@lorelum/judge-runtime";
 
 import { isRecord } from "./type-guards.js";
 
@@ -20,15 +26,12 @@ export type ProviderErrorCode =
  * A transport failure with a safe, whitelisted description. It never carries the
  * response body, credentials, headers, or the raw endpoint.
  */
-export class ProviderTransportError extends Error {
-  readonly code: ProviderErrorCode;
-  readonly httpStatus: number | undefined;
+export class ProviderTransportError extends ModelPortError {
+  declare readonly code: ProviderErrorCode;
 
   constructor(code: ProviderErrorCode, message: string, httpStatus?: number) {
-    super(message);
+    super(code, message, httpStatus);
     this.name = "ProviderTransportError";
-    this.code = code;
-    this.httpStatus = httpStatus;
   }
 }
 
@@ -90,52 +93,16 @@ export function describeEndpoint(raw: string): EndpointDescription {
   return { url: normalized, identity: identity.identity };
 }
 
-const GENERATION_KEYS: Readonly<Record<string, true>> = {
-  model: true,
-  temperature: true,
-  topP: true,
-  maxTokens: true,
-  seed: true,
-};
-
 function unsupported(message: string): ProviderTransportError {
   return new ProviderTransportError("unsupported_config", message);
 }
 
 function checkedGeneration(config: ModelRequest["config"]): NonNullable<ModelRequest["config"]> {
-  if (config === undefined) {
-    throw unsupported("a model and explicit generation configuration are required");
+  const checked = validateGenerationConfig(config);
+  if (!checked.ok) {
+    throw unsupported(checked.issues[0]?.message ?? "invalid generation configuration");
   }
-  for (const key of Object.keys(config)) {
-    if (!Object.hasOwn(GENERATION_KEYS, key)) {
-      throw unsupported(`generation parameter "${key}" is not supported`);
-    }
-  }
-  if (typeof config.model !== "string" || config.model.length === 0) {
-    throw unsupported("model must be a non-empty string");
-  }
-  if (
-    config.temperature !== undefined &&
-    (!Number.isFinite(config.temperature) || config.temperature < 0)
-  ) {
-    throw unsupported("temperature must be a finite number at least 0");
-  }
-  if (
-    config.topP !== undefined &&
-    (!Number.isFinite(config.topP) || config.topP < 0 || config.topP > 1)
-  ) {
-    throw unsupported("topP must be a finite number between 0 and 1");
-  }
-  if (
-    config.maxTokens !== undefined &&
-    (!Number.isSafeInteger(config.maxTokens) || config.maxTokens < 1)
-  ) {
-    throw unsupported("maxTokens must be a positive safe integer");
-  }
-  if (config.seed !== undefined && (!Number.isSafeInteger(config.seed) || config.seed < 0)) {
-    throw unsupported("seed must be a non-negative safe integer");
-  }
-  return config;
+  return checked.value;
 }
 
 function requestBody(

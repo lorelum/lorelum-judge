@@ -39,5 +39,7 @@ The response returns `kind: "message"` with `content` and optional metadata
 (`provider`, `model`, `responseId`, `finishReason`, `status`, `usage`). The
 server-declared model is recorded, not treated as proof of remote internals.
 HTTP errors, invalid JSON, empty content, timeout, cancellation, and network
-failure are distinct `ProviderTransportError` codes. Error messages never
+failure are distinct `ProviderTransportError` codes. The class extends the
+runtime `ModelPortError`, so callers can classify transport failures without
+depending on this package. Error messages never
 include the response body, headers, credential, or raw endpoint.

@@ -1,9 +1,10 @@
-import type { Criterion, Verdict } from "@lorelum/judge-protocol";
 import {
   aggregateVerdicts,
   anyDefinitionIdentity,
   anyInstrumentIdentity,
+  assessVerdicts,
   type CalibrationObservation,
+  type Criterion,
   type EvidenceBundle,
   type GateDecision,
   type GatePolicyV2,
@@ -11,11 +12,11 @@ import {
   identityOf,
   instrumentRepetitions,
   isRequiredCriterion,
-  type MeasurementRun,
-  type MeasurementRunV2,
+  type MeasurementDefinitionV2,
   measurementRunEvidenceIdentityMatches,
   type ValidationIssue,
   type ValidationResult,
+  type Verdict,
   validateAnyDefinition,
   validateAnyInstrument,
   validateAnyRun,
@@ -24,7 +25,7 @@ import {
   validateGatePolicyForV2,
   validateVerdictEvidence,
 } from "@lorelum/judge-protocol";
-import { isVerifiedCalibration } from "./calibration.js";
+import { defaultAcceptedVerdicts, isVerifiedCalibration } from "./calibration.js";
 import {
   createFindingPresentationModel,
   type GateLocale,
@@ -76,12 +77,7 @@ export interface EvaluateGateInput {
 
 type ParsedObservation =
   | {
-      readonly status: "completed";
-      readonly run: MeasurementRun | MeasurementRunV2;
-      readonly evidenceBundle: EvidenceBundle;
-    }
-  | {
-      readonly status: "partial";
+      readonly status: "measured";
       readonly verdicts: readonly Verdict[];
       readonly evidenceBundle: EvidenceBundle;
     }
@@ -94,6 +90,34 @@ type ParsedObservation =
 interface CriterionResult {
   readonly finding: GateDecision["findings"][number];
   readonly mandatory: boolean;
+}
+
+type FindingReason = GateDecision["findings"][number]["reason"];
+
+interface FailureFlags {
+  readonly disagreement: boolean;
+  readonly unavailableEvidence: boolean;
+  readonly missingEvidence: boolean;
+  readonly evidence: boolean;
+  readonly execution: boolean;
+  readonly measurement: boolean;
+  readonly unattributed: boolean;
+  readonly abstention: boolean;
+}
+
+const MISSING_REASONS: readonly (readonly [keyof FailureFlags, FindingReason])[] = [
+  ["disagreement", "disagreement"],
+  ["unavailableEvidence", "unavailable_evidence"],
+  ["missingEvidence", "missing_evidence"],
+  ["evidence", "unsupported_evidence"],
+  ["execution", "execution_failure"],
+  ["measurement", "measurement_failure"],
+  ["unattributed", "unattributed_failure"],
+  ["abstention", "abstention"],
+];
+
+function reasonForMissing(flags: FailureFlags): FindingReason {
+  return MISSING_REASONS.find(([key]) => flags[key])?.[1] ?? "missing_evidence";
 }
 
 function requiredEvidenceStatuses(
@@ -157,10 +181,7 @@ function evaluateCriterion(
       continue;
     }
     const evidenceBundle = observation.evidenceBundle;
-    const verdict =
-      observation.status === "completed"
-        ? observation.run.verdicts.find((entry) => entry.criterionId === criterion.id)
-        : observation.verdicts.find((entry) => entry.criterionId === criterion.id);
+    const verdict = observation.verdicts.find((entry) => entry.criterionId === criterion.id);
     if (verdict === undefined) {
       executionFailure = true;
       continue;
@@ -198,23 +219,16 @@ function evaluateCriterion(
   let reason: GateDecision["findings"][number]["reason"];
   if (prediction === undefined) {
     outcome = required ? "indeterminate" : "advisory";
-    reason = disagrees
-      ? "disagreement"
-      : unavailableRequiredEvidence
-        ? "unavailable_evidence"
-        : missingRequiredEvidence
-          ? "missing_evidence"
-          : evidenceFailure
-            ? "unsupported_evidence"
-            : executionFailure
-              ? "execution_failure"
-              : measurementFailure
-                ? "measurement_failure"
-                : unattributedFailure
-                  ? "unattributed_failure"
-                  : abstained
-                    ? "abstention"
-                    : "missing_evidence";
+    reason = reasonForMissing({
+      disagreement: disagrees,
+      unavailableEvidence: unavailableRequiredEvidence,
+      missingEvidence: missingRequiredEvidence,
+      evidence: evidenceFailure,
+      execution: executionFailure,
+      measurement: measurementFailure,
+      unattributed: unattributedFailure,
+      abstention: abstained,
+    });
   } else if (!policy.acceptedVerdicts.some((verdict) => verdict === prediction)) {
     outcome = required ? "fail" : "advisory";
     reason = disagrees ? "disagreement" : "unacceptable";
@@ -268,6 +282,64 @@ function evaluateCriterion(
       requiredEvidenceIds,
       nextStep: rendered.nextStep,
     },
+  };
+}
+
+/**
+ * The single overall-quality reducer. Findings remain the source of truth; this
+ * only applies the required-failure precedence and the "incomplete cannot pass"
+ * rule. It never aggregates votes or grants enforcement.
+ */
+export function qualityOutcomeFor(
+  findings: readonly GateDecision["findings"][number][],
+  incomplete = false,
+): GateDecision["qualityOutcome"] {
+  if (findings.some((finding) => finding.outcome === "fail")) return "fail";
+  if (incomplete) return "indeterminate";
+  const applicable = findings.filter((finding) => finding.reason !== "not_applicable");
+  if (applicable.length === 0) return "indeterminate";
+  if (applicable.some((finding) => finding.outcome === "indeterminate")) return "indeterminate";
+  return "pass";
+}
+
+/** Derives the advisory policy used when the caller supplies none. */
+export function advisoryPolicyFor(
+  definition: MeasurementDefinitionV2,
+  definitionIdentity: string,
+  instrumentIdentity: string,
+  taskClass: string,
+  evidenceShape: string,
+): GatePolicyV2 {
+  const [first, ...rest] = definition.criteria;
+  if (first === undefined) throw new Error("a definition has at least one criterion");
+  const rules = definition.criteria.map((criterion) => ({
+    criterionId: criterion.id,
+    acceptedVerdicts: defaultAcceptedVerdicts(criterion),
+    requiredCaseKinds: ["decisive", "equivalent", "anti"] as ["decisive", "equivalent", "anti"],
+  }));
+  const [firstRule, ...restRules] = rules;
+  if (firstRule === undefined) throw new Error("a definition has at least one criterion");
+  return {
+    schema: "lorelum.judge.gate-policy/v2",
+    id: `advisory:${definition.id}`,
+    definitionIdentity,
+    instrumentIdentity,
+    scopes: [
+      {
+        taskClass,
+        evidenceShape,
+        criterionIds: [first.id, ...rest.map((criterion) => criterion.id)],
+      },
+    ],
+    criteria: [firstRule, ...restRules],
+    minimumAgreement: 1,
+    minimumGroupsPerCaseKind: 1,
+    confidenceLevel: 0.95,
+    maximumFalseAcceptRate: 0.05,
+    maximumFalseRejectRate: 0.1,
+    maximumAbstentionRate: 0.2,
+    maximumDisagreementRate: 0.2,
+    onUncalibrated: "diagnostic",
   };
 }
 
@@ -396,31 +468,14 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
           );
           return { status: "failed", failure: "evidence" };
         }
-        const seen = new Set<string>();
-        for (const [verdictIndex, verdict] of observation.verdicts.entries()) {
-          const criterion = criteria.get(verdict.criterionId);
-          if (criterion === undefined || seen.has(verdict.criterionId)) {
-            observationIssues.push({
-              path: `$.observations[${index}].verdicts[${verdictIndex}].criterionId`,
-              code: criterion === undefined ? "unknown_criterion" : "duplicate_verdict",
-              message: `invalid partial verdict "${verdict.criterionId}"`,
-            });
-            continue;
-          }
-          seen.add(verdict.criterionId);
-          const checked = validateVerdictEvidence(criterion, verdict, bundle.value);
-          if (!checked.ok) {
-            observationIssues.push(
-              ...checked.issues.map((issue) => ({
-                ...issue,
-                path: `$.observations[${index}].verdicts[${verdictIndex}]${issue.path.slice(1)}`,
-              })),
-            );
-          }
-        }
+        const assessment = assessVerdicts(definitionResult.value.criteria, observation.verdicts, {
+          bundle: bundle.value,
+          path: `$.observations[${index}].verdicts`,
+        });
+        observationIssues.push(...assessment.issues);
         return {
-          status: "partial",
-          verdicts: observation.verdicts,
+          status: "measured",
+          verdicts: assessment.verdicts,
           evidenceBundle: bundle.value,
         };
       }
@@ -453,7 +508,7 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
       if (!measurementRunEvidenceIdentityMatches(run.value, bundle.value)) {
         return { status: "failed", failure: "evidence", evidenceBundle: bundle.value };
       }
-      return { status: "completed", run: run.value, evidenceBundle: bundle.value };
+      return { status: "measured", verdicts: run.value.verdicts, evidenceBundle: bundle.value };
     });
     if (observationIssues.length > 0) return { ok: false, issues: observationIssues };
     if (input.observations.length < repetitions) {
@@ -485,15 +540,7 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
         findings.push(renderNotApplicableFinding(criterion, locale));
       }
     }
-    const failed = results.some((result) => result.mandatory && result.finding.outcome === "fail");
-    const indeterminate = results.some(
-      (result) => result.mandatory && result.finding.outcome === "indeterminate",
-    );
-    const qualityOutcome: GateDecision["qualityOutcome"] = failed
-      ? "fail"
-      : indeterminate || results.length === 0
-        ? "indeterminate"
-        : "pass";
+    const qualityOutcome = qualityOutcomeFor(findings);
     const decision: GateDecision = {
       schema: "lorelum.judge.gate-decision/v1",
       id: input.id,

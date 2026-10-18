@@ -4,7 +4,7 @@ import type { GatePolicy } from "./generated/gate-policy.js";
 import type { InstrumentProfile } from "./generated/instrument-profile.js";
 import type { MeasurementDefinition } from "./generated/measurement-definition.js";
 import type { MeasurementRun } from "./generated/measurement-run.js";
-import { type Identity, identityOf } from "./identity.js";
+import { type Identity, identifyValidated } from "./identity.js";
 import calibrationSchema from "./schemas/calibration-artifact.schema.json" with { type: "json" };
 import gatePolicySchema from "./schemas/gate-policy.schema.json" with { type: "json" };
 import instrumentSchema from "./schemas/instrument-profile.schema.json" with { type: "json" };
@@ -85,30 +85,16 @@ export function validateCalibration(raw: unknown): ValidationResult<CalibrationA
   }, failed);
 }
 
-function identityIssue(path: string, reason: string): readonly ValidationIssue[] {
-  return [{ path, code: "schema", message: `identity: ${reason}` }];
-}
-
-function identify(validated: ValidationResult<{ readonly schema: string }>): IdentityOutcome {
-  if (!validated.ok) {
-    return validated;
-  }
-  const result = identityOf(validated.value.schema, validated.value);
-  return result.ok
-    ? result
-    : { ok: false, issues: identityIssue(result.error.path, result.error.reason) };
-}
-
 export function definitionIdentity(input: unknown): IdentityOutcome {
-  return identify(validateDefinition(input));
+  return identifyValidated(validateDefinition(input));
 }
 
 export function instrumentIdentity(input: unknown): IdentityOutcome {
-  return identify(validateInstrument(input));
+  return identifyValidated(validateInstrument(input));
 }
 
 export function gatePolicyIdentity(input: unknown): IdentityOutcome {
-  return identify(validateGatePolicy(input));
+  return identifyValidated(validateGatePolicy(input));
 }
 
 /**

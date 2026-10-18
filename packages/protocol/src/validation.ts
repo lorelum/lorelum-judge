@@ -27,9 +27,13 @@ export type IssueCode =
   | "verdict_unsupported"
   | "invalid_applicability"
   | "not_applicable"
+  | "invalid_entry"
   | "unknown_acceptance"
   | "duplicate_acceptance"
   | "report_mismatch";
+
+/** Canonical identity shape accepted in v2 records. */
+export const SHA256_IDENTITY = /^sha256:[0-9a-f]{64}$/;
 
 export interface ValidationIssue {
   readonly path: string;

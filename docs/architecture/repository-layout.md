@@ -48,7 +48,10 @@ rubric, verdict, calibration, or gate semantics.
 
 Pure domain rules and workflows for task framing, rubric authoring, evidence
 collection, judgment, calibration, and gate decisions. It consumes protocol and
-runtime through their public APIs.
+runtime through their public APIs. Evidence normalization is owned by
+`packages/judge/src/evidence.ts`; verdict-list assessment is owned by
+`packages/protocol/src/assessment.ts`; review execution is split by concept
+under `packages/judge/src/review/` rather than one aggregate file.
 
 ### Workflow
 

@@ -1,9 +1,6 @@
-import { validateCriteria, validateVerdict } from "./criterion.js";
-import {
-  evidenceBundleIdentity,
-  validateEvidenceBundle,
-  validateVerdictEvidence,
-} from "./evidence.js";
+import { assessVerdicts } from "./assessment.js";
+import { validateCriteria } from "./criterion.js";
+import { evidenceBundleIdentity } from "./evidence.js";
 import type { EvidenceItem } from "./generated/evidence-item.js";
 import type { InstrumentProfile } from "./generated/instrument-profile.js";
 import type { InstrumentProfileV2 } from "./generated/instrument-profile-v2.js";
@@ -12,7 +9,7 @@ import type { MeasurementDefinitionV2 } from "./generated/measurement-definition
 import type { MeasurementRun } from "./generated/measurement-run.js";
 import type { MeasurementRunV2 } from "./generated/measurement-run-v2.js";
 import type { ReviewExecution } from "./generated/review-execution.js";
-import { identityOf } from "./identity.js";
+import { identifyValidated, identityOf } from "./identity.js";
 import {
   definitionIdentity,
   type IdentityOutcome,
@@ -27,7 +24,6 @@ import definitionV2Schema from "./schemas/measurement-definition-v2.schema.json"
   type: "json",
 };
 import runV2Schema from "./schemas/measurement-run-v2.schema.json" with { type: "json" };
-import reviewExecutionSchema from "./schemas/review-execution.schema.json" with { type: "json" };
 import {
   compileSchema,
   failed,
@@ -41,13 +37,10 @@ import {
 export type { InstrumentProfileV2, MeasurementDefinitionV2, MeasurementRunV2, ReviewExecution };
 export type AnyMeasurementDefinition = MeasurementDefinition | MeasurementDefinitionV2;
 export type AnyInstrumentProfile = InstrumentProfile | InstrumentProfileV2;
-export type ReviewAttempt = ReviewExecution["attempts"][number];
-export type ReviewIssue = NonNullable<ReviewAttempt["issues"]>[number];
 
 const checkDefinitionV2 = compileSchema<MeasurementDefinitionV2>(definitionV2Schema);
 const checkInstrumentV2 = compileSchema<InstrumentProfileV2>(instrumentV2Schema);
 const checkRunV2 = compileSchema<MeasurementRunV2>(runV2Schema);
-const checkExecution = compileSchema<ReviewExecution>(reviewExecutionSchema);
 
 const DEFINITION_V1 = "lorelum.judge.measurement-definition/v1";
 const DEFINITION_V2 = "lorelum.judge.measurement-definition/v2";
@@ -58,27 +51,6 @@ function schemaOf(raw: unknown): unknown {
     return undefined;
   }
   return raw.schema;
-}
-
-function identify<T extends { readonly schema: string }>(
-  validated: ValidationResult<T>,
-): IdentityOutcome {
-  if (!validated.ok) {
-    return validated;
-  }
-  const result = identityOf(validated.value.schema, validated.value);
-  return result.ok
-    ? result
-    : {
-        ok: false,
-        issues: [
-          {
-            path: result.error.path,
-            code: "schema",
-            message: `identity: ${result.error.reason}`,
-          },
-        ],
-      };
 }
 
 function metadataIssues(definition: MeasurementDefinitionV2): readonly ValidationIssue[] {
@@ -106,7 +78,7 @@ function metadataIssues(definition: MeasurementDefinitionV2): readonly Validatio
     if (!seen.has(criterion.id)) {
       issues.push({
         path: "$.metadata",
-        code: "missing_verdict",
+        code: "schema",
         message: `criterion "${criterion.id}" has no metadata record`,
       });
     }
@@ -155,7 +127,7 @@ export function validateMeasurementDefinitionV2(
 }
 
 export function measurementDefinitionIdentityV2(input: unknown): IdentityOutcome {
-  return identify(validateMeasurementDefinitionV2(input));
+  return identifyValidated(validateMeasurementDefinitionV2(input));
 }
 
 export function validateInstrumentV2(raw: unknown): ValidationResult<InstrumentProfileV2> {
@@ -185,7 +157,7 @@ export function validateInstrumentV2(raw: unknown): ValidationResult<InstrumentP
 }
 
 export function instrumentIdentityV2(input: unknown): IdentityOutcome {
-  return identify(validateInstrumentV2(input));
+  return identifyValidated(validateInstrumentV2(input));
 }
 
 /**
@@ -391,49 +363,9 @@ function checkRunAgainstV2(
     });
   }
 
-  const criteria = new Map(definition.value.criteria.map((criterion) => [criterion.id, criterion]));
-  const seen = new Set<string>();
-
-  for (const [index, verdict] of input.verdicts.entries()) {
-    const criterion = criteria.get(verdict.criterionId);
-    if (criterion === undefined) {
-      issues.push({
-        path: `$.verdicts[${index}].criterionId`,
-        code: "unknown_criterion",
-        message: `definition has no criterion "${verdict.criterionId}"`,
-      });
-      continue;
-    }
-    if (seen.has(verdict.criterionId)) {
-      issues.push({
-        path: `$.verdicts[${index}].criterionId`,
-        code: "duplicate_verdict",
-        message: `criterion "${verdict.criterionId}" has more than one verdict`,
-      });
-      continue;
-    }
-    seen.add(verdict.criterionId);
-
-    const checked = validateVerdict(criterion, verdict);
-    if (!checked.ok) {
-      issues.push(
-        ...checked.issues.map((issue) => ({
-          ...issue,
-          path: `$.verdicts[${index}]${issue.path.slice(1)}`,
-        })),
-      );
-    }
-  }
-
-  for (const criterion of definition.value.criteria) {
-    if (!seen.has(criterion.id)) {
-      issues.push({
-        path: "$.verdicts",
-        code: "missing_verdict",
-        message: `criterion "${criterion.id}" has no verdict`,
-      });
-    }
-  }
+  issues.push(
+    ...assessVerdicts(definition.value.criteria, input.verdicts, { requireAll: true }).issues,
+  );
 
   return issues.length === 0 ? { ok: true, value: input } : { ok: false, issues };
 }
@@ -446,299 +378,7 @@ export function measurementRunIdentityV2(input: unknown): IdentityOutcome {
         ? { ok: true, value: checked }
         : { ok: false, issues: schemaIssues(checkRunV2.errors) };
     }, failed);
-    return identify(result);
-  }, failed);
-}
-
-function attemptIssues(
-  execution: ReviewExecution,
-  definition: MeasurementDefinitionV2,
-  instrument: InstrumentProfileV2,
-): readonly ValidationIssue[] {
-  const issues: ValidationIssue[] = [];
-  const definitionId = measurementDefinitionIdentityV2(definition);
-  const instrumentId = instrumentIdentityV2(instrument);
-  if (definitionId.ok && execution.definitionIdentity !== definitionId.identity) {
-    issues.push({
-      path: "$.definitionIdentity",
-      code: "identity_mismatch",
-      message: "execution was not planned for this definition",
-    });
-  }
-  if (instrumentId.ok && execution.instrumentIdentity !== instrumentId.identity) {
-    issues.push({
-      path: "$.instrumentIdentity",
-      code: "identity_mismatch",
-      message: "execution was not planned for this instrument",
-    });
-  }
-  if (execution.attempts.length !== execution.plannedCount) {
-    issues.push({
-      path: "$.attempts",
-      code: "report_mismatch",
-      message: "attempts must describe every planned execution, including not_started",
-    });
-  }
-  const criteria = new Map(definition.criteria.map((criterion) => [criterion.id, criterion]));
-  const attemptIds = new Set<string>();
-  const llm = instrument.method.kind === "llm";
-
-  for (const [index, attempt] of execution.attempts.entries()) {
-    const path = `$.attempts[${index}]`;
-    if (attempt.index !== index) {
-      issues.push({
-        path: `${path}.index`,
-        code: "report_mismatch",
-        message: `attempt index is ${attempt.index}, expected ${index}`,
-      });
-    }
-    if (attemptIds.has(attempt.id)) {
-      issues.push({
-        path: `${path}.id`,
-        code: "duplicate_verdict",
-        message: `attempt id "${attempt.id}" is used more than once`,
-      });
-    }
-    attemptIds.add(attempt.id);
-
-    const hasStarted = attempt.startedAt !== undefined;
-    const hasFinished = attempt.finishedAt !== undefined;
-    if (attempt.status === "not_started") {
-      if (
-        hasStarted ||
-        hasFinished ||
-        attempt.verdicts !== undefined ||
-        attempt.evidenceBundle !== undefined ||
-        attempt.run !== undefined ||
-        attempt.failure !== undefined ||
-        attempt.llm !== undefined ||
-        attempt.issues !== undefined
-      ) {
-        issues.push({
-          path,
-          code: "report_mismatch",
-          message: "a not_started attempt carries no execution facts",
-        });
-      }
-      continue;
-    }
-    if (!hasStarted || !hasFinished) {
-      issues.push({
-        path,
-        code: "report_mismatch",
-        message: `${attempt.status} attempt needs startedAt and finishedAt`,
-      });
-    }
-    if (attempt.llm !== undefined && !llm) {
-      issues.push({
-        path: `${path}.llm`,
-        code: "report_mismatch",
-        message: "a program attempt has no model request or response",
-      });
-    }
-    if (llm && attempt.status !== "cancelled" && attempt.llm === undefined) {
-      issues.push({
-        path: `${path}.llm`,
-        code: "report_mismatch",
-        message: "an LLM attempt records its request and response facts",
-      });
-    }
-
-    if (attempt.status === "completed") {
-      if (attempt.run === undefined || attempt.evidenceBundle === undefined) {
-        issues.push({
-          path,
-          code: "report_mismatch",
-          message: "a completed attempt needs a run and its evidence bundle",
-        });
-        continue;
-      }
-      if (
-        attempt.verdicts !== undefined ||
-        attempt.failure !== undefined ||
-        attempt.issues !== undefined
-      ) {
-        issues.push({
-          path,
-          code: "report_mismatch",
-          message: "a completed attempt carries its verdicts in the run and no issues",
-        });
-      }
-      const run = validateMeasurementRunV2(definition, instrument, attempt.run);
-      if (!run.ok) {
-        issues.push(
-          ...run.issues.map((issue) => ({ ...issue, path: `${path}.run${issue.path.slice(1)}` })),
-        );
-        continue;
-      }
-      const bundle = validateEvidenceBundle(attempt.evidenceBundle);
-      if (!bundle.ok) {
-        issues.push(
-          ...bundle.issues.map((issue) => ({
-            ...issue,
-            path: `${path}.evidenceBundle${issue.path.slice(1)}`,
-          })),
-        );
-        continue;
-      }
-      if (run.value.executionId !== execution.id) {
-        issues.push({
-          path: `${path}.run.executionId`,
-          code: "identity_mismatch",
-          message: "run does not belong to this execution",
-        });
-      }
-      const evidenceId = evidenceBundleIdentity(bundle.value);
-      if (evidenceId.ok && run.value.evidenceIdentity !== evidenceId.identity) {
-        issues.push({
-          path: `${path}.run.evidenceIdentity`,
-          code: "identity_mismatch",
-          message: "run does not record this evidence bundle",
-        });
-      }
-      continue;
-    }
-
-    if (attempt.status === "partial") {
-      if (
-        attempt.run !== undefined ||
-        attempt.failure !== undefined ||
-        attempt.evidenceBundle === undefined ||
-        attempt.verdicts === undefined ||
-        attempt.verdicts.length === 0 ||
-        attempt.issues === undefined ||
-        attempt.issues.length === 0
-      ) {
-        issues.push({
-          path,
-          code: "report_mismatch",
-          message: "a partial attempt has legal verdicts and issues but no complete run or failure",
-        });
-        continue;
-      }
-      const bundle = validateEvidenceBundle(attempt.evidenceBundle);
-      if (!bundle.ok) {
-        issues.push(
-          ...bundle.issues.map((issue) => ({
-            ...issue,
-            path: `${path}.evidenceBundle${issue.path.slice(1)}`,
-          })),
-        );
-        continue;
-      }
-      const seen = new Set<string>();
-      for (const [verdictIndex, verdict] of attempt.verdicts.entries()) {
-        const criterion = criteria.get(verdict.criterionId);
-        if (criterion === undefined) {
-          issues.push({
-            path: `${path}.verdicts[${verdictIndex}].criterionId`,
-            code: "unknown_criterion",
-            message: `unknown criterion "${verdict.criterionId}"`,
-          });
-          continue;
-        }
-        if (seen.has(verdict.criterionId)) {
-          issues.push({
-            path: `${path}.verdicts[${verdictIndex}].criterionId`,
-            code: "duplicate_verdict",
-            message: `criterion "${verdict.criterionId}" has more than one legal verdict`,
-          });
-        }
-        seen.add(verdict.criterionId);
-        const checked = validateVerdictEvidence(criterion, verdict, bundle.value);
-        if (!checked.ok) {
-          issues.push(
-            ...checked.issues.map((issue) => ({
-              ...issue,
-              path: `${path}.verdicts[${verdictIndex}]${issue.path.slice(1)}`,
-            })),
-          );
-        }
-      }
-      continue;
-    }
-
-    if (attempt.status === "failed") {
-      if (attempt.failure === undefined || attempt.run !== undefined) {
-        issues.push({
-          path,
-          code: "report_mismatch",
-          message: "a failed attempt has a structured failure and no run",
-        });
-      }
-      if (attempt.verdicts !== undefined) {
-        issues.push({
-          path: `${path}.verdicts`,
-          code: "report_mismatch",
-          message: "a failed attempt has no legal verdicts",
-        });
-      }
-      continue;
-    }
-
-    if (attempt.status === "cancelled") {
-      if (
-        attempt.run !== undefined ||
-        attempt.verdicts !== undefined ||
-        attempt.failure !== undefined
-      ) {
-        issues.push({
-          path,
-          code: "report_mismatch",
-          message: "a cancelled attempt does not become a measurement",
-        });
-      }
-    }
-  }
-
-  return issues;
-}
-
-export function validateReviewExecution(
-  raw: unknown,
-  definitionInput: unknown,
-  instrumentInput: unknown,
-): ValidationResult<ReviewExecution> {
-  return guarded<ValidationResult<ReviewExecution>>(() => {
-    const input = snapshot(raw);
-    if (!checkExecution(input)) {
-      return { ok: false, issues: schemaIssues(checkExecution.errors) };
-    }
-    const definition = validateMeasurementDefinitionV2(definitionInput);
-    const instrument = validateInstrumentV2(instrumentInput);
-    if (!definition.ok || !instrument.ok) {
-      return {
-        ok: false,
-        issues: [
-          ...(!definition.ok
-            ? definition.issues.map((issue) => ({
-                ...issue,
-                path: `definition${issue.path.slice(1)}`,
-              }))
-            : []),
-          ...(!instrument.ok
-            ? instrument.issues.map((issue) => ({
-                ...issue,
-                path: `instrument${issue.path.slice(1)}`,
-              }))
-            : []),
-        ],
-      };
-    }
-    const issues = attemptIssues(input, definition.value, instrument.value);
-    return issues.length === 0 ? { ok: true, value: input } : { ok: false, issues };
-  }, failed);
-}
-
-export function reviewExecutionIdentity(input: unknown): IdentityOutcome {
-  return guarded<IdentityOutcome>(() => {
-    const checked = guarded<ValidationResult<ReviewExecution>>(() => {
-      const copy = snapshot(input);
-      return checkExecution(copy)
-        ? { ok: true, value: copy }
-        : { ok: false, issues: schemaIssues(checkExecution.errors) };
-    }, failed);
-    return identify(checked);
+    return identifyValidated(result);
   }, failed);
 }
 

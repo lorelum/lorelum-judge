@@ -41,6 +41,11 @@ that composition.
   block, multiple blocks, duplicate JSON keys, malformed JSON, unknown envelope
   fields, and non-array verdicts are refused. Nothing is repaired and no extra
   model call is made.
+- Raw verdict assessment is canonical in protocol. `assessVerdicts` is shared
+  by full run validation, stored partial executions, live review assessment,
+  and gate partial observations. A duplicate group is excluded as a whole;
+  unknown entries are ignored; missing coverage is reported only when the call
+  site requires complete coverage.
 - Each criterion is validated independently. Legal findings stay visible;
   missing, duplicate, unknown, illegal-verdict, and illegal-evidence entries get
   explicit issues. Duplicates are never resolved by picking one. A completed
@@ -62,6 +67,11 @@ that composition.
   response-model conflicts or missing response information instead of assuming
   a match. Without applicable calibration the review is advisory and never
   blocks delivery by itself.
+- Review execution is split by concept: `review/input.ts` validates and
+  prepares, `review/execute-attempt.ts` runs one attempt, `review/record.ts`
+  builds lifecycle records, `review/findings.ts` aggregates, and `review.ts`
+  only re-exports the public entrypoint. Evidence validation/manifest building
+  lives in `evidence.ts` and is shared with prompt compilation.
 - A caller-supplied gate policy is bound to the exact definition and instrument.
   A mismatch, including a different repetition count, is a validation error
   before any checker or model call. Calibration alone is different: if only a

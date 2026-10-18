@@ -1,3 +1,4 @@
+export * from "./assessment.js";
 export * from "./calibration.js";
 export * from "./criterion.js";
 export * from "./enforcement.js";
@@ -7,7 +8,8 @@ export * from "./json.js";
 export * from "./measurement.js";
 export * from "./measurement-aggregation.js";
 export * from "./measurement-v2.js";
+export * from "./measurement-v2-execution.js";
 export * from "./rubric.js";
 export * from "./task-contract.js";
 export type { IssueCode, ValidationIssue, ValidationResult } from "./validation.js";
-export { snapshot } from "./validation.js";
+export { SHA256_IDENTITY, snapshot } from "./validation.js";

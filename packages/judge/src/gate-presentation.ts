@@ -622,3 +622,136 @@ export function renderNotApplicableFinding(
     ),
   };
 }
+
+export type ReviewGateReason =
+  | "calibration_unavailable"
+  | "calibration_unverified"
+  | "request_mismatch"
+  | "response_metadata_missing"
+  | "response_model_unknown"
+  | "response_model_conflict"
+  | "finish_reason_unknown"
+  | "prompt_identity_unknown"
+  | "prompt_identity_conflict"
+  | "render_identity_conflict"
+  | "execution_complete"
+  | "execution_partial"
+  | "execution_failed"
+  | "execution_cancelled"
+  | "execution_not_started";
+
+const REASON_LABELS: Readonly<
+  Record<ReviewGateReason, { readonly zh: string; readonly en: string }>
+> = {
+  calibration_unavailable: { zh: "没有适用的校准", en: "no applicable calibration" },
+  calibration_unverified: { zh: "校准未经可信加载器验证", en: "calibration was not verified" },
+  request_mismatch: {
+    zh: "实际请求与声明的方法不一致",
+    en: "the actual request differs from the declared method",
+  },
+  response_metadata_missing: {
+    zh: "服务端响应信息缺失",
+    en: "response metadata is missing",
+  },
+  response_model_unknown: {
+    zh: "服务端返回模型无法确认",
+    en: "the response model is unknown",
+  },
+  response_model_conflict: {
+    zh: "服务端返回模型与请求模型冲突",
+    en: "the response model conflicts with the request",
+  },
+  finish_reason_unknown: {
+    zh: "服务端完成原因未知",
+    en: "the finish reason is unknown",
+  },
+  prompt_identity_unknown: {
+    zh: "实际规则提示身份未知",
+    en: "the actual rule prompt identity is unknown",
+  },
+  prompt_identity_conflict: {
+    zh: "实际规则提示与方法身份冲突",
+    en: "the actual rule prompt conflicts with the method",
+  },
+  render_identity_conflict: {
+    zh: "实际消息渲染与执行记录冲突",
+    en: "the rendered messages conflict with the execution record",
+  },
+  execution_complete: { zh: "评审按计划完成", en: "the review completed" },
+  execution_partial: { zh: "评审只得到部分结论", en: "the review is partial" },
+  execution_failed: { zh: "评审没有产生可用结论", en: "the review failed" },
+  execution_cancelled: { zh: "评审被取消", en: "the review was cancelled" },
+  execution_not_started: { zh: "评审没有开始", en: "the review did not start" },
+};
+
+export function reviewReasonLabel(reason: ReviewGateReason, locale: GateLocale): string {
+  const labels = REASON_LABELS[reason];
+  return locale === "en-US" ? labels.en : labels.zh;
+}
+
+export function renderReviewExplanation(
+  completeness: import("./review/types.js").ReviewCompleteness,
+  quality: GateDecision["qualityOutcome"],
+  eligibility: boolean,
+  locale: GateLocale,
+  reasons: readonly ReviewGateReason[],
+): string {
+  if (locale === "en-US") {
+    const state =
+      completeness === "complete"
+        ? "The review completed its planned attempts."
+        : completeness === "cancelled"
+          ? "The review was cancelled; later attempts did not start."
+          : completeness === "partial"
+            ? "Only some criteria produced a legal finding; unfinished items are not filled in."
+            : completeness === "failed"
+              ? "The review attempts did not produce a usable finding."
+              : "No review attempt started.";
+    const gate =
+      quality === "fail"
+        ? "A supported required finding failed."
+        : quality === "pass"
+          ? "All required findings are acceptable."
+          : "The quality result cannot be determined.";
+    const enforcement = eligibility
+      ? "Automatic enforcement is available."
+      : "This result is advisory and cannot automatically block delivery.";
+    return [
+      state,
+      gate,
+      enforcement,
+      reasons.length === 0
+        ? ""
+        : `Notes: ${reasons.map((reason) => reviewReasonLabel(reason, locale)).join(", ")}.`,
+    ]
+      .filter((part) => part.length > 0)
+      .join(" ");
+  }
+  const state =
+    completeness === "complete"
+      ? "本次评审按计划完成。"
+      : completeness === "cancelled"
+        ? "本次评审被取消，后续执行没有开始。"
+        : completeness === "partial"
+          ? "本次评审只有部分条目得到合法结论，未完成项没有被补写。"
+          : completeness === "failed"
+            ? "本次评审没有得到可用的结论。"
+            : "本次评审没有开始执行。";
+  const gate =
+    quality === "fail"
+      ? "已确认的必选项不满足。"
+      : quality === "pass"
+        ? "必选项均获得可接受结论。"
+        : "当前无法判断整体质量。";
+  const enforcement = eligibility ? "结果符合自动把关资格。" : "该结果仅供参考，不能自动阻止交付。";
+  return [
+    state,
+    gate,
+    enforcement,
+    reasons.length === 0
+      ? ""
+      : `说明：${reasons.map((reason) => reviewReasonLabel(reason, locale)).join("、")}。`,
+  ]
+    .filter((part) => part.length > 0)
+    .join("");
+}
