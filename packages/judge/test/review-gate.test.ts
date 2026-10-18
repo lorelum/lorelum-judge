@@ -411,6 +411,41 @@ describe("one-call review", () => {
     expect(calls).toBe(0);
   });
 
+  test("rejects instrument and scope mismatches before calling the checker", async () => {
+    const reviewed = await executionFor(() => ({
+      verdicts: [met("c1", "e1"), met("c2", "e2")],
+    }));
+    const base = policy(reviewed.definition, reviewed.instrument);
+    const firstScope = base.scopes[0];
+    if (firstScope === undefined) throw new Error("fixture scope missing");
+    const cases = [
+      { ...base, instrumentIdentity: `sha256:${"f".repeat(64)}` },
+      {
+        ...base,
+        scopes: [{ ...firstScope, criterionIds: ["c1"] }],
+      },
+    ];
+    for (const candidate of cases) {
+      let calls = 0;
+      const result = await review(
+        {
+          definition: reviewed.definition,
+          evidence,
+          method: { kind: "program", checker: { id: "offline", version: "1" } },
+          gate: { policy: candidate, taskClass: "code", evidenceShape: "code" },
+        },
+        {
+          checker: () => {
+            calls += 1;
+            return { verdicts: [met("c1", "e1"), met("c2", "e2")] };
+          },
+        },
+      );
+      expect(result.ok).toBe(false);
+      expect(calls).toBe(0);
+    }
+  });
+
   test("returns findings, completion and advisory gate information", async () => {
     let calls = 0;
     const result = await review(

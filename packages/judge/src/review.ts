@@ -842,7 +842,7 @@ export function prepareReview(input: unknown, ports: ReviewPorts): PrepareReview
   }
 }
 
-export async function runPreparedReview(
+async function runPreparedReviewInner(
   prepared: PreparedReview,
   ports: ReviewPorts,
   signal?: AbortSignal,
@@ -1137,6 +1137,28 @@ export async function runPreparedReview(
       completeness: reviewCompleteness(checked.value),
     },
   };
+}
+
+export async function runPreparedReview(
+  prepared: PreparedReview,
+  ports: ReviewPorts,
+  signal?: AbortSignal,
+): Promise<ExecuteReviewResult> {
+  try {
+    return await runPreparedReviewInner(prepared, ports, signal);
+  } catch (error) {
+    return {
+      ok: false,
+      issues: [
+        validation(
+          "$",
+          `prepared review could not run: ${
+            error instanceof Error ? error.message : "unknown error"
+          }`,
+        ),
+      ],
+    };
+  }
 }
 
 async function execute(input: unknown, ports: ReviewPorts): Promise<ExecuteReviewResult> {

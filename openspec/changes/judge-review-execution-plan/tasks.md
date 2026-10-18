@@ -48,10 +48,10 @@
 
 - 实现内容：protocol v2 定义/方法/完整 run/执行记录及冻结 rubric 转换与 v1 迁移；#9 交叉校验与 verified loader 版本分派；runtime 模型配置与响应 metadata；`@lorelum/provider-openai-compatible` 非流式 HTTP provider；`executeReview`、默认读取器、逐项校验、显式多次与生命周期；`evaluateReviewGate` 与一次调用 `review`；离线 program/mock LLM/review-to-gate 示例。
 - `bun install --frozen-lockfile`：通过，Bun 1.4.2。
-- `bun run validate`：通过；`biome check`、repository baseline、layer check、生成类型 up-to-date、typecheck、686 tests / 0 fail、6 package builds、Loaded 6 built package exports in Node ESM、隔离消费者三类示例通过。
+- `bun run validate`：通过；`biome check`、repository baseline、layer check、生成类型 up-to-date、typecheck、687 tests / 0 fail、6 package builds、Loaded 6 built package exports in Node ESM、隔离消费者三类示例通过。
 - runtime conformance：passed=true，18/18。
 - `openspec validate judge-review-execution-plan --type change --strict`：Change 'judge-review-execution-plan' is valid。
-- 独立 review：固定 SHA 9252866 的首轮只读 review 报告 6 项 major（提示 verdict schema、provider 响应体超时、attempt 超时未中止底层调用、v2 run 证据身份未绑定、gate 未检查 prompt/render 身份、review gate 输入未预快照校验）和 2 项 minor（resume 配置、JSON 字符串内反引号）。8386ab2 已处理；固定 SHA 8386ab2 的复核确认多数修复，并指出 policy 语义校验仍需前置、resume override 未持久化。后续提交将 gate policy 的完整 `validateGatePolicyForV2` 校验移到执行前，并把实际模型配置写入 resume 状态；相应回归测试已加入。
+- 独立 review：固定 SHA 9252866 的首轮只读 review 报告 6 项 major（提示 verdict schema、provider 响应体超时、attempt 超时未中止底层调用、v2 run 证据身份未绑定、gate 未检查 prompt/render 身份、review gate 输入未预快照校验）和 2 项 minor（resume 配置、JSON 字符串内反引号）。8386ab2 已处理；固定 SHA 8386ab2 的复核确认多数修复，并指出 policy 语义校验仍需前置、resume override 未持久化。后续提交将 gate policy 的完整 `validateGatePolicyForV2` 校验移到执行前，并把实际模型配置写入 resume 状态；相应回归测试已加入。固定 SHA ef83429 的最终复核未发现 blocking/major 问题，仅指出 `review()` 直接调用预检执行时缺少结构化异常边界；已为该入口补充捕获并增加 instrument/scope mismatch 零调用测试。
 - 未使用真实 provider、key 或外部模型；合成 policy/示例不构成真实校准或质量证明。
 
 ## 规划验证记录
