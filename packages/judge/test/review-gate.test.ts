@@ -442,6 +442,31 @@ describe("one-call review", () => {
     expect(result.value.review.findings[0]?.disagreement).toBe(true);
   });
 
+  test("forwards caller calibration by reference instead of snapshotting it", async () => {
+    let calls = 0;
+    const calibration = {
+      get definitionIdentity(): string {
+        throw new Error("calibration must not be read while preparing the gate");
+      },
+    };
+    const result = await review(
+      {
+        definition: definition(),
+        evidence,
+        method: { kind: "program", checker: { id: "offline", version: "1" } },
+        gate: { calibration },
+      },
+      {
+        checker: () => {
+          calls += 1;
+          return { verdicts: [met("c1", "e1"), met("c2", "e2")] };
+        },
+      },
+    );
+    expect(result.ok).toBe(true);
+    expect(calls).toBe(1);
+  });
+
   test("rejects an invalid gate policy before calling the checker", async () => {
     let calls = 0;
     const result = await review(

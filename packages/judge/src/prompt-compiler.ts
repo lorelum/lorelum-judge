@@ -16,7 +16,7 @@ import {
 } from "./evidence.js";
 import { isRecord } from "./type-guards.js";
 
-export type { EvidenceMaterial } from "./evidence.js";
+export type { EvidenceMaterial, EvidenceStatus } from "./evidence.js";
 export { escapeEvidenceText, normalizeText } from "./evidence.js";
 
 export const PROMPT_RENDER_VERSION = "lorelum.judge.prompt-render/v2";

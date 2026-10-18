@@ -83,6 +83,10 @@ export async function executeAttempt(
     method.kind === "llm"
       ? llmRequestFacts(method, promptIdentity, renderIdentity, timeoutMs)
       : undefined;
+  const finished = (current = context) => ({
+    ...current,
+    finishedAt: clock.now().toISOString(),
+  });
 
   try {
     let raw: readonly unknown[] | undefined;
@@ -103,7 +107,7 @@ export async function executeAttempt(
       raw = readCheckerOutput(output);
       if (raw === undefined) {
         return {
-          attempt: failedAttempt(context, {
+          attempt: failedAttempt(finished(), {
             category: "execution",
             code: "invalid_checker_output",
             message: "the checker did not return a verdict list",
@@ -130,7 +134,7 @@ export async function executeAttempt(
       if (facts === undefined) {
         return {
           attempt: failedAttempt(
-            context,
+            finished(),
             {
               category: "provider",
               code: "unsupported_response_kind",
@@ -149,7 +153,7 @@ export async function executeAttempt(
       if (facts.metadata?.finishReason === "length") {
         return {
           attempt: failedAttempt(
-            context,
+            finished(),
             {
               category: "provider",
               code: "truncated_response",
@@ -163,7 +167,7 @@ export async function executeAttempt(
       if (!parsed.ok) {
         return {
           attempt: failedAttempt(
-            context,
+            finished(),
             {
               category: "provider",
               code: parsed.issues[0]?.code ?? "invalid_response",
@@ -177,7 +181,7 @@ export async function executeAttempt(
     }
 
     const assessed = assess(definition, raw, manifest);
-    context = { ...context, finishedAt: clock.now().toISOString() };
+    context = finished();
     const record =
       request === undefined
         ? undefined

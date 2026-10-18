@@ -4,6 +4,7 @@ import { prepareReview } from "./input.js";
 import type { ExecuteReviewInput, ExecuteReviewResult, ReviewPorts } from "./types.js";
 import { validation } from "./validation.js";
 
+export type { ValidationResult } from "@lorelum/judge-protocol";
 export { runPreparedReview } from "./execute.js";
 export { reviewCompleteness } from "./findings.js";
 export { prepareReview } from "./input.js";

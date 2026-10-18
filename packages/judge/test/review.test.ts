@@ -4,6 +4,7 @@ import type {
   EvidenceMaterial,
   ExecuteReviewInput,
   ProgramChecker,
+  ProgramCheckerOutput,
   ReviewMethodInput,
 } from "../src/index.js";
 import { executeReview, REVIEW_SYSTEM_PROMPT } from "../src/index.js";
@@ -191,6 +192,19 @@ describe("executeReview with a program checker", () => {
       expect(attempt?.status).toBe("failed");
       expect(attempt?.failure?.message).toBe(expected);
     }
+  });
+
+  test("records the finish time for an early checker-output failure", async () => {
+    let tick = 0;
+    const result = await executeReview(input(), {
+      checker: () => ({}) as unknown as ProgramCheckerOutput,
+      clock: { now: () => new Date(Date.UTC(2026, 0, 1, 0, 0, tick++)) },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const attempt = result.value.execution.attempts[0];
+    expect(attempt?.status).toBe("failed");
+    expect(attempt?.startedAt).not.toBe(attempt?.finishedAt);
   });
 
   test("normalizes evidence once for the checker and its manifest", async () => {

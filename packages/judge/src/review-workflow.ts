@@ -65,12 +65,14 @@ function prepareGate(raw: unknown): ValidationResult<PreparedGate | undefined> {
       issues: [{ path: "$.gate", code: "schema", message: "gate must be an object" }],
     };
   }
+  // Verified calibration is authenticated by object identity (WeakSet), so it
+  // must be forwarded by reference; snapshotting would silently unverify it.
+  const calibration = raw.calibration;
   const copied = snapshot({
     ...(raw.id === undefined ? {} : { id: raw.id }),
     ...(raw.policy === undefined ? {} : { policy: raw.policy }),
     ...(raw.taskClass === undefined ? {} : { taskClass: raw.taskClass }),
     ...(raw.evidenceShape === undefined ? {} : { evidenceShape: raw.evidenceShape }),
-    ...(raw.calibration === undefined ? {} : { calibration: raw.calibration }),
     ...(raw.now === undefined ? {} : { now: raw.now }),
     ...(raw.locale === undefined ? {} : { locale: raw.locale }),
   });
@@ -144,7 +146,7 @@ function prepareGate(raw: unknown): ValidationResult<PreparedGate | undefined> {
       ...(copied.policy === undefined ? {} : { policy: copied.policy }),
       ...(copied.taskClass === undefined ? {} : { taskClass: copied.taskClass }),
       ...(copied.evidenceShape === undefined ? {} : { evidenceShape: copied.evidenceShape }),
-      ...(copied.calibration === undefined ? {} : { calibration: copied.calibration }),
+      ...(calibration === undefined ? {} : { calibration }),
       ...(copied.now === undefined ? {} : { now: copied.now }),
       ...(locale === undefined ? {} : { locale }),
     },
@@ -206,11 +208,7 @@ export async function review(input: ReviewRequest, ports: ReviewPorts): Promise<
       ok: false,
       issues: context.issues.map((issue) => ({
         ...issue,
-        path: issue.path.startsWith("$.policy")
-          ? `$.gate.policy${issue.path.slice("$.policy".length)}`
-          : issue.path.startsWith("$.definition") || issue.path.startsWith("$.instrument")
-            ? issue.path
-            : `$.gate.policy${issue.path.slice(1)}`,
+        path: `$.gate.policy${issue.path.slice(1)}`,
       })),
     };
   }
