@@ -207,6 +207,26 @@ describe("executeReview with a program checker", () => {
     expect(attempt?.startedAt).not.toBe(attempt?.finishedAt);
   });
 
+  test("records a finish time for rejected model responses", async () => {
+    const responses: ModelResponse[] = [
+      { kind: "tool_calls", calls: [] },
+      { kind: "message", content: "not json" },
+      { kind: "message", content: "{}", metadata: { finishReason: "length" } },
+    ];
+    for (const response of responses) {
+      let tick = 0;
+      const result = await executeReview(input({ method: llmMethod }), {
+        model: new ScriptedModel([response]),
+        clock: { now: () => new Date(Date.UTC(2026, 0, 1, 0, 0, tick++)) },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      const attempt = result.value.execution.attempts[0];
+      expect(attempt?.status).toBe("failed");
+      expect(attempt?.startedAt).not.toBe(attempt?.finishedAt);
+    }
+  });
+
   test("normalizes evidence once for the checker and its manifest", async () => {
     let seen = "";
     const checker: ProgramChecker = ({ evidence: copied }) => {

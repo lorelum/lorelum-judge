@@ -48,14 +48,14 @@
 
 - 实现内容：protocol v2 定义/方法/完整 run/执行记录及冻结 rubric 转换与 v1 迁移；#9 交叉校验与 verified loader 版本分派；runtime 模型配置与响应 metadata；`@lorelum/provider-openai-compatible` 非流式 HTTP provider；`executeReview`、默认读取器、逐项校验、显式多次与生命周期；`evaluateReviewGate` 与一次调用 `review`；离线 program/mock LLM/review-to-gate 示例。
 - `bun install --frozen-lockfile`：通过，Bun 1.4.2。
-- `bun run validate`：通过；`biome check`、repository baseline、layer check、生成类型 up-to-date、typecheck、702 tests / 0 fail、6 package builds、Loaded 6 built package exports in Node ESM、隔离消费者三类示例通过。
+- `bun run validate`：通过；`biome check`、repository baseline、layer check、生成类型 up-to-date、typecheck、703 tests / 0 fail、6 package builds、Loaded 6 built package exports in Node ESM、隔离消费者三类示例通过。
 - runtime conformance：passed=true，18/18。
 - `openspec validate judge-review-execution-plan --type change --strict`：Change 'judge-review-execution-plan' is valid。
 - 独立 review：固定 SHA 9252866 的首轮只读 review 报告 6 项 major（提示 verdict schema、provider 响应体超时、attempt 超时未中止底层调用、v2 run 证据身份未绑定、gate 未检查 prompt/render 身份、review gate 输入未预快照校验）和 2 项 minor（resume 配置、JSON 字符串内反引号）。8386ab2 已处理；固定 SHA 8386ab2 的复核确认多数修复，并指出 policy 语义校验仍需前置、resume override 未持久化。后续提交将 gate policy 的完整 `validateGatePolicyForV2` 校验移到执行前，并把实际模型配置写入 resume 状态；相应回归测试已加入。固定 SHA ef83429 的复核未发现 blocking/major 问题，仅指出 `review()` 直接调用预检执行时缺少结构化异常边界；8cf8d8b 已补充捕获和 instrument/scope mismatch 零调用测试，固定 SHA 8cf8d8b 的最终复核无 findings。
 - 第二轮独立 review（固定 SHA 5df7bf2）报告 1 major、2 medium、2 medium-low、2 low/决策项。已用配置中的 `planner`（Sol medium）规划，并修复：不完整执行即使票数达到阈值也不得 pass；非法 ModelPort metadata 省略并记 unknown；空/不可表示 checker message 安全回退；程序路径统一使用归一化证据；非法 id/signal 在调用前拒绝；gate policy 身份不匹配错误路径拆分并记录为校验错误；ReviewFinding 增加 disagreement。对应回归测试已加入。
 - 修复后的独立 review（固定 SHA 8f9aa83）未发现 blocking/major/minor 问题；其指出的“非空但含孤立代理项的 metadata 字符串仍可能使 execution 整体失败”残余风险已追加修复并覆盖测试。
 - 结构性 review 收敛：`review.ts` 拆为 `review/input.ts`、`review/execute.ts`、`review/execute-attempt.ts`、`review/record.ts`、`review/findings.ts`、`review/types.ts`；protocol 新增 `assessVerdicts` 并由完整 run、partial、review、gate 共用；`qualityOutcomeFor` 成为唯一整体质量 reducer；evidence 校验/manifest 提取到 `evidence.ts` 并与 prompt compiler 共用；gate observation 统一为 measured/failed；gate policy 在执行前一次性准备；runtime 增加 `ModelPortError`、`isModelPortError` 和共享 `validateGenerationConfig`；review 解释文案移入 presentation；`measurement-v2` 拆分 execution 模块。
-- 结构 review 复核（固定 SHA 588d616）指出：verified calibration 被 snapshot 会丢失 WeakSet 身份、提前失败 attempt 未记录真实完成时间、`EvidenceStatus`/`ValidationResult` 公共类型导出回退。已改为按引用传递 calibration，所有提前失败记录 clock 完成时间，并恢复类型导出与测试。
+- 结构 review 复核（固定 SHA 588d616）指出：verified calibration 被 snapshot 会丢失 WeakSet 身份、提前失败 attempt 未记录真实完成时间、`EvidenceStatus`/`ValidationResult` 公共类型导出回退。已改为按引用传递 calibration，所有提前失败记录 clock 完成时间，并恢复类型导出与测试；补充 rejected model response 的提前失败时间覆盖。
 - 未使用真实 provider、key 或外部模型；合成 policy/示例不构成真实校准或质量证明。
 
 ## 规划验证记录
