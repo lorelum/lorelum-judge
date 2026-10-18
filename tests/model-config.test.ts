@@ -44,6 +44,34 @@ describe("runtime model configuration forwarding", () => {
     );
     expect(resumed.ok).toBe(true);
     expect(model.requests[0]?.config).toEqual(config);
+
+    const override = { model: "model-2", temperature: 0.5 };
+    const overrideModel = createScriptedModel([{ kind: "message", content: "done" }]);
+    const overridePorts = { ...ports, model: overrideModel };
+    const pausedAgain = await referenceRuntime.run(
+      {
+        runId: "run-override",
+        messages: [{ role: "user", content: "hello" }],
+        maxSteps: 0,
+        signal: new AbortController().signal,
+        modelConfig: config,
+      },
+      overridePorts,
+    );
+    expect(pausedAgain.status).toBe("paused");
+    const overridden = await referenceRuntime.resume(
+      {
+        runId: "run-override",
+        maxSteps: 1,
+        signal: new AbortController().signal,
+        modelConfig: override,
+      },
+      overridePorts,
+    );
+    expect(overridden.ok).toBe(true);
+    expect(overrideModel.requests[0]?.config).toEqual(override);
+    const stored = await store.load("run-override");
+    expect(stored?.modelConfig).toEqual(override);
   });
 
   test("passes the provider-neutral config to the model port", async () => {

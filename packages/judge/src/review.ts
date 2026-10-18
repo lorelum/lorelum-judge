@@ -129,6 +129,28 @@ export type ExecuteReviewResult =
   | { readonly ok: true; readonly value: ExecuteReviewValue }
   | { readonly ok: false; readonly issues: readonly ValidationIssue[] };
 
+export interface PreparedReview {
+  readonly definition: MeasurementDefinitionV2;
+  readonly instrument: InstrumentProfileV2;
+  readonly manifest: EvidenceBundle;
+  readonly materials: readonly EvidenceMaterial[];
+  readonly method: ReviewMethodInput;
+  readonly repetitions: number;
+  readonly timeoutMs: number | undefined;
+  readonly promptIdentity: string | undefined;
+  readonly messages: readonly RuntimeMessage[] | undefined;
+  readonly renderIdentity: string | undefined;
+  readonly inputIdentity: string;
+  readonly definitionIdentity: string;
+  readonly instrumentIdentity: string;
+  readonly evidenceIdentity: string;
+  readonly id?: string;
+}
+
+export type PrepareReviewResult =
+  | { readonly ok: true; readonly value: PreparedReview }
+  | { readonly ok: false; readonly issues: readonly ValidationIssue[] };
+
 interface Assessed {
   readonly verdicts: readonly Verdict[];
   readonly issues: readonly ReviewIssue[];
@@ -656,11 +678,10 @@ function generationFor(method: Extract<ReviewMethodInput, { kind: "llm" }>): Mod
   };
 }
 
-async function execute(input: unknown, ports: ReviewPorts): Promise<ExecuteReviewResult> {
+function prepare(input: unknown, ports: ReviewPorts): PrepareReviewResult {
   if (!isRecord(input)) {
     return { ok: false, issues: [validation("$", "input must be an object")] };
   }
-  const signal = input.signal instanceof AbortSignal ? input.signal : undefined;
   const copied = snapshot({
     definition: input.definition,
     evidence: input.evidence,
@@ -783,10 +804,65 @@ async function execute(input: unknown, ports: ReviewPorts): Promise<ExecuteRevie
     };
   }
 
+  return {
+    ok: true,
+    value: {
+      definition: definition.value,
+      instrument,
+      manifest,
+      materials: materialCheck.materials,
+      method,
+      repetitions,
+      timeoutMs,
+      promptIdentity,
+      messages,
+      renderIdentity,
+      inputIdentity: inputIdentity.identity,
+      definitionIdentity: definitionId.identity,
+      instrumentIdentity: instrumentId.identity,
+      evidenceIdentity: evidenceId.identity,
+      ...(copied.id !== undefined && typeof copied.id === "string" ? { id: copied.id } : {}),
+    },
+  };
+}
+
+export function prepareReview(input: unknown, ports: ReviewPorts): PrepareReviewResult {
+  try {
+    return prepare(input, ports);
+  } catch (error) {
+    return {
+      ok: false,
+      issues: [
+        validation(
+          "$",
+          `review input could not be read: ${error instanceof Error ? error.message : "unknown error"}`,
+        ),
+      ],
+    };
+  }
+}
+
+export async function runPreparedReview(
+  prepared: PreparedReview,
+  ports: ReviewPorts,
+  signal?: AbortSignal,
+): Promise<ExecuteReviewResult> {
+  const definition = prepared.definition;
+  const instrument = prepared.instrument;
+  const manifest = prepared.manifest;
+  const materials = prepared.materials;
+  const method = prepared.method;
+  const repetitions = prepared.repetitions;
+  const timeoutMs = prepared.timeoutMs;
+  const promptIdentity = prepared.promptIdentity;
+  const messages = prepared.messages;
+  const renderIdentity = prepared.renderIdentity;
+  const checker = ports.checker;
+  const modelPort = ports.model;
+
   const nextId = ports.nextId ?? ((prefix: string) => `${prefix}-${randomUUID()}`);
   const clock = ports.clock ?? { now: () => new Date() };
-  const executionId =
-    copied.id !== undefined && typeof copied.id === "string" ? copied.id : nextId("review");
+  const executionId = prepared.id ?? nextId("review");
   const attempts: ReviewAttempt[] = [];
   const assessments: Assessed[] = [];
   const activeSignal = signal ?? new AbortController().signal;
@@ -815,8 +891,8 @@ async function execute(input: unknown, ports: ReviewPorts): Promise<ExecuteRevie
         const output = await withAttemptBoundary(
           Promise.resolve(
             checker({
-              definition: definition.value,
-              evidence: materialCheck.materials,
+              definition: definition,
+              evidence: materials,
               signal: attemptController.signal,
             }),
           ),
@@ -930,7 +1006,7 @@ async function execute(input: unknown, ports: ReviewPorts): Promise<ExecuteRevie
         raw = parsed.verdicts;
       }
 
-      const assessed = assess(definition.value, raw, manifest);
+      const assessed = assess(definition, raw, manifest);
       assessments.push(assessed);
       const finishedAt = clock.now().toISOString();
       const llm =
@@ -946,11 +1022,11 @@ async function execute(input: unknown, ports: ReviewPorts): Promise<ExecuteRevie
         const run = {
           schema: "lorelum.judge.measurement-run/v2" as const,
           id: runId,
-          definitionIdentity: definitionId.identity,
-          instrumentIdentity: instrumentId.identity,
+          definitionIdentity: prepared.definitionIdentity,
+          instrumentIdentity: prepared.instrumentIdentity,
           instrumentSource: "declared" as const,
           executionId,
-          evidenceIdentity: evidenceId.identity,
+          evidenceIdentity: prepared.evidenceIdentity,
           ...(renderIdentity === undefined ? {} : { renderIdentity }),
           verdicts: [...assessed.verdicts],
         };
@@ -1040,27 +1116,34 @@ async function execute(input: unknown, ports: ReviewPorts): Promise<ExecuteRevie
   const execution: ReviewExecution = {
     schema: "lorelum.judge.review-execution/v1",
     id: executionId,
-    inputIdentity: inputIdentity.identity,
-    definitionIdentity: definitionId.identity,
-    instrumentIdentity: instrumentId.identity,
+    inputIdentity: prepared.inputIdentity,
+    definitionIdentity: prepared.definitionIdentity,
+    instrumentIdentity: prepared.instrumentIdentity,
     plannedCount: repetitions,
     // repetitions >= 1, so every attempt slot is represented above.
     attempts: attempts as ReviewExecution["attempts"],
   };
-  const checked = validateReviewExecution(execution, definition.value, instrument);
+  const checked = validateReviewExecution(execution, definition, instrument);
   if (!checked.ok) {
     return { ok: false, issues: checked.issues };
   }
   return {
     ok: true,
     value: {
-      definition: definition.value,
+      definition: definition,
       instrument,
       execution: checked.value,
-      findings: aggregateFindings(definition.value, assessments),
+      findings: aggregateFindings(definition, assessments),
       completeness: reviewCompleteness(checked.value),
     },
   };
+}
+
+async function execute(input: unknown, ports: ReviewPorts): Promise<ExecuteReviewResult> {
+  const signal = isRecord(input) && input.signal instanceof AbortSignal ? input.signal : undefined;
+  const prepared = prepareReview(input, ports);
+  if (!prepared.ok) return prepared;
+  return runPreparedReview(prepared.value, ports, signal);
 }
 
 /**

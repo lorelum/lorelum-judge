@@ -517,18 +517,15 @@ export class ReferenceRuntime implements AgentRuntime {
       };
     }
 
+    const effectiveModelConfig = request.modelConfig ?? stored.modelConfig;
     const resumable: RuntimeRun = {
       ...stored,
       status: "running",
       maxSteps: nextMaxSteps,
       updatedAt,
+      ...(effectiveModelConfig === undefined ? {} : { modelConfig: effectiveModelConfig }),
     };
-    const run = await executeRun(
-      resumable,
-      request.signal,
-      ports,
-      request.modelConfig ?? stored.modelConfig,
-    );
+    const run = await executeRun(resumable, request.signal, ports, effectiveModelConfig);
     return { ok: true, run };
   }
 }

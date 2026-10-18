@@ -381,6 +381,36 @@ describe("one-call review", () => {
     expect(calls).toBe(0);
   });
 
+  test("rejects a semantically invalid policy before calling the checker", async () => {
+    const reviewed = await executionFor(() => ({
+      verdicts: [met("c1", "e1"), met("c2", "e2")],
+    }));
+    const base = policy(reviewed.definition, reviewed.instrument);
+    const firstRule = base.criteria[0];
+    if (firstRule === undefined) throw new Error("fixture policy empty");
+    const invalid = {
+      ...base,
+      criteria: [{ ...firstRule, acceptedVerdicts: ["unmet"] }, ...base.criteria.slice(1)],
+    };
+    let calls = 0;
+    const result = await review(
+      {
+        definition: reviewed.definition,
+        evidence,
+        method: { kind: "program", checker: { id: "offline", version: "1" } },
+        gate: { policy: invalid, taskClass: "code", evidenceShape: "code" },
+      },
+      {
+        checker: () => {
+          calls += 1;
+          return { verdicts: [met("c1", "e1"), met("c2", "e2")] };
+        },
+      },
+    );
+    expect(result.ok).toBe(false);
+    expect(calls).toBe(0);
+  });
+
   test("returns findings, completion and advisory gate information", async () => {
     let calls = 0;
     const result = await review(

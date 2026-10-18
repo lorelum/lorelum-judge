@@ -1,9 +1,8 @@
 import {
   type GatePolicyV2,
-  measurementDefinitionIdentityV2,
   snapshot,
+  validateGatePolicyForV2,
   validateGatePolicyV2,
-  validateMeasurementDefinitionV2,
 } from "@lorelum/judge-protocol";
 
 import { isRecord } from "./type-guards.js";
@@ -14,8 +13,9 @@ import type { GateLocale } from "./gate.js";
 import {
   type ExecuteReviewInput,
   type ExecuteReviewValue,
-  executeReview,
+  prepareReview,
   type ReviewPorts,
+  runPreparedReview,
 } from "./review.js";
 import { evaluateReviewGate, type ReviewGateResult } from "./review-gate.js";
 
@@ -48,7 +48,7 @@ function gateIssue(message: string): ReviewResult {
   return { ok: false, issues: [{ path: "$.gate", code: "schema", message }] };
 }
 
-function prepareGate(raw: unknown, definition: unknown): PreparedGate | undefined | ReviewResult {
+function prepareGate(raw: unknown): PreparedGate | undefined | ReviewResult {
   if (raw === undefined) return undefined;
   if (!isRecord(raw)) return gateIssue("gate must be an object");
   const calibration = raw.calibration;
@@ -95,22 +95,6 @@ function prepareGate(raw: unknown, definition: unknown): PreparedGate | undefine
           path: `$.gate.policy${issue.path.slice(1)}`,
         })),
       };
-    }
-    const parsedDefinition = validateMeasurementDefinitionV2(definition);
-    if (parsedDefinition.ok) {
-      const definitionId = measurementDefinitionIdentityV2(parsedDefinition.value);
-      if (definitionId.ok && policy.value.definitionIdentity !== definitionId.identity) {
-        return {
-          ok: false,
-          issues: [
-            {
-              path: "$.gate.policy.definitionIdentity",
-              code: "identity_mismatch",
-              message: "gate policy is for a different definition",
-            },
-          ],
-        };
-      }
     }
   }
   const locale = copied.locale === "zh-CN" || copied.locale === "en-US" ? copied.locale : undefined;
@@ -194,9 +178,9 @@ function advisoryPolicy(
  * so the caller still learns whether the result can automatically gate delivery.
  */
 export async function review(input: ReviewRequest, ports: ReviewPorts): Promise<ReviewResult> {
-  let prepared: PreparedGate | undefined | ReviewResult;
+  let preparedGate: PreparedGate | undefined | ReviewResult;
   try {
-    prepared = prepareGate(input.gate, input.definition);
+    preparedGate = prepareGate(input.gate);
   } catch (error) {
     return {
       ok: false,
@@ -211,10 +195,36 @@ export async function review(input: ReviewRequest, ports: ReviewPorts): Promise<
       ],
     };
   }
-  if (prepared !== undefined && "ok" in prepared) return prepared;
-  const reviewed = await executeReview(input, ports);
+  if (preparedGate !== undefined && "ok" in preparedGate) return preparedGate;
+
+  const preparedReview = prepareReview(input, ports);
+  if (!preparedReview.ok) return preparedReview;
+  if (preparedGate?.policy !== undefined) {
+    const policy = validateGatePolicyForV2(
+      preparedGate.policy,
+      preparedReview.value.definition,
+      preparedReview.value.instrument,
+    );
+    if (!policy.ok) {
+      return {
+        ok: false,
+        issues: policy.issues.map((issue) => ({
+          ...issue,
+          path: `$.gate.policy${issue.path.slice(1)}`,
+        })),
+      };
+    }
+  }
+  const signal =
+    typeof input === "object" &&
+    input !== null &&
+    "signal" in input &&
+    input.signal instanceof AbortSignal
+      ? input.signal
+      : undefined;
+  const reviewed = await runPreparedReview(preparedReview.value, ports, signal);
   if (!reviewed.ok) return reviewed;
-  const gate = prepared;
+  const gate = preparedGate;
   const evaluated = evaluateReviewGate({
     id: gate?.id ?? `decision:${reviewed.value.execution.id}`,
     taskClass: gate?.taskClass ?? "default",
