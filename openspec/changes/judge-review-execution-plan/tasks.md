@@ -42,7 +42,7 @@
 - [x] 6.1 提供公开 API 接入文档、迁移说明及离线 program/mock LLM/review-to-gate 示例；明确演示校准与 #11 deferred。
 - [x] 6.2 隔离 Node ESM 消费者实际执行完整链路，禁止源码路径和真实 provider/key。
 - [x] 6.3 运行并记录 bun install --frozen-lockfile、bun run validate、runtime conformance、OpenSpec strict validation 的实际输出和未执行项。
-- [ ] 6.4 审核范围、依赖和 diff；回读 issue/PR；更新 AI assistance。对固定提交 SHA 做隔离上下文独立只读 review，追加 commit 处理 findings，记录结果。不自动 merge。
+- [x] 6.4 审核范围、依赖和 diff；回读 issue/PR；更新 AI assistance。对固定提交 SHA 做隔离上下文独立只读 review，追加 commit 处理 findings，记录结果。不自动 merge。
 
 ## 实现验证记录
 
@@ -51,7 +51,7 @@
 - `bun run validate`：通过；`biome check`、repository baseline、layer check、生成类型 up-to-date、typecheck、687 tests / 0 fail、6 package builds、Loaded 6 built package exports in Node ESM、隔离消费者三类示例通过。
 - runtime conformance：passed=true，18/18。
 - `openspec validate judge-review-execution-plan --type change --strict`：Change 'judge-review-execution-plan' is valid。
-- 独立 review：固定 SHA 9252866 的首轮只读 review 报告 6 项 major（提示 verdict schema、provider 响应体超时、attempt 超时未中止底层调用、v2 run 证据身份未绑定、gate 未检查 prompt/render 身份、review gate 输入未预快照校验）和 2 项 minor（resume 配置、JSON 字符串内反引号）。8386ab2 已处理；固定 SHA 8386ab2 的复核确认多数修复，并指出 policy 语义校验仍需前置、resume override 未持久化。后续提交将 gate policy 的完整 `validateGatePolicyForV2` 校验移到执行前，并把实际模型配置写入 resume 状态；相应回归测试已加入。固定 SHA ef83429 的最终复核未发现 blocking/major 问题，仅指出 `review()` 直接调用预检执行时缺少结构化异常边界；已为该入口补充捕获并增加 instrument/scope mismatch 零调用测试。
+- 独立 review：固定 SHA 9252866 的首轮只读 review 报告 6 项 major（提示 verdict schema、provider 响应体超时、attempt 超时未中止底层调用、v2 run 证据身份未绑定、gate 未检查 prompt/render 身份、review gate 输入未预快照校验）和 2 项 minor（resume 配置、JSON 字符串内反引号）。8386ab2 已处理；固定 SHA 8386ab2 的复核确认多数修复，并指出 policy 语义校验仍需前置、resume override 未持久化。后续提交将 gate policy 的完整 `validateGatePolicyForV2` 校验移到执行前，并把实际模型配置写入 resume 状态；相应回归测试已加入。固定 SHA ef83429 的复核未发现 blocking/major 问题，仅指出 `review()` 直接调用预检执行时缺少结构化异常边界；8cf8d8b 已补充捕获和 instrument/scope mismatch 零调用测试，固定 SHA 8cf8d8b 的最终复核无 findings。
 - 未使用真实 provider、key 或外部模型；合成 policy/示例不构成真实校准或质量证明。
 
 ## 规划验证记录
