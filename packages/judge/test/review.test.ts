@@ -386,7 +386,7 @@ describe("executeReview with an LLM", () => {
         }),
         metadata: {
           provider: "",
-          model: "model-1",
+          model: "model-1\uD800",
           finishReason: "stop",
           usage: { promptTokens: 1.5, completionTokens: 2, totalTokens: 3.5 },
         },
@@ -398,6 +398,7 @@ describe("executeReview with an LLM", () => {
     const attempt = result.value.execution.attempts[0];
     expect(attempt?.status).toBe("completed");
     expect(attempt?.llm?.response?.provider).toBeUndefined();
+    expect(attempt?.llm?.response?.model).toBeUndefined();
     expect(attempt?.llm?.response?.usage).toEqual({ completionTokens: 2 });
     expect(attempt?.llm?.unknowns).toContain("response_metadata_invalid");
   });

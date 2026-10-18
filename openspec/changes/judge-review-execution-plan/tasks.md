@@ -53,6 +53,7 @@
 - `openspec validate judge-review-execution-plan --type change --strict`：Change 'judge-review-execution-plan' is valid。
 - 独立 review：固定 SHA 9252866 的首轮只读 review 报告 6 项 major（提示 verdict schema、provider 响应体超时、attempt 超时未中止底层调用、v2 run 证据身份未绑定、gate 未检查 prompt/render 身份、review gate 输入未预快照校验）和 2 项 minor（resume 配置、JSON 字符串内反引号）。8386ab2 已处理；固定 SHA 8386ab2 的复核确认多数修复，并指出 policy 语义校验仍需前置、resume override 未持久化。后续提交将 gate policy 的完整 `validateGatePolicyForV2` 校验移到执行前，并把实际模型配置写入 resume 状态；相应回归测试已加入。固定 SHA ef83429 的复核未发现 blocking/major 问题，仅指出 `review()` 直接调用预检执行时缺少结构化异常边界；8cf8d8b 已补充捕获和 instrument/scope mismatch 零调用测试，固定 SHA 8cf8d8b 的最终复核无 findings。
 - 第二轮独立 review（固定 SHA 5df7bf2）报告 1 major、2 medium、2 medium-low、2 low/决策项。已用配置中的 `planner`（Sol medium）规划，并修复：不完整执行即使票数达到阈值也不得 pass；非法 ModelPort metadata 省略并记 unknown；空/不可表示 checker message 安全回退；程序路径统一使用归一化证据；非法 id/signal 在调用前拒绝；gate policy 身份不匹配错误路径拆分并记录为校验错误；ReviewFinding 增加 disagreement。对应回归测试已加入。
+- 修复后的独立 review（固定 SHA 8f9aa83）未发现 blocking/major/minor 问题；其指出的“非空但含孤立代理项的 metadata 字符串仍可能使 execution 整体失败”残余风险已追加修复并覆盖测试。
 - 未使用真实 provider、key 或外部模型；合成 policy/示例不构成真实校准或质量证明。
 
 ## 规划验证记录

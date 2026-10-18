@@ -167,7 +167,11 @@ interface ResponseFacts {
 }
 
 function nonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(value)
+  );
 }
 
 function tokenCount(value: unknown): number | undefined {
