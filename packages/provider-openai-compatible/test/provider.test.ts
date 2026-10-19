@@ -276,7 +276,7 @@ describe("OpenAI-compatible transport", () => {
     });
     const second = createOpenAiCompatibleModel({ endpoint: empty.url });
     await expect(second.generate(request({ model: "model-1" }))).rejects.toMatchObject({
-      code: "invalid_response",
+      code: "empty_response",
     });
   });
 

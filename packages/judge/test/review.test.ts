@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelPort, ModelRequest, ModelResponse } from "@lorelum/judge-runtime";
+import { ModelPortError } from "@lorelum/judge-runtime";
 import type {
   EvidenceMaterial,
   ExecuteReviewInput,
@@ -509,6 +510,19 @@ describe("executeReview with an LLM", () => {
     expect(attempt?.status).toBe("failed");
     expect(attempt?.run).toBeUndefined();
     expect(attempt?.llm?.request.model).toBe("model-1");
+    expect(attempt?.failure?.category).toBe("provider");
+  });
+
+  test("a provider transport code survives into the execution record", async () => {
+    const model = new ScriptedModel([
+      new ModelPortError("empty_response", "the response text is empty"),
+    ]);
+    const result = await executeReview(input({ method: llmMethod }), { model });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const attempt = result.value.execution.attempts[0];
+    expect(attempt?.status).toBe("failed");
+    expect(attempt?.failure?.code).toBe("empty_response");
     expect(attempt?.failure?.category).toBe("provider");
   });
 

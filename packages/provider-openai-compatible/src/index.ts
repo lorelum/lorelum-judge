@@ -20,6 +20,7 @@ export type ProviderErrorCode =
   | "timeout"
   | "cancelled"
   | "network_error"
+  | "empty_response"
   | "invalid_response";
 
 /**
@@ -145,8 +146,11 @@ function readResponse(payload: unknown, status: number): ResponseFacts {
     throw new ProviderTransportError("invalid_response", "the first choice is not an object");
   }
   const message = first.message;
-  if (!isRecord(message) || typeof message.content !== "string" || message.content.length === 0) {
+  if (!isRecord(message) || typeof message.content !== "string") {
     throw new ProviderTransportError("invalid_response", "the response contains no text content");
+  }
+  if (message.content.length === 0) {
+    throw new ProviderTransportError("empty_response", "the response text is empty");
   }
 
   const metadata: NonNullable<Extract<ModelResponse, { kind: "message" }>["metadata"]> = {
