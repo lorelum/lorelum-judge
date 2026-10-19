@@ -1,6 +1,6 @@
 import { toRuntimeFailure } from "./errors.js";
 import type { JsonObject, JsonValue } from "./json.js";
-import type { ModelResponse, RuntimeMessage } from "./model.js";
+import type { ModelGenerationConfig, ModelResponse, RuntimeMessage } from "./model.js";
 import type { RuntimePorts } from "./ports.js";
 import type {
   ResumeRequest,
@@ -73,6 +73,7 @@ function createRun(request: RuntimeRequest, ports: RuntimePorts): RuntimeRun {
     messages: [...request.messages],
     steps: [],
     events: [],
+    ...(request.modelConfig === undefined ? {} : { modelConfig: request.modelConfig }),
     createdAt: now,
     updatedAt: now,
   };
@@ -88,6 +89,7 @@ function createFallbackRun(request: RuntimeRequest): RuntimeRun {
     messages: [...request.messages],
     steps: [],
     events: [],
+    ...(request.modelConfig === undefined ? {} : { modelConfig: request.modelConfig }),
     createdAt: FALLBACK_TIMESTAMP,
     updatedAt: FALLBACK_TIMESTAMP,
   };
@@ -318,6 +320,7 @@ async function executeRun(
   initialRun: RuntimeRun,
   signal: AbortSignal,
   ports: RuntimePorts,
+  modelConfig?: ModelGenerationConfig,
 ): Promise<RuntimeRun> {
   let run = initialRun;
 
@@ -358,6 +361,7 @@ async function executeRun(
             inputSchema: tool.inputSchema,
           })),
           signal,
+          ...(modelConfig === undefined ? {} : { config: modelConfig }),
         });
       } catch (error) {
         if (signal.aborted) {
@@ -444,7 +448,7 @@ export class ReferenceRuntime implements AgentRuntime {
         ...eventBase(run, ports),
         type: "run_started",
       });
-      return await executeRun(run, request.signal, ports);
+      return await executeRun(run, request.signal, ports, request.modelConfig);
     } catch (error) {
       return finishFailed(
         run ?? createFallbackRun(request),
@@ -513,13 +517,15 @@ export class ReferenceRuntime implements AgentRuntime {
       };
     }
 
+    const effectiveModelConfig = request.modelConfig ?? stored.modelConfig;
     const resumable: RuntimeRun = {
       ...stored,
       status: "running",
       maxSteps: nextMaxSteps,
       updatedAt,
+      ...(effectiveModelConfig === undefined ? {} : { modelConfig: effectiveModelConfig }),
     };
-    const run = await executeRun(resumable, request.signal, ports);
+    const run = await executeRun(resumable, request.signal, ports, effectiveModelConfig);
     return { ok: true, run };
   }
 }

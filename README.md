@@ -17,6 +17,7 @@ their own issues and OpenSpec changes.
 | `packages/judge` | `@lorelum/judge` | Judge domain and measurement workflows |
 | `packages/workflow` | `@lorelum/judge-workflow` | Planning, implementation, revision, and delivery |
 | `packages/testing` | `@lorelum/judge-testing` | Deterministic consumer test kit |
+| `packages/provider-openai-compatible` | `@lorelum/provider-openai-compatible` | OpenAI Chat Completions compatible text transport |
 
 The dependency graph and import rules are documented in
 `docs/architecture/repository-layout.md` and enforced by `bun run check:layers`.

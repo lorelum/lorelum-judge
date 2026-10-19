@@ -12,6 +12,7 @@ runtime/    @lorelum/judge-runtime
 judge/      @lorelum/judge
 workflow/   @lorelum/judge-workflow
 testing/    @lorelum/judge-testing
+provider-openai-compatible/  @lorelum/provider-openai-compatible
 ```
 
 Framework runtimes use `runtime-*`. Concrete provider SDKs use `provider-*`.

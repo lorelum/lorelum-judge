@@ -37,7 +37,7 @@ evidenceIds: [string, ...(string)[]]
 observations: [({
 id: string
 status: "completed"
-run: MeasurementRun
+run: (MeasurementRun | MeasurementRunV2)
 evidenceBundle: EvidenceBundle
 } | {
 id: string
@@ -48,7 +48,7 @@ evidenceBundle?: EvidenceBundle
 }), ...(({
 id: string
 status: "completed"
-run: MeasurementRun
+run: (MeasurementRun | MeasurementRunV2)
 evidenceBundle: EvidenceBundle
 } | {
 id: string
@@ -76,7 +76,7 @@ evidenceIds: [string, ...(string)[]]
 observations: [({
 id: string
 status: "completed"
-run: MeasurementRun
+run: (MeasurementRun | MeasurementRunV2)
 evidenceBundle: EvidenceBundle
 } | {
 id: string
@@ -87,7 +87,7 @@ evidenceBundle?: EvidenceBundle
 }), ...(({
 id: string
 status: "completed"
-run: MeasurementRun
+run: (MeasurementRun | MeasurementRunV2)
 evidenceBundle: EvidenceBundle
 } | {
 id: string
@@ -125,7 +125,7 @@ evidenceIds: [string, ...(string)[]]
 observations: [({
 id: string
 status: "completed"
-run: MeasurementRun
+run: (MeasurementRun | MeasurementRunV2)
 evidenceBundle: EvidenceBundle
 } | {
 id: string
@@ -136,7 +136,7 @@ evidenceBundle?: EvidenceBundle
 }), ...(({
 id: string
 status: "completed"
-run: MeasurementRun
+run: (MeasurementRun | MeasurementRunV2)
 evidenceBundle: EvidenceBundle
 } | {
 id: string
@@ -164,7 +164,7 @@ evidenceIds: [string, ...(string)[]]
 observations: [({
 id: string
 status: "completed"
-run: MeasurementRun
+run: (MeasurementRun | MeasurementRunV2)
 evidenceBundle: EvidenceBundle
 } | {
 id: string
@@ -175,7 +175,7 @@ evidenceBundle?: EvidenceBundle
 }), ...(({
 id: string
 status: "completed"
-run: MeasurementRun
+run: (MeasurementRun | MeasurementRunV2)
 evidenceBundle: EvidenceBundle
 } | {
 id: string
@@ -201,6 +201,17 @@ criterionId: string
 verdict: ("met" | "unmet" | "strong" | "adequate" | "weak" | "better" | "equivalent" | "worse" | "unknown" | "insufficient")
 evidenceIds: string[]
 rationale?: string
+}
+export interface MeasurementRunV2 {
+schema: "lorelum.judge.measurement-run/v2"
+id: string
+definitionIdentity: string
+instrumentIdentity: string
+instrumentSource: "declared"
+executionId: string
+evidenceIdentity: string
+renderIdentity?: string
+verdicts: Verdict[]
 }
 export interface EvidenceBundle {
 schema: "lorelum.judge.evidence-bundle/v1"

@@ -1,26 +1,31 @@
-import type { Criterion, Verdict } from "@lorelum/judge-protocol";
 import {
   aggregateVerdicts,
+  anyDefinitionIdentity,
+  anyInstrumentIdentity,
+  assessVerdicts,
   type CalibrationObservation,
-  definitionIdentity,
+  type Criterion,
   type EvidenceBundle,
   type GateDecision,
   type GatePolicyV2,
   gatePolicyIdentityV2,
   identityOf,
-  instrumentIdentity,
-  type MeasurementRun,
+  instrumentRepetitions,
+  isRequiredCriterion,
+  type MeasurementDefinitionV2,
+  measurementRunEvidenceIdentityMatches,
   type ValidationIssue,
   type ValidationResult,
-  validateDefinition,
+  type Verdict,
+  validateAnyDefinition,
+  validateAnyInstrument,
+  validateAnyRun,
   validateEvidenceBundle,
   validateGateDecision,
   validateGatePolicyForV2,
-  validateInstrument,
-  validateRun,
   validateVerdictEvidence,
 } from "@lorelum/judge-protocol";
-import { isVerifiedCalibration } from "./calibration.js";
+import { defaultAcceptedVerdicts, isVerifiedCalibration } from "./calibration.js";
 import {
   createFindingPresentationModel,
   type GateLocale,
@@ -49,6 +54,12 @@ export type GateObservation =
       readonly run: unknown;
       readonly evidenceBundle: unknown;
     }
+  | {
+      readonly status: "partial";
+      readonly id: string;
+      readonly verdicts: readonly Verdict[];
+      readonly evidenceBundle: unknown;
+    }
   | Extract<CalibrationObservation, { readonly status: "failed" }>;
 
 export interface EvaluateGateInput {
@@ -66,8 +77,8 @@ export interface EvaluateGateInput {
 
 type ParsedObservation =
   | {
-      readonly status: "completed";
-      readonly run: MeasurementRun;
+      readonly status: "measured";
+      readonly verdicts: readonly Verdict[];
       readonly evidenceBundle: EvidenceBundle;
     }
   | {
@@ -79,6 +90,34 @@ type ParsedObservation =
 interface CriterionResult {
   readonly finding: GateDecision["findings"][number];
   readonly mandatory: boolean;
+}
+
+type FindingReason = GateDecision["findings"][number]["reason"];
+
+interface FailureFlags {
+  readonly disagreement: boolean;
+  readonly unavailableEvidence: boolean;
+  readonly missingEvidence: boolean;
+  readonly evidence: boolean;
+  readonly execution: boolean;
+  readonly measurement: boolean;
+  readonly unattributed: boolean;
+  readonly abstention: boolean;
+}
+
+const MISSING_REASONS: readonly (readonly [keyof FailureFlags, FindingReason])[] = [
+  ["disagreement", "disagreement"],
+  ["unavailableEvidence", "unavailable_evidence"],
+  ["missingEvidence", "missing_evidence"],
+  ["evidence", "unsupported_evidence"],
+  ["execution", "execution_failure"],
+  ["measurement", "measurement_failure"],
+  ["unattributed", "unattributed_failure"],
+  ["abstention", "abstention"],
+];
+
+function reasonForMissing(flags: FailureFlags): FindingReason {
+  return MISSING_REASONS.find(([key]) => flags[key])?.[1] ?? "missing_evidence";
 }
 
 function requiredEvidenceStatuses(
@@ -101,6 +140,7 @@ function requiredEvidenceStatuses(
 
 function evaluateCriterion(
   criterion: Criterion,
+  required: boolean,
   policy: GatePolicyV2["criteria"][number],
   observations: readonly ParsedObservation[],
   minimumAgreement: number,
@@ -140,8 +180,8 @@ function evaluateCriterion(
       }
       continue;
     }
-    const { run, evidenceBundle } = observation;
-    const verdict = run.verdicts.find((entry) => entry.criterionId === criterion.id);
+    const evidenceBundle = observation.evidenceBundle;
+    const verdict = observation.verdicts.find((entry) => entry.criterionId === criterion.id);
     if (verdict === undefined) {
       executionFailure = true;
       continue;
@@ -178,29 +218,22 @@ function evaluateCriterion(
   let outcome: GateDecision["findings"][number]["outcome"];
   let reason: GateDecision["findings"][number]["reason"];
   if (prediction === undefined) {
-    outcome = criterion.mandatory ? "indeterminate" : "advisory";
-    reason = disagrees
-      ? "disagreement"
-      : unavailableRequiredEvidence
-        ? "unavailable_evidence"
-        : missingRequiredEvidence
-          ? "missing_evidence"
-          : evidenceFailure
-            ? "unsupported_evidence"
-            : executionFailure
-              ? "execution_failure"
-              : measurementFailure
-                ? "measurement_failure"
-                : unattributedFailure
-                  ? "unattributed_failure"
-                  : abstained
-                    ? "abstention"
-                    : "missing_evidence";
+    outcome = required ? "indeterminate" : "advisory";
+    reason = reasonForMissing({
+      disagreement: disagrees,
+      unavailableEvidence: unavailableRequiredEvidence,
+      missingEvidence: missingRequiredEvidence,
+      evidence: evidenceFailure,
+      execution: executionFailure,
+      measurement: measurementFailure,
+      unattributed: unattributedFailure,
+      abstention: abstained,
+    });
   } else if (!policy.acceptedVerdicts.some((verdict) => verdict === prediction)) {
-    outcome = criterion.mandatory ? "fail" : "advisory";
+    outcome = required ? "fail" : "advisory";
     reason = disagrees ? "disagreement" : "unacceptable";
   } else {
-    outcome = criterion.mandatory ? "pass" : "advisory";
+    outcome = required ? "pass" : "advisory";
     reason = disagrees ? "disagreement" : "acceptable";
   }
   const requiredEvidenceIds =
@@ -232,7 +265,7 @@ function evaluateCriterion(
   });
   const rendered = renderFinding(presentation, locale);
   return {
-    mandatory: criterion.mandatory,
+    mandatory: required,
     finding: {
       criterionId: criterion.id,
       criterionDescription: criterion.description,
@@ -252,11 +285,69 @@ function evaluateCriterion(
   };
 }
 
+/**
+ * The single overall-quality reducer. Findings remain the source of truth; this
+ * only applies the required-failure precedence and the "incomplete cannot pass"
+ * rule. It never aggregates votes or grants enforcement.
+ */
+export function qualityOutcomeFor(
+  findings: readonly GateDecision["findings"][number][],
+  incomplete = false,
+): GateDecision["qualityOutcome"] {
+  if (findings.some((finding) => finding.outcome === "fail")) return "fail";
+  if (incomplete) return "indeterminate";
+  const applicable = findings.filter((finding) => finding.reason !== "not_applicable");
+  if (applicable.length === 0) return "indeterminate";
+  if (applicable.some((finding) => finding.outcome === "indeterminate")) return "indeterminate";
+  return "pass";
+}
+
+/** Derives the advisory policy used when the caller supplies none. */
+export function advisoryPolicyFor(
+  definition: MeasurementDefinitionV2,
+  definitionIdentity: string,
+  instrumentIdentity: string,
+  taskClass: string,
+  evidenceShape: string,
+): GatePolicyV2 {
+  const [first, ...rest] = definition.criteria;
+  if (first === undefined) throw new Error("a definition has at least one criterion");
+  const rules = definition.criteria.map((criterion) => ({
+    criterionId: criterion.id,
+    acceptedVerdicts: defaultAcceptedVerdicts(criterion),
+    requiredCaseKinds: ["decisive", "equivalent", "anti"] as ["decisive", "equivalent", "anti"],
+  }));
+  const [firstRule, ...restRules] = rules;
+  if (firstRule === undefined) throw new Error("a definition has at least one criterion");
+  return {
+    schema: "lorelum.judge.gate-policy/v2",
+    id: `advisory:${definition.id}`,
+    definitionIdentity,
+    instrumentIdentity,
+    scopes: [
+      {
+        taskClass,
+        evidenceShape,
+        criterionIds: [first.id, ...rest.map((criterion) => criterion.id)],
+      },
+    ],
+    criteria: [firstRule, ...restRules],
+    minimumAgreement: 1,
+    minimumGroupsPerCaseKind: 1,
+    confidenceLevel: 0.95,
+    maximumFalseAcceptRate: 0.05,
+    maximumFalseRejectRate: 0.1,
+    maximumAbstentionRate: 0.2,
+    maximumDisagreementRate: 0.2,
+    onUncalibrated: "diagnostic",
+  };
+}
+
 export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDecision> {
   try {
     const locale = input.locale ?? "zh-CN";
-    const definitionResult = validateDefinition(input.definition);
-    const instrumentResult = validateInstrument(input.instrument);
+    const definitionResult = validateAnyDefinition(input.definition);
+    const instrumentResult = validateAnyInstrument(input.instrument);
     const policyResult = validateGatePolicyForV2(input.policy, input.definition, input.instrument);
     const issues: ValidationIssue[] = [
       ...(!definitionResult.ok ? definitionResult.issues : []),
@@ -265,20 +356,21 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
     ];
     if (!definitionResult.ok || !instrumentResult.ok || !policyResult.ok)
       return { ok: false, issues };
-    if (input.observations.length > instrumentResult.value.repetitions) {
+    const repetitions = instrumentRepetitions(instrumentResult.value);
+    if (input.observations.length > repetitions) {
       return {
         ok: false,
         issues: [
           {
             path: "$.observations",
             code: "report_mismatch",
-            message: `expected at most ${instrumentResult.value.repetitions} observations`,
+            message: `expected at most ${repetitions} observations`,
           },
         ],
       };
     }
-    const definitionId = definitionIdentity(definitionResult.value);
-    const instrumentId = instrumentIdentity(instrumentResult.value);
+    const definitionId = anyDefinitionIdentity(definitionResult.value);
+    const instrumentId = anyInstrumentIdentity(instrumentResult.value);
     const policyId = gatePolicyIdentityV2(policyResult.value);
     if (!definitionId.ok || !instrumentId.ok || !policyId.ok) {
       return {
@@ -333,6 +425,9 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
     const observationIds = new Set<string>();
     const runIds = new Set<string>();
     const observationIssues: ValidationIssue[] = [];
+    const criteria = new Map(
+      definitionResult.value.criteria.map((criterion) => [criterion.id, criterion]),
+    );
     const parsed: ParsedObservation[] = input.observations.map((observation, index) => {
       if (observationIds.has(observation.id)) {
         observationIssues.push({
@@ -362,7 +457,29 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
           evidenceBundle: bundle.value,
         };
       }
-      const run = validateRun(definitionResult.value, instrumentResult.value, observation.run);
+      if (observation.status === "partial") {
+        const bundle = validateEvidenceBundle(observation.evidenceBundle);
+        if (!bundle.ok) {
+          observationIssues.push(
+            ...bundle.issues.map((issue) => ({
+              ...issue,
+              path: `$.observations[${index}].evidenceBundle${issue.path.slice(1)}`,
+            })),
+          );
+          return { status: "failed", failure: "evidence" };
+        }
+        const assessment = assessVerdicts(definitionResult.value.criteria, observation.verdicts, {
+          bundle: bundle.value,
+          path: `$.observations[${index}].verdicts`,
+        });
+        observationIssues.push(...assessment.issues);
+        return {
+          status: "measured",
+          verdicts: assessment.verdicts,
+          evidenceBundle: bundle.value,
+        };
+      }
+      const run = validateAnyRun(definitionResult.value, instrumentResult.value, observation.run);
       const bundle = validateEvidenceBundle(observation.evidenceBundle);
       if (run.ok) {
         if (runIds.has(run.value.id)) {
@@ -388,21 +505,17 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
           ...(bundle.ok ? { evidenceBundle: bundle.value } : {}),
         };
       }
-      return { status: "completed", run: run.value, evidenceBundle: bundle.value };
+      if (!measurementRunEvidenceIdentityMatches(run.value, bundle.value)) {
+        return { status: "failed", failure: "evidence", evidenceBundle: bundle.value };
+      }
+      return { status: "measured", verdicts: run.value.verdicts, evidenceBundle: bundle.value };
     });
     if (observationIssues.length > 0) return { ok: false, issues: observationIssues };
-    if (input.observations.length < instrumentResult.value.repetitions) {
-      for (
-        let index = input.observations.length;
-        index < instrumentResult.value.repetitions;
-        index += 1
-      ) {
+    if (input.observations.length < repetitions) {
+      for (let index = input.observations.length; index < repetitions; index += 1) {
         parsed.push({ status: "failed", failure: "execution" });
       }
     }
-    const criteria = new Map(
-      definitionResult.value.criteria.map((criterion) => [criterion.id, criterion]),
-    );
     const rules = new Map(policyResult.value.criteria.map((rule) => [rule.criterionId, rule]));
     const applicableIds = selectedScope?.criterionIds ?? [];
     const results: CriterionResult[] = applicableIds.flatMap((criterionId) => {
@@ -410,7 +523,16 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
       const rule = rules.get(criterionId);
       return criterion === undefined || rule === undefined
         ? []
-        : [evaluateCriterion(criterion, rule, parsed, policyResult.value.minimumAgreement, locale)];
+        : [
+            evaluateCriterion(
+              criterion,
+              isRequiredCriterion(definitionResult.value, criterionId),
+              rule,
+              parsed,
+              policyResult.value.minimumAgreement,
+              locale,
+            ),
+          ];
     });
     const findings: GateDecision["findings"][number][] = results.map((result) => result.finding);
     if (selectedScope === undefined) {
@@ -418,15 +540,7 @@ export function evaluateGate(input: EvaluateGateInput): ValidationResult<GateDec
         findings.push(renderNotApplicableFinding(criterion, locale));
       }
     }
-    const failed = results.some((result) => result.mandatory && result.finding.outcome === "fail");
-    const indeterminate = results.some(
-      (result) => result.mandatory && result.finding.outcome === "indeterminate",
-    );
-    const qualityOutcome: GateDecision["qualityOutcome"] = failed
-      ? "fail"
-      : indeterminate || results.length === 0
-        ? "indeterminate"
-        : "pass";
+    const qualityOutcome = qualityOutcomeFor(findings);
     const decision: GateDecision = {
       schema: "lorelum.judge.gate-decision/v1",
       id: input.id,

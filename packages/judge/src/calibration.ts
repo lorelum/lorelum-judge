@@ -1,27 +1,28 @@
 import type { Criterion, Verdict } from "@lorelum/judge-protocol";
 import {
   aggregateVerdicts,
+  anyDefinitionIdentity,
+  anyInstrumentIdentity,
   type CalibrationArtifactV2,
   type CalibrationCase,
   type CalibrationReport,
   calibrationDatasetIdentity,
   calibrationReportIdentity,
-  definitionIdentity,
   type GatePolicyV2,
   gatePolicyIdentityV2,
   type IdentityOutcome,
   identityOf,
-  instrumentIdentity,
+  instrumentRepetitions,
   type Rate,
   type ValidationIssue,
   type ValidationResult,
+  validateAnyDefinition,
+  validateAnyInstrument,
   validateCalibrationArtifactV2,
   validateCalibrationDataset,
   validateCalibrationReport,
-  validateDefinition,
   validateGatePolicyForV2,
   validateGatePolicyV2,
-  validateInstrument,
   validateVerdictEvidence,
   wilsonInterval,
 } from "@lorelum/judge-protocol";
@@ -45,8 +46,8 @@ export interface DefaultPolicyInput {
 export function createDefaultGatePolicyV2(
   input: DefaultPolicyInput,
 ): ValidationResult<GatePolicyV2> {
-  const definition = validateDefinition(input.definition);
-  const instrument = validateInstrument(input.instrument);
+  const definition = validateAnyDefinition(input.definition);
+  const instrument = validateAnyInstrument(input.instrument);
   if (!definition.ok || !instrument.ok) {
     return {
       ok: false,
@@ -56,7 +57,7 @@ export function createDefaultGatePolicyV2(
       ],
     };
   }
-  if (instrument.value.repetitions !== DEFAULT_CALIBRATION_REPETITIONS) {
+  if (instrumentRepetitions(instrument.value) !== DEFAULT_CALIBRATION_REPETITIONS) {
     return {
       ok: false,
       issues: [
@@ -68,8 +69,8 @@ export function createDefaultGatePolicyV2(
       ],
     };
   }
-  const definitionId = definitionIdentity(definition.value);
-  const instrumentId = instrumentIdentity(instrument.value);
+  const definitionId = anyDefinitionIdentity(definition.value);
+  const instrumentId = anyInstrumentIdentity(instrument.value);
   if (!definitionId.ok || !instrumentId.ok) {
     return {
       ok: false,
@@ -107,7 +108,9 @@ export function createDefaultGatePolicyV2(
   return validateGatePolicyForV2(policy, definition.value, instrument.value);
 }
 
-function defaultAcceptedVerdicts(criterion: Criterion): Verdict["verdict"][] {
+export function defaultAcceptedVerdicts(
+  criterion: Criterion,
+): GatePolicyV2["criteria"][number]["acceptedVerdicts"] {
   if (criterion.kind === "contract") return ["met"];
   if (criterion.kind === "quality") return ["strong", "adequate"];
   return ["better", "equivalent"];
@@ -189,8 +192,8 @@ export function buildCalibration(input: BuildCalibrationInput): BuildCalibration
   );
   if (!datasetResult.ok) return datasetResult;
   const policyResult = validateGatePolicyV2(input.policy);
-  const definitionResult = validateDefinition(input.definition);
-  const instrumentResult = validateInstrument(input.instrument);
+  const definitionResult = validateAnyDefinition(input.definition);
+  const instrumentResult = validateAnyInstrument(input.instrument);
   if (!policyResult.ok || !definitionResult.ok || !instrumentResult.ok) {
     return {
       ok: false,
@@ -216,8 +219,8 @@ export function buildCalibration(input: BuildCalibrationInput): BuildCalibration
 
   const datasetId = calibrationDatasetIdentity(datasetResult.value);
   const policyId = gatePolicyIdentityV2(policyResult.value);
-  const definitionId = definitionIdentity(definitionResult.value);
-  const instrumentId = instrumentIdentity(instrumentResult.value);
+  const definitionId = anyDefinitionIdentity(definitionResult.value);
+  const instrumentId = anyInstrumentIdentity(instrumentResult.value);
   if (!datasetId.ok) return datasetId;
   if (!policyId.ok) return policyId;
   if (!definitionId.ok) return definitionId;
@@ -267,7 +270,7 @@ export function buildCalibration(input: BuildCalibrationInput): BuildCalibration
           const result = evaluateCase(
             item,
             criterion,
-            instrumentResult.value.repetitions,
+            instrumentRepetitions(instrumentResult.value),
             policyResult.value.minimumAgreement,
           );
           for (const category of result.failureCategories) groupFailures.add(category);
@@ -526,8 +529,8 @@ export function loadVerifiedCalibration(
       ],
     };
   }
-  const definitionId = definitionIdentity(input.definition);
-  const instrumentId = instrumentIdentity(input.instrument);
+  const definitionId = anyDefinitionIdentity(input.definition);
+  const instrumentId = anyInstrumentIdentity(input.instrument);
   if (!definitionId.ok || !instrumentId.ok) {
     return {
       ok: false,

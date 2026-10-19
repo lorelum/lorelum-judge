@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 
 import canonicalize from "canonicalize";
 
-import { CopyError, snapshotForIdentity } from "./validation.js";
+import {
+  CopyError,
+  snapshotForIdentity,
+  type ValidationIssue,
+  type ValidationResult,
+} from "./validation.js";
 
 export type Identity = `sha256:${string}`;
 
@@ -15,6 +20,10 @@ export type IdentityResult =
   | { readonly ok: true; readonly identity: Identity }
   | { readonly ok: false; readonly error: IdentityError };
 
+export type ValidatedIdentity =
+  | { readonly ok: true; readonly identity: Identity }
+  | { readonly ok: false; readonly issues: readonly ValidationIssue[] };
+
 export type CanonicalResult =
   | { readonly ok: true; readonly text: string }
   | { readonly ok: false; readonly error: IdentityError };
@@ -24,6 +33,26 @@ function reasonFor(error: unknown): IdentityError {
     return { path: error.path, reason: error.reason };
   }
   return { path: "$", reason: "unsupported" };
+}
+
+/** Identity of an already-validated record, with schema failures passed through. */
+export function identifyValidated(
+  validated: ValidationResult<{ readonly schema: string }>,
+): ValidatedIdentity {
+  if (!validated.ok) return validated;
+  const result = identityOf(validated.value.schema, validated.value);
+  return result.ok
+    ? result
+    : {
+        ok: false,
+        issues: [
+          {
+            path: result.error.path,
+            code: "schema",
+            message: `identity: ${result.error.reason}`,
+          },
+        ],
+      };
 }
 
 /** Canonical form of an already-copied value. */

@@ -27,7 +27,8 @@ boundaries.
 Framework implementations use `packages/runtime-*` and may depend on protocol
 and runtime. Concrete provider SDKs use `packages/provider-*` and may depend on
 protocol and runtime. Neither package type may leak SDK types into public
-contracts.
+contracts. The first provider is `@lorelum/provider-openai-compatible`, a
+non-streaming Chat Completions text transport with no judge dependency.
 
 ## Package Responsibilities
 
@@ -47,7 +48,10 @@ rubric, verdict, calibration, or gate semantics.
 
 Pure domain rules and workflows for task framing, rubric authoring, evidence
 collection, judgment, calibration, and gate decisions. It consumes protocol and
-runtime through their public APIs.
+runtime through their public APIs. Evidence normalization is owned by
+`packages/judge/src/evidence.ts`; verdict-list assessment is owned by
+`packages/protocol/src/assessment.ts`; review execution is split by concept
+under `packages/judge/src/review/` rather than one aggregate file.
 
 ### Workflow
 
