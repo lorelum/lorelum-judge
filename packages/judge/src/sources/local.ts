@@ -3,7 +3,14 @@ import { lstat, open, opendir, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { CodeTarget } from "@lorelum/judge-protocol";
 import { collectGitSource } from "./git.js";
-import { byteIdentity, SourceCollector, sourceError, validRequest } from "./shared.js";
+import {
+  byteIdentity,
+  recordVerificationFailure,
+  SourceChangedError,
+  SourceCollector,
+  sourceError,
+  validRequest,
+} from "./shared.js";
 import type { SourceOptions, SourceReadRequest, SourceSession } from "./types.js";
 
 export function isWithinRoot(path: string, root: string): boolean {
@@ -177,25 +184,24 @@ export async function collectLocalSource(
     snapshot: collector.snapshot,
     read,
     async verify() {
-      if (collector.cancelled()) return;
+      if (!collector.beginVerification()) return;
       for (const [path, identity] of observed) {
         try {
           const data = await readLocalBytes(path, roots, collector, true);
-          if (!data || byteIdentity(data.bytes) !== identity)
-            throw new Error("File bytes changed after collection");
+          if (data === undefined) continue;
+          if (byteIdentity(data.bytes) !== identity)
+            throw new SourceChangedError("File bytes changed after collection");
         } catch (error) {
-          collector.snapshot.consistent = false;
-          collector.issue("source_changed", sourceError(error), path);
+          recordVerificationFailure(collector, error, path);
         }
       }
       for (const [path, identity] of directories) {
         try {
           const info = await stat(path, { bigint: true });
           if (`${info.dev}:${info.ino}:${info.mtimeNs}:${info.ctimeNs}` !== identity)
-            throw new Error("Directory changed after enumeration");
+            throw new SourceChangedError("Directory changed after enumeration");
         } catch (error) {
-          collector.snapshot.consistent = false;
-          collector.issue("source_changed", sourceError(error), path);
+          recordVerificationFailure(collector, error, path);
         }
       }
     },

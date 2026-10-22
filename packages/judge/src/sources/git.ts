@@ -5,7 +5,15 @@ import { access, lstat, realpath, stat } from "node:fs/promises";
 import { delimiter, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { CodeSide, CodeTarget } from "@lorelum/judge-protocol";
 import { isWithinRoot, readLocalBytes } from "./local.js";
-import { byteIdentity, matchesPath, SourceCollector, sourceError, validRequest } from "./shared.js";
+import {
+  byteIdentity,
+  matchesPath,
+  recordVerificationFailure,
+  SourceChangedError,
+  SourceCollector,
+  sourceError,
+  validRequest,
+} from "./shared.js";
 import type { SourceOptions, SourceReadRequest, SourceSession } from "./types.js";
 
 type Entry = { oid: string; mode: string; bytes?: Buffer; working?: boolean };
@@ -489,13 +497,13 @@ export async function collectGitSource(
     snapshot: collector.snapshot,
     read,
     async verify() {
-      if (collector.cancelled() || !root) return;
+      if (!root || !collector.beginVerification()) return;
       try {
         if (
           indexIdentity !== undefined &&
           byteIdentity(await command(["ls-files", "--stage", "-z"])) !== indexIdentity
         )
-          throw new Error("Index changed after snapshot collection");
+          throw new SourceChangedError("Index changed after snapshot collection");
         if (
           headIdentity !== undefined &&
           (target.selection === "staged" || target.selection === "working")
@@ -506,14 +514,17 @@ export async function collectGitSource(
           } catch {
             if (headIdentity !== "empty-tree") throw new Error("HEAD became unavailable");
           }
-          if (current !== headIdentity) throw new Error("HEAD changed after snapshot collection");
+          if (current !== headIdentity)
+            throw new SourceChangedError("HEAD changed after snapshot collection");
         }
         if (
           untrackedIdentity !== undefined &&
           byteIdentity(await command(["ls-files", "--others", "--exclude-standard", "-z"])) !==
             untrackedIdentity
         )
-          throw new Error("Untracked file enumeration changed after snapshot collection");
+          throw new SourceChangedError(
+            "Untracked file enumeration changed after snapshot collection",
+          );
         for (const [path, identity] of observed) {
           if (identity === "absent") {
             try {
@@ -528,18 +539,18 @@ export async function collectGitSource(
                 continue;
               throw error;
             }
-            throw new Error(`Previously absent working file appeared: ${path}`);
+            throw new SourceChangedError(`Previously absent working file appeared: ${path}`);
           }
           const data = await readLocalBytes(resolve(root, path), roots, collector, true);
-          if (!data || byteIdentity(data.bytes) !== identity)
-            throw new Error(`Working bytes changed: ${path}`);
+          if (data === undefined) continue;
+          if (byteIdentity(data.bytes) !== identity)
+            throw new SourceChangedError(`Working bytes changed: ${path}`);
           const mode = observedModes.get(path);
           if (mode !== undefined && (await lstat(resolve(root, path))).mode !== mode)
-            throw new Error(`Working file mode changed: ${path}`);
+            throw new SourceChangedError(`Working file mode changed: ${path}`);
         }
       } catch (error) {
-        collector.snapshot.consistent = false;
-        collector.issue("source_changed", sourceError(error), root);
+        recordVerificationFailure(collector, error, root);
       }
     },
   };

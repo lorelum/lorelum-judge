@@ -41,7 +41,10 @@ test("staged and unstaged snapshots retain raw bytes and detect a subsequently c
     await writeFile(join(directory, "a.ts"), "working\r\n");
     const [staged, unstaged] = await Promise.all([
       collectGitSource({ kind: "git", path: directory, selection: "staged" }, {}),
-      collectGitSource({ kind: "git", path: directory, selection: "unstaged" }, {}),
+      collectGitSource(
+        { kind: "git", path: directory, selection: "unstaged" },
+        { limits: { maxBytes: 17 } },
+      ),
     ]);
     expect(staged.snapshot.issues).toEqual([]);
     expect(unstaged.snapshot.issues).toEqual([]);
@@ -56,6 +59,10 @@ test("staged and unstaged snapshots retain raw bytes and detect a subsequently c
     expect(staged.snapshot.items[1]?.contentIdentity).toBe(
       `sha256:${createHash("sha256").update("index\r\n").digest("hex")}`,
     );
+    await unstaged.verify();
+    await unstaged.verify();
+    expect(unstaged.snapshot.consistent).toBe(true);
+    expect(unstaged.snapshot.issues).toEqual([]);
     git("add", "a.ts");
     await staged.verify();
     expect(staged.snapshot.consistent).toBe(false);
@@ -91,5 +98,49 @@ test("local context cannot escape its authorized root through traversal or a dir
     expect(session.snapshot.consistent).toBe(false);
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("repeated bounded verification does not invent changes and still detects real edits", async () => {
+  const root = await mkdtemp(join(tmpdir(), "judge-repeat-verify-"));
+  const path = join(root, "a.ts");
+  try {
+    await writeFile(path, "a".repeat(700));
+    const session = await collectLocalSource(
+      { kind: "local", path },
+      { roots: [root], limits: { maxBytes: 1024 } },
+    );
+    await session.verify();
+    await session.verify();
+    expect(session.snapshot.consistent).toBe(true);
+    expect(session.snapshot.issues).toEqual([]);
+    await writeFile(path, "b".repeat(700));
+    await session.verify();
+    expect(session.snapshot.consistent).toBe(false);
+    expect(session.snapshot.issues.some((issue) => issue.code === "source_changed")).toBe(true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a verification budget refusal is uncertainty rather than an observed change", async () => {
+  const root = await mkdtemp(join(tmpdir(), "judge-verify-unavailable-"));
+  const path = join(root, "a.ts");
+  try {
+    await writeFile(path, "a".repeat(700));
+    const session = await collectLocalSource(
+      { kind: "local", path },
+      { roots: [root], limits: { maxBytes: 1024 } },
+    );
+    await writeFile(path, "b".repeat(1200));
+    await session.verify();
+    expect(session.snapshot.consistent).toBe(true);
+    expect(session.snapshot.issues.some((issue) => issue.code === "verification_unavailable")).toBe(
+      true,
+    );
+    expect(session.snapshot.issues.some((issue) => issue.code === "source_changed")).toBe(false);
+    expect(session.snapshot.items[0]?.text).toBe("a".repeat(700));
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

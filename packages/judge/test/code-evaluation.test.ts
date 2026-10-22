@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -283,4 +284,158 @@ test("the requested projection budget also constrains final problem locations", 
   expect(result.value.execution?.attempts[0]?.status).toBe("partial");
   expect(result.value.execution?.attempts[0]?.run).toBeUndefined();
   expect(result.value.result?.problems).toEqual([]);
+});
+
+test("an initially empty external context cannot disclose files without permission", async () => {
+  const root = await mkdtemp(join(tmpdir(), "judge-late-disclosure-"));
+  const git = (...args: string[]) =>
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "core.hooksPath=",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "commit.gpgSign=false",
+        "-c",
+        "user.name=Offline fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        ...args,
+      ],
+      { cwd: root, stdio: "pipe" },
+    );
+  let leaked = false;
+  let calls = 0;
+  const model: ModelPort = {
+    async generate(request) {
+      calls++;
+      leaked ||= request.messages.some((message) =>
+        message.content.includes("sensitive-context-marker"),
+      );
+      const preparing = request.messages[0]?.content.includes("You prepare");
+      return {
+        kind: "message",
+        content: JSON.stringify(
+          preparing
+            ? {
+                ...preparation,
+                reads:
+                  calls === 1
+                    ? [{ session: 1, request: { kind: "read", path: "private.ts", side: "new" } }]
+                    : [],
+              }
+            : evaluatedResponse(request),
+        ),
+      };
+    },
+  };
+  try {
+    git("init", "--quiet", "--template=");
+    await writeFile(join(root, "private.ts"), 'export const fixture = "sensitive-context-marker";');
+    git("add", "private.ts");
+    git("commit", "--quiet", "-m", "fixture");
+    const result = await evaluateCode(
+      {
+        target: { kind: "snippet", text: "export const publicValue = 1;" },
+        context: [{ kind: "git", path: root, selection: "staged" }],
+      },
+      { model, method, sources: { roots: [root] }, limits: { maxContextRounds: 1 } },
+    );
+    if (!result.ok) throw new Error(JSON.stringify(result.issues));
+    expect(leaked).toBe(false);
+    expect(calls).toBe(0);
+    expect(result.value.status).toBe("failed");
+    expect(result.value.issues.some((issue) => issue.code === "disclosure_not_authorized")).toBe(
+      true,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}, 20_000);
+
+test("valid decisive verdicts cannot hide truncated final target coverage", async () => {
+  const model: ModelPort = {
+    async generate(request) {
+      return {
+        kind: "message",
+        content: JSON.stringify(
+          request.messages[0]?.content.includes("You prepare")
+            ? preparation
+            : evaluatedResponse(request),
+        ),
+      };
+    },
+  };
+  const result = await evaluateCode(
+    {
+      target: {
+        kind: "files",
+        files: [
+          { path: "a.ts", text: "a".repeat(80) },
+          { path: "b.ts", text: "b".repeat(40) },
+        ],
+      },
+    },
+    { model, method, limits: { maxContextRounds: 0, evidenceBudget: 100 } },
+  );
+  if (!result.ok) throw new Error(JSON.stringify(result.issues));
+  expect(result.value.execution?.attempts[0]?.status).toBe("completed");
+  expect(
+    result.value.execution?.attempts[0]?.evidenceBundle?.items.some(
+      (item) => item.render?.state !== "rendered",
+    ),
+  ).toBe(true);
+  expect(result.value.status).toBe("partial");
+});
+
+test("unresolved opinion and previous-problem references keep the overall request partial", async () => {
+  const model: ModelPort = {
+    async generate(request) {
+      if (request.messages[0]?.content.includes("You prepare"))
+        return { kind: "message", content: JSON.stringify(preparation) };
+      const user = request.messages.find((message) => message.role === "user")?.content ?? "";
+      const marker = "Untrusted review context:\n";
+      const context = JSON.parse(user.slice(user.lastIndexOf(marker) + marker.length)) as {
+        followUpReferences: string[];
+      };
+      return {
+        kind: "message",
+        content: JSON.stringify({
+          ...evaluatedResponse(request),
+          followUps: context.followUpReferences.map((reference, index) => ({
+            id: `follow-up-${index}`,
+            reference,
+            outcome: "unresolved",
+            rationale: "必要的调用条件仍不可用。",
+            evidenceIds: [],
+          })),
+        }),
+      };
+    },
+  };
+  const previous = await evaluateCode(
+    {
+      target: { kind: "snippet", text: "function list(items) { return items; }" },
+      requirements: ["最多返回 20 条"],
+    },
+    { model, method, limits: { maxContextRounds: 0 } },
+  );
+  if (!previous.ok) throw new Error(JSON.stringify(previous.issues));
+  const result = await evaluateCode(
+    {
+      target: { kind: "snippet", text: "function list(items) { return items.slice(0, 20); }" },
+      opinions: [{ id: "caller-boundary", text: "调用方是否也限制了条数？" }],
+      previousReport: previous.value,
+    },
+    { model, method, limits: { maxContextRounds: 0 } },
+  );
+  if (!result.ok) throw new Error(JSON.stringify(result.issues));
+  expect(result.value.execution?.attempts[0]?.status).toBe("completed");
+  expect(result.value.result?.followUps.map((observation) => observation.outcome)).toEqual([
+    "unresolved",
+    "unresolved",
+  ]);
+  expect(result.value.status).toBe("partial");
 });

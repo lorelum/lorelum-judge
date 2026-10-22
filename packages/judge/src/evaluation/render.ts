@@ -57,6 +57,7 @@ const messages: Record<string, string> = {
   ambiguous_ref: "链接存在多个有效的版本与路径解释，尚不能确定评价对象。",
   cancelled: "读取或评价已取消。",
   timeout: "评价超过设定时限，尚未完成。",
+  verification_unavailable: "未能完成来源核验；这不表示已证实内容变化，也不能保证来源仍是最新。",
   binary_or_encoding: "材料不是可读取的 UTF-8 文本，未作代码评价。",
   binary_unavailable: "二进制内容未作文本代码评价。",
   symlink: "未跟随目录或文件链接。",
@@ -146,7 +147,22 @@ export function renderCodeEvaluation(report: CodeEvaluationReport): string {
   lines.push("", "## 检查范围与限制", "");
   const target = report.source.items.filter((item) => item.role === "target");
   lines.push(
-    `评价对象：${target.map((item) => `${sourceName(item)}（${item.side === "old" ? "修改前，" : item.side === "new" ? "修改后，" : ""}${item.endLine === 0 ? "空内容" : `第 ${item.startLine}–${item.endLine} 行`}）`).join("；") || "未取得可评价对象"}`,
+    `评价对象：${
+      target
+        .map((item) => {
+          const shown = report.execution?.shownLines?.[item.id];
+          const projection =
+            shown === undefined
+              ? "未生成正式投影"
+              : item.endLine === 0
+                ? "空内容"
+                : shown.length === 0
+                  ? "无完整可见行"
+                  : `第 ${shown[0]}–${shown.at(-1)} 完整行`;
+          return `${sourceName(item)}（${item.side === "old" ? "修改前，" : item.side === "new" ? "修改后，" : ""}已取得${item.endLine === 0 ? "空内容" : `第 ${item.startLine}–${item.endLine} 行`}；正式投影：${projection}）`;
+        })
+        .join("；") || "未取得可评价对象"
+    }`,
   );
   const context = report.source.items.filter((item) => item.role !== "target");
   if (context.length > 0)

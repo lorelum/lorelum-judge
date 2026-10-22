@@ -336,8 +336,10 @@ export async function evaluateCode(
     if (!source.items.some((item) => item.role === "target"))
       throw new Error("no target material available");
     if (source.issues.some((issue) => issue.fatal)) throw new Error("source acquisition failed");
-    const external = source.items.some(
-      (item) => item.provenance !== "provided" && item.provenance !== "patch",
+    // Even an empty comparison exposes inventory and can yield external context later.
+    const external = selectors.some(
+      (selector) =>
+        selector.kind === "local" || selector.kind === "git" || selector.kind === "github",
     );
     if (external && ports.allowModelDisclosure !== true) {
       report.issues.push({
@@ -474,6 +476,14 @@ export async function evaluateCode(
           : evaluated.value.completeness === "partial"
             ? "partial"
             : "failed";
+    if (
+      report.execution.attempts.some((attempt) =>
+        attempt.evidenceBundle?.items.some((item) => item.render?.state !== "rendered"),
+      )
+    )
+      report.limitations.push(
+        "正式评价的证据投影存在截断或未展示材料；已读取内容不等于已完整覆盖目标。",
+      );
     if (report.result !== undefined) {
       for (const reference of requiredFollowUps) {
         const matches = report.result.followUps.filter(
@@ -495,6 +505,7 @@ export async function evaluateCode(
           });
       if (
         report.result.pending.length > 0 ||
+        report.result.followUps.some((observation) => observation.outcome === "unresolved") ||
         report.result.verdicts.some(
           (verdict) => verdict.verdict === "unknown" || verdict.verdict === "insufficient",
         )
@@ -502,6 +513,7 @@ export async function evaluateCode(
         report.limitations.push("部分检查存在未解决前提或资料不足，不能视为目标已全部完成。");
     }
     for (const session of sessions) await session.verify();
+    if (controller.signal.aborted) throw new Error("cancelled");
     const observed = mergeSources(sessions, roles);
     // Preserve exactly the source snapshot measured by the plan; later observations
     // describe freshness, not a replacement input for an already finished execution.

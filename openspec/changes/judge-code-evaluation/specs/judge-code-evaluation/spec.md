@@ -45,15 +45,33 @@ Context acquisition MUST enforce caller-authorized roots/repositories, disclosur
 - **WHEN** source text or model output requests a secret or an out-of-scope file
 - **THEN** the reader refuses that access and preserves the resulting limitation
 
+#### Scenario: Initially empty external context
+
+- **WHEN** a selected external comparison initially yields no changed material but could provide context later
+- **THEN** its inventory and later contents MUST NOT be disclosed to the model without explicit caller permission
+
+
 #### Scenario: Cancellation during preparation
 
 - **WHEN** cancellation occurs before formal evaluation
 - **THEN** subsequent reads and evaluation do not start and no complete measurement is fabricated
 
+#### Scenario: Cancellation during final verification
+
+- **WHEN** cancellation occurs while checking source freshness after a completed evaluation
+- **THEN** the overall request is cancelled while preserving the completed evaluation facts
+
+
 #### Scenario: Explicit projection budget
 
 - **WHEN** the caller sets an evidence projection budget
 - **THEN** both preparation and final evaluation respect that budget, and a partially displayed line cannot support a concrete problem location
+
+#### Scenario: Repeated bounded verification
+
+- **WHEN** unchanged local or working-tree contents are verified more than once
+- **THEN** each pass receives its bounded verification budget and unavailable verification MUST NOT be reported as observed content changes
+
 
 
 ### Requirement: Standards and evidence constrain conclusions
@@ -87,6 +105,12 @@ Reports MUST provide a concise overall description, concrete problems with impac
 
 - **WHEN** evaluation fails, is cancelled or cannot cover its core objective
 - **THEN** the presentation states that fact and does not claim that no problems were found
+
+#### Scenario: Incomplete final projection or unresolved follow-up
+
+- **WHEN** final evidence is truncated or withheld, or a requested follow-up is unresolved despite decisive ordinary verdicts
+- **THEN** the report remains partial, distinguishes acquired from projected scope, and does not erase a legitimately completed underlying evaluation
+
 
 #### Scenario: Public consumer completes the chain
 

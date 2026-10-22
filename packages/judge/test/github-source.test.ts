@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
+import type { ModelPort } from "@lorelum/judge-runtime";
+import { evaluateCode } from "../src/index.js";
 import { collectGithubSource } from "../src/sources/github.js";
 
 function blob(text: string) {
@@ -184,4 +186,89 @@ test("pre-cancel and unauthorized repositories perform no network reads", async 
     ),
   ).toBe(true);
   expect(JSON.stringify([cancelled.snapshot, denied.snapshot])).not.toContain("private-secret");
+});
+
+test("cancellation during final source verification preserves completed evaluation but cancels the request", async () => {
+  const controller = new AbortController();
+  const commit = "a".repeat(40);
+  const content = blob("export const value = 1;\n");
+  const underlying = http({
+    "/repos/up/project/commits/main": { sha: commit },
+    [`/repos/up/project/git/trees/${commit}?recursive=1`]: {
+      tree: [{ path: "a.ts", type: "blob", mode: "100644", sha: content.sha, size: content.size }],
+      truncated: false,
+    },
+    [`/repos/up/project/git/blobs/${content.sha}`]: content,
+  });
+  let evaluated = false;
+  const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (evaluated) {
+      controller.abort();
+      throw new Error("cancelled during final verification");
+    }
+    return underlying(input, init);
+  }) as typeof globalThis.fetch;
+  const model: ModelPort = {
+    async generate(request) {
+      if (request.messages[0]?.content.includes("You prepare"))
+        return {
+          kind: "message",
+          content: JSON.stringify({
+            task: "inspect",
+            focus: [],
+            standards: ["behavior"],
+            requirements: [],
+            excluded: ["boundaries", "security", "concurrency", "performance", "maintenance"].map(
+              (id) => ({ id, reason: "Source cancellation regression." }),
+            ),
+            reads: [],
+          }),
+        };
+      const user = request.messages.find((message) => message.role === "user")?.content ?? "";
+      const marker = "Untrusted review context:\n";
+      const context = JSON.parse(user.slice(user.lastIndexOf(marker) + marker.length)) as {
+        sources: { id: string }[];
+      };
+      evaluated = true;
+      return {
+        kind: "message",
+        content: JSON.stringify({
+          schema: "lorelum.judge.review-result/v2",
+          verdicts: [
+            {
+              schema: "lorelum.judge.verdict/v1",
+              criterionId: "behavior",
+              verdict: "strong",
+              evidenceIds: [context.sources[0]?.id],
+              rationale: "The shown declaration is consistent.",
+            },
+          ],
+          summary: [],
+          problems: [],
+          pending: [],
+          followUps: [],
+        }),
+      };
+    },
+  };
+  const result = await evaluateCode(
+    { target: "https://github.com/up/project/blob/main/a.ts" },
+    {
+      model,
+      method: {
+        kind: "llm",
+        provider: { protocol: "openai.chat-completions/v1", adapterVersion: "1" },
+        endpointIdentity: `sha256:${"a".repeat(64)}`,
+        model: { provider: "offline", name: "cancel-source" },
+      },
+      allowModelDisclosure: true,
+      signal: controller.signal,
+      limits: { maxContextRounds: 0 },
+      sources: { github: { fetch } },
+    },
+  );
+  if (!result.ok) throw new Error(JSON.stringify(result.issues));
+  expect(result.value.execution?.attempts[0]?.status).toBe("completed");
+  expect(result.value.result?.verdicts[0]?.verdict).toBe("strong");
+  expect(result.value.status).toBe("cancelled");
 });

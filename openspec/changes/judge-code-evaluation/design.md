@@ -18,11 +18,13 @@ GitHub 使用固定 api.github.com GET，凭据只在内存请求头，不传播
 
 ## 准备与评价
 
-默认标准覆盖可见行为、边界/失败、适用安全/并发/资源/性能和具体维护影响；不将偏好视为缺陷。用户要求保留原文和来源；重点与仅限区分。模型可整理任务、选择标准和请求补读，但程序校验全部读取与标准来源，不能授予权限。准备通过普通文本 JSON，tools=[]；最多两轮补查，无修补或重试。读取限制可配置，超限作为 coverage 限制。取消贯穿准备与评价，迟到结果不得复活。
+默认标准覆盖可见行为、边界/失败、适用安全/并发/资源/性能和具体维护影响；不将偏好视为缺陷。用户要求保留原文和来源；重点与仅限区分。模型可整理任务、选择标准和请求补读，但程序校验全部读取与标准来源，不能授予权限。准备通过普通文本 JSON，tools=[]；默认最多两轮补查，可配置有限上限，无修补或重试。读取限制可配置，超限作为 coverage 限制。取消贯穿准备与评价，迟到结果不得复活。
 
 准备生成 ReviewPlan/v1：任务类型、请求、要求、采用/排除标准、MeasurementDefinition/v2、source identity 与准备调用事实。直接构造并验证 v2 definition；不强行改造只接受 structured 输出的旧 compileRubric，不伪造 frozen rubric。复用 validateCriteria、assessVerdicts、compilePrompt、identityOf。每条 evidence 只有一个 primary owner，其他条目 reference；材料分配不得复制同一内容规避所有权。
 
 ReviewPlan 的 evidenceBudget 记录最终证据投影上限并进入 identity；高层显式预算同时用于准备与正式评价，不能只限制准备阶段。指令与结构化元数据不计入此文本投影预算。GitHub 文件获取累计原始字节，即使二进制、LFS 或非法 UTF-8 最后未作为文本材料纳入，也不得绕过获取预算。
+
+披露权限由所选择的来源类型决定；空的外部比较也携带清单和后续读取能力，不能绕过模型披露授权。文件采集与每轮一致性核验分别有字节预算；核验预算按轮重置。只有内容、版本、目录身份或路径缺失等已观察事实才记作 source_changed，预算拒绝和其他无法核验的错误记作 verification_unavailable。
 
 ReviewResult/v2 在 Verdict/v1 之外保存 summary、problems、pending、followUps。问题包含 criterionId、evidenceIds、位置、影响重要性、条件、影响与归因；多问题可属于同一条目。核实/复查有明确历史引用和结果，不以空问题列表表达全部已解决。
 
@@ -31,6 +33,8 @@ ReviewExecution/v2 保存计划/来源引用与结果协议，实际 attempt 记
 ## 报告
 
 CodeEvaluationReport/v1 绑定 source、plan、execution 和前次报告/问题引用。执行完整性与目标覆盖分开：合法 unknown 不是 parser failure，但缺少关键依据不能整体宣称完成。准备失败可无正式 plan/execution；保留已取得资料和失败原因。
+
+高层覆盖还检查正式执行的 evidence manifest；截断或未展示材料使报告保持 partial，即使合法 verdict 已形成完整底层执行。核实/复查的 unresolved 同样不是完成目标。中文范围分别显示已取得行和正式投影完整可见行。最后一次来源核验结束后仍检查取消；保留此前已完成的评价，但高层请求状态为 cancelled。
 
 summary 为本次评价结果的一部分，引用问题/标准/证据；渲染使用确定性中文模板，不额外模型润色。重要问题、未知与限制固定展示；报告无 score、修复步骤或交付资格。验证真实路径/侧/版本/已显示行；截断末行不当作完整可引用行。语义判断仍需真实模型质量证据，结构合法不等于解释正确。
 

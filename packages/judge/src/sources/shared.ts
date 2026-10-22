@@ -23,6 +23,32 @@ export function sourceError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export class SourceChangedError extends Error {}
+
+export function recordVerificationFailure(
+  collector: SourceCollector,
+  error: unknown,
+  path: string,
+): void {
+  const changed =
+    error instanceof SourceChangedError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error.code === "ENOENT" || error.code === "ENOTDIR") &&
+      "syscall" in error &&
+      (error.syscall === "open" ||
+        error.syscall === "realpath" ||
+        error.syscall === "stat" ||
+        error.syscall === "lstat"));
+  if (changed) collector.snapshot.consistent = false;
+  collector.issue(
+    changed ? "source_changed" : "verification_unavailable",
+    sourceError(error),
+    path,
+  );
+}
+
 /** A session-local budget. Raw byte identity is never computed from decoded text. */
 export class SourceCollector {
   readonly snapshot: SourceSnapshot = {
@@ -78,10 +104,17 @@ export class SourceCollector {
     return false;
   }
 
+  beginVerification(): boolean {
+    this.verifiedBytes = 0;
+    return !this.cancelled();
+  }
+
   reserveBytes(size: number, path: string, verifying = false): boolean {
     const used = verifying ? this.verifiedBytes : this.acquiredBytes;
     if (!Number.isSafeInteger(size) || size < 0 || used + size > this.limits.maxBytes) {
-      this.omit(path, "byte_limit", "Raw source acquisition byte budget exhausted");
+      if (verifying)
+        this.issue("verification_unavailable", "Raw verification byte budget exhausted", path);
+      else this.omit(path, "byte_limit", "Raw source acquisition byte budget exhausted");
       return false;
     }
     if (verifying) this.verifiedBytes += size;

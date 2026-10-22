@@ -25,5 +25,17 @@
 ## 5. 完成依据
 
 - [x] 5.1 通过公开 exports 实际 smoke 23 个代表性来源/任务路径，包含实际有限补查（47 次本地 HTTP 模型请求）；只补必要的消费者可见边界回归。
-- [x] 5.2 更新接入文档和消费示例；bun run validate 通过（717 tests、6 个 package build/Node ESM load、公开消费 smoke），OpenSpec strict validation 与 git diff --check 通过。未调用真实模型或 GitHub 网络，未证明真实模型评价质量。
+- [x] 5.2 更新接入文档和消费示例；修正后 bun run validate 通过（723 tests、1709 assertions、6 个 package build/Node ESM load、23 个公开消费场景），OpenSpec strict validation 与 git diff --check 通过。另经 Node 公开入口实际读取 GitHub 公开 README，固定 SHA 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d，来源一致且无读取问题；本地确定性响应只返回 unknown，报告保持 partial。截断报告的 Node 公开入口 smoke 已观察取得行与正式投影行分别展示。未调用收费模型；真实私有仓库认证、fork PR 与模型评价质量未验证。
 - [ ] 5.3 核对范围和敏感内容，固定 SHA 独立审查并处理发现，更新同一 PR；不自动合并。
+
+## 独立审查发现处理
+
+首次隔离只读审查固定 `f14001285191e065f37f2359ebe98d1e4fc8f2b0`，相对主线 `fdbfcb1ecd8debc770563f41e3f2f7986335b3b6`。发现 1 项 P1、4 项 P2，均已用实际 API／来源回归复现并修正：
+
+- [x] 外部来源即使初始为空，也必须在任何模型调用前获得披露授权；不能借后续补查绕过。
+- [x] 每轮核验独立计量；预算拒绝及无法核验不再伪装成内容变化，真实变化仍被识别。
+- [x] 正式 evidence manifest 的截断／未展示进入覆盖限制，中文报告区分取得与投影范围。
+- [x] 意见或原问题的 unresolved 使高层保持 partial，保留合法完成的底层执行。
+- [x] 最终来源核验期间取消仍返回 cancelled，保留此前已完成的评价事实。
+
+定向回归：19 pass、0 fail；修正后统一验证：723 pass、0 fail。没有通过重新钉死措辞或放宽结果校验来消除失败。
