@@ -66,6 +66,7 @@ console.log(result.text);
 
 `context` 提供辅助来源，`requirementSources` 提供要求依据；
 `opinions` 用于核实已有意见，`previousReport` 用于复查原问题。
+来源中的评论仍是意见；将 Issue 放入 `requirementSources` 不会自动把讨论提议变成强制要求。
 仓库和模块请求只评价实际取得的范围，不是完整审计。
 GitHub 使用只读 REST tree/blob，无需 clone；本地 Git 需要主机安装可信 Git。
 只支持 github.com，不默认支持其他平台或 Enterprise。

@@ -25,7 +25,7 @@
 ## 5. 完成依据
 
 - [x] 5.1 通过公开 exports 实际 smoke 23 个代表性来源/任务路径，包含实际有限补查（47 次本地 HTTP 模型请求）；只补必要的消费者可见边界回归。
-- [x] 5.2 更新接入文档和消费示例；修正后 bun run validate 通过（723 tests、1709 assertions、6 个 package build/Node ESM load、23 个公开消费场景），OpenSpec strict validation 与 git diff --check 通过。另经 Node 公开入口实际读取 GitHub 公开 README，固定 SHA 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d，来源一致且无读取问题；本地确定性响应只返回 unknown，报告保持 partial。截断报告的 Node 公开入口 smoke 已观察取得行与正式投影行分别展示。未调用收费模型；真实私有仓库认证、fork PR 与模型评价质量未验证。
+- [x] 5.2 更新接入文档和消费示例；最终 bun run validate 通过（724 tests、1719 assertions、6 个 package build/Node ESM load、23 个公开消费场景），OpenSpec strict validation 与 git diff --check 通过。另经 Node 公开入口实际读取 GitHub 公开 README，固定 SHA 7fd1a60b01f91b314f59955a4e4d4e80d8edf11d，来源一致且无读取问题；本地确定性响应只返回 unknown，报告保持 partial。截断报告的 Node 公开入口 smoke 已观察取得行与正式投影行分别展示。未调用收费模型；真实私有仓库认证、fork PR 与模型评价质量未验证。
 - [ ] 5.3 核对范围和敏感内容，固定 SHA 独立审查并处理发现，更新同一 PR；不自动合并。
 
 ## 独立审查发现处理
@@ -38,4 +38,6 @@
 - [x] 意见或原问题的 unresolved 使高层保持 partial，保留合法完成的底层执行。
 - [x] 最终来源核验期间取消仍返回 cancelled，保留此前已完成的评价事实。
 
-定向回归：19 pass、0 fail；修正后统一验证：723 pass、0 fail。没有通过重新钉死措辞或放宽结果校验来消除失败。
+五项修正经固定提交 `83e6583be1808b8c6c2821a0222186710aab470b` 隔离复核，原发现均已解决，未发现修正引入的可确证直接回归。
+
+交付核对另外发现并修正要求来源合并对评论角色的覆盖：Issue 评论保持 opinion，准备结果不能自动将讨论提议提升为 mandatory contract；已先复现 completed 假成功，再确认准备阶段拒绝。

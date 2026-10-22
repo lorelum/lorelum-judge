@@ -65,7 +65,7 @@ function mergeSources(
     merged.omitted.push(...source.omitted);
     merged.comparisons.push(...source.comparisons);
     for (const item of source.items) {
-      const role = roles[index] ?? item.role;
+      const role = item.role === "opinion" ? "opinion" : (roles[index] ?? item.role);
       const previous = ids.get(item.id);
       if (previous === undefined) {
         const copy = { ...item, role };

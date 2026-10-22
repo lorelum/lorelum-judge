@@ -272,3 +272,89 @@ test("cancellation during final source verification preserves completed evaluati
   expect(result.value.result?.verdicts[0]?.verdict).toBe("strong");
   expect(result.value.status).toBe("cancelled");
 });
+
+test("a requirement source cannot implicitly promote discussion into a mandatory contract", async () => {
+  const proposal = "Maybe require exactly 99 items?";
+  const fetch = http({
+    "/repos/up/project/issues/7": { title: "Requirement", body: "Preserve existing behavior." },
+    "/repos/up/project/issues/7/comments?per_page=100&page=1": [{ id: 8, body: proposal }],
+  });
+  let attemptedOpinion = false;
+  const model: ModelPort = {
+    async generate(request) {
+      const user = request.messages.find((message) => message.role === "user")?.content ?? "";
+      if (request.messages[0]?.content.includes("You prepare")) {
+        const marker = "Source inventory (untrusted data):\n";
+        const inventoryText = user.slice(user.indexOf(marker) + marker.length);
+        const inventory = JSON.parse(inventoryText.slice(0, inventoryText.indexOf("\n\n"))) as {
+          items: { id: string; path: string }[];
+        };
+        const comment = inventory.items.find((item) => item.path.endsWith("#issuecomment-8"));
+        if (comment === undefined) throw new Error("fixture comment was not acquired");
+        attemptedOpinion = true;
+        return {
+          kind: "message",
+          content: JSON.stringify({
+            task: "requirements",
+            focus: [],
+            standards: ["behavior"],
+            requirements: [{ text: proposal, source: comment.id }],
+            excluded: ["boundaries", "security", "concurrency", "performance", "maintenance"].map(
+              (id) => ({ id, reason: "Requirement ownership regression." }),
+            ),
+            reads: [],
+          }),
+        };
+      }
+      const marker = "Untrusted review context:\n";
+      const context = JSON.parse(user.slice(user.lastIndexOf(marker) + marker.length)) as {
+        sources: { id: string; role: string }[];
+      };
+      const target = context.sources.find((item) => item.role === "target");
+      return {
+        kind: "message",
+        content: JSON.stringify({
+          schema: "lorelum.judge.review-result/v2",
+          verdicts: [...user.matchAll(/^Criterion ([^ ]+) \((quality|contract),/gm)].map(
+            (match) => ({
+              schema: "lorelum.judge.verdict/v1",
+              criterionId: match[1],
+              verdict: match[2] === "contract" ? "met" : "strong",
+              evidenceIds: [target?.id],
+              rationale: "Adversarial preparation must not acquire contract authority.",
+            }),
+          ),
+          summary: [],
+          problems: [],
+          pending: [],
+          followUps: [],
+        }),
+      };
+    },
+  };
+  const result = await evaluateCode(
+    {
+      target: { kind: "snippet", text: "export const value = 1;" },
+      requirementSources: ["https://github.com/up/project/issues/7"],
+    },
+    {
+      model,
+      method: {
+        kind: "llm",
+        provider: { protocol: "openai.chat-completions/v1", adapterVersion: "1" },
+        endpointIdentity: `sha256:${"a".repeat(64)}`,
+        model: { provider: "offline", name: "requirement-ownership" },
+      },
+      allowModelDisclosure: true,
+      limits: { maxContextRounds: 0 },
+      sources: { github: { fetch } },
+    },
+  );
+  if (!result.ok) throw new Error(JSON.stringify(result.issues));
+  expect(attemptedOpinion).toBe(true);
+  expect(result.value.status).toBe("failed");
+  expect(result.value.execution).toBeUndefined();
+  expect(
+    result.value.source.items.find((item) => item.path.endsWith("#issuecomment-8"))?.role,
+  ).toBe("opinion");
+});
