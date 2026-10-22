@@ -30,6 +30,12 @@ Direct material, local files/directories and Git selections, and GitHub file/dir
 - **WHEN** a PR changes during reading or its complete change enumeration cannot be obtained
 - **THEN** the report binds the observed snapshot and states the change or incomplete coverage without claiming current complete coverage
 
+#### Scenario: New file regression attribution
+
+- **WHEN** a problem cites a newly added file without old-side code
+- **THEN** introduction attribution requires reader-established absence in the matching comparison and MUST NOT fabricate old evidence or infer absence from omitted content
+
+
 ### Requirement: Context acquisition is bounded and read only
 
 Context acquisition MUST enforce caller-authorized roots/repositories, disclosure permissions and resource limits. Model requests MUST NOT grant permissions. Code, comments and linked material MUST remain untrusted data. Preparation calls MUST be distinct from formal evaluation attempts. Acquisition MUST NOT execute candidate code, filters, hooks or arbitrary model commands, mutate a working tree or silently fetch missing Git objects.
@@ -43,6 +49,12 @@ Context acquisition MUST enforce caller-authorized roots/repositories, disclosur
 
 - **WHEN** cancellation occurs before formal evaluation
 - **THEN** subsequent reads and evaluation do not start and no complete measurement is fabricated
+
+#### Scenario: Explicit projection budget
+
+- **WHEN** the caller sets an evidence projection budget
+- **THEN** both preparation and final evaluation respect that budget, and a partially displayed line cannot support a concrete problem location
+
 
 ### Requirement: Standards and evidence constrain conclusions
 

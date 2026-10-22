@@ -10,6 +10,8 @@ SourceSnapshot/v1 保存材料 items、请求与实际版本、比较关系、�
 
 直接输入支持片段、文件文本、patch 和 old/new。纯 patch 的位置仅证明 patch 所声明的位置，不宣称取得完整文件。来源模块提供统一收集与补读接口，最终材料冻结后才调用正式评价。
 
+比较项的 version 必须使用对应比较的整组 base/head 身份（分支旧侧为 merge base），单文件原始摘要仍由 contentIdentity 表示。新增/删除只有读取器通过完整树、明确 old/new 文件集或 /dev/null patch 建立后才记录 addedPaths/deletedPaths；缺失节选不能证明不存在。introduced/amplified 必须绑定同一比较的前后证据；introduced 另允许读取器已经证明的新增/删除，不能强迫新增文件伪造旧侧代码。
+
 本地文件以授权根约束 realpath，不默认跟随越界链接或特殊文件。Git 通过参数数组调用受信客户端，不执行 shell/filters/textconv/fsmonitor/hooks，不自动 fetch。暂存 HEAD→index，未暂存 index→工作区，新文件须明确纳入；commit 对父节点（merge 默认 first parent，记录选择），root 对空树；两版本直接比较，分支引入变更以明确 base 的 merge base 对 head。冲突 index、基线歧义、缺失对象与工作区变化显式报告。工作区内容直接读取，不依赖可执行转换过滤器。
 
 GitHub 使用固定 api.github.com GET，凭据只在内存请求头，不传播到分页外域。支持文件/目录/仓库、commit/compare/PR、Issue 及相关意见。固定 SHA 后按 tree/blob 读取；含斜杠 ref 须解析并验证路径，歧义不猜。PR 使用固定 base/head 的 merge base，不使用临时 merge commit。比较文件清单不能仅依赖受上限限制的 PR files，使用 tree 遍历/比较；超限保留未覆盖。二进制、submodule、LFS 等不伪装文本或自动扩大来源。
@@ -19,6 +21,8 @@ GitHub 使用固定 api.github.com GET，凭据只在内存请求头，不传播
 默认标准覆盖可见行为、边界/失败、适用安全/并发/资源/性能和具体维护影响；不将偏好视为缺陷。用户要求保留原文和来源；重点与仅限区分。模型可整理任务、选择标准和请求补读，但程序校验全部读取与标准来源，不能授予权限。准备通过普通文本 JSON，tools=[]；最多两轮补查，无修补或重试。读取限制可配置，超限作为 coverage 限制。取消贯穿准备与评价，迟到结果不得复活。
 
 准备生成 ReviewPlan/v1：任务类型、请求、要求、采用/排除标准、MeasurementDefinition/v2、source identity 与准备调用事实。直接构造并验证 v2 definition；不强行改造只接受 structured 输出的旧 compileRubric，不伪造 frozen rubric。复用 validateCriteria、assessVerdicts、compilePrompt、identityOf。每条 evidence 只有一个 primary owner，其他条目 reference；材料分配不得复制同一内容规避所有权。
+
+ReviewPlan 的 evidenceBudget 记录最终证据投影上限并进入 identity；高层显式预算同时用于准备与正式评价，不能只限制准备阶段。指令与结构化元数据不计入此文本投影预算。GitHub 文件获取累计原始字节，即使二进制、LFS 或非法 UTF-8 最后未作为文本材料纳入，也不得绕过获取预算。
 
 ReviewResult/v2 在 Verdict/v1 之外保存 summary、problems、pending、followUps。问题包含 criterionId、evidenceIds、位置、影响重要性、条件、影响与归因；多问题可属于同一条目。核实/复查有明确历史引用和结果，不以空问题列表表达全部已解决。
 

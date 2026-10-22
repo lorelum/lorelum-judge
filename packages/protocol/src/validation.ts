@@ -1,9 +1,10 @@
 import { Ajv, type ErrorObject, type ValidateFunction } from "ajv";
-
+import codeEvaluationSchema from "./schemas/code-evaluation.schema.json" with { type: "json" };
 import criterionSchema from "./schemas/criterion.schema.json" with { type: "json" };
 import evidenceBundleSchema from "./schemas/evidence-bundle.schema.json" with { type: "json" };
 import evidenceItemSchema from "./schemas/evidence-item.schema.json" with { type: "json" };
 import measurementRunSchema from "./schemas/measurement-run.schema.json" with { type: "json" };
+import codeExecutionSchema from "./schemas/review-execution-v2.schema.json" with { type: "json" };
 import verdictSchema from "./schemas/verdict.schema.json" with { type: "json" };
 
 export type IssueCode =
@@ -278,6 +279,8 @@ ajv.addSchema([
   evidenceItemSchema,
   evidenceBundleSchema,
   measurementRunSchema,
+  codeEvaluationSchema,
+  codeExecutionSchema,
 ]);
 
 /** Compiles a schema against the shared validator. */

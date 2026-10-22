@@ -6,6 +6,90 @@ collection, judgment, calibration, and gate decisions.
 It consumes `@lorelum/judge-protocol` and `@lorelum/judge-runtime`. It does not own
 provider SDKs, framework orchestration, or the engineering implementation workflow.
 
+## 代码评价
+
+`evaluateCode(input, ports)` 接受普通代码评价请求，自行取得必要上下文，返回结构化报告
+和可直接阅读的中文 `text`。`renderCodeEvaluation(report)` 可重新渲染同一份记录，
+不额外调用模型。没有数值评分，也不生成具体修复方案。
+
+```ts
+import { evaluateCode } from "@lorelum/judge";
+import {
+  createOpenAiCompatibleModel,
+  describeEndpoint,
+} from "@lorelum/provider-openai-compatible";
+
+const endpoint = describeEndpoint(configuredEndpoint);
+const result = await evaluateCode(
+  {
+    target: "https://github.com/owner/repository/pull/123",
+    request: "检查此次变更是否破坏兼容性，不要给出修复方案",
+    requirements: ["省略 limit 时仍默认返回 20 条"],
+  },
+  {
+    model: createOpenAiCompatibleModel({
+      endpoint: configuredEndpoint,
+      apiKey: process.env.MODEL_API_KEY,
+    }),
+    method: {
+      kind: "llm",
+      provider: { protocol: "openai.chat-completions/v1", adapterVersion: "1" },
+      endpointIdentity: endpoint.identity,
+      model: { provider: configuredProvider, name: configuredModel },
+    },
+    sources: {
+      github: {
+        repositories: ["owner/repository"],
+        token: process.env.GITHUB_TOKEN,
+      },
+    },
+    allowModelDisclosure: true,
+  },
+);
+if (!result.ok) throw new Error(JSON.stringify(result.issues));
+console.log(result.text);
+// result.value.status 必须单独检查；ok 表示返回了合法记录，不表示评价完成。
+```
+
+代码示例中的配置值由宿主提供；库不会自动登录、读取凭据文件或选用收费服务。
+配置端点、模型与 method 必须对应。读取权限与向模型披露权限分开：
+读取本地或远程来源后，没有显式 `allowModelDisclosure: true` 就不发送其内容。
+直接提交的文本属于本次显式评价输入。
+
+`target` 可以是 GitHub 链接、本地路径或 `CodeTarget`：
+
+- `snippet`、`files`、`diff`、`comparison`：直接提供文本、文件或前后内容。
+- `local`：文件或目录；可选 `ref` 从固定 Git 版本读取。
+- `git`：明确选择 `staged`、`unstaged`、`untracked`、`working`、`commit`、
+  `compare` 或 `branch`；新文件用 `paths` 明确纳入，版本／分支比较提供 `base`。
+- `github`：文件、目录、仓库、commit、compare、PR 或作为资料的 Issue。
+
+`context` 提供辅助来源，`requirementSources` 提供要求依据；
+`opinions` 用于核实已有意见，`previousReport` 用于复查原问题。
+仓库和模块请求只评价实际取得的范围，不是完整审计。
+GitHub 使用只读 REST tree/blob，无需 clone；本地 Git 需要主机安装可信 Git。
+只支持 github.com，不默认支持其他平台或 Enterprise。
+
+调用方可用 `sources.roots`、`sources.github.repositories` 缩小允许访问范围。
+未设置 roots 时，本地只授权指定对象；没有仓库列表时，只使用明确选择的仓库
+及该 PR 的 head 来源。不会执行候选代码、测试、hooks 或 filters，不自动 fetch，
+也不修改目标或发表 GitHub 意见。
+
+默认每个来源最多读取 64 个文本片段、4 MiB 原始内容、单文件 512 KiB，
+发现 20,000 项、128 次读取请求；可在 `sources.limits` 调整。
+默认最多两轮按需补查、每轮八项；`limits.maxContextRounds: 0` 禁止额外补查，
+仍会执行一次任务与标准准备。准备调用与一次正式评价分账，无隐式重试。
+`timeoutMs` 是整个高层请求的时限，`signal` 可取消；迟到响应不会恢复成功。
+
+报告区分执行与覆盖：合法的 unknown 可以完成底层判断，但目标仍可能未完成。
+`partial`、`failed`、`cancelled` 不能被当作“没有问题”；仅有 patch、材料缺失、
+来源变化或无效引用均如实保留。完整记录固定版本与身份，旧报告不冒充更新后的 PR。
+默认标准是本项目版本化规则，不是数值量表或质量认证；报告不授予修改或交付权限。
+
+`executeCodeReview` 是需要自行组合已准备计划和来源的低层 v2 执行入口；
+普通消费者使用 `evaluateCode`。原有 `review`／`executeReview` 的 v1 默认行为不变，
+新评价不自动进入 gate，也不复用旧校准来声称报告可信。
+
 ## Review execution
 
 `review(input, ports)` is the one-call entry for ordinary users: it executes the
@@ -82,9 +166,10 @@ The v1 definition/instrument/run helpers and the v1 calibration artifacts keep
 their behavior. `validateAny*` and the `#9` validators dispatch on the schema;
 an old calibration is not relabelled as verified for a migrational v2 identity.
 
-This package stops at review results. It does not produce code changes,
-suggestion workflows, automatic evidence collection, benchmark migration, or a
-workflow package skeleton; those belong to #11.
+This package stops at evaluation results. It does not produce code changes,
+suggestion workflows, benchmark migration, or an engineering workflow skeleton.
+Bounded source collection belongs to `evaluateCode`; the lower-level review API
+continues to consume caller-prepared evidence.
 
 ## Prompt compiler
 

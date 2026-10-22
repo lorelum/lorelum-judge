@@ -1,3 +1,4 @@
+import { runCodeEvaluation } from "./code-evaluation.mjs";
 import { runMockLlmReview } from "./mock-llm-review.mjs";
 import { runProgramReview } from "./program-review.mjs";
 import { runReviewToGate } from "./review-to-gate.mjs";
@@ -16,3 +17,6 @@ const gate = await runReviewToGate();
 console.log(
   `review to gate: quality=${gate.decision.qualityOutcome} mode=${gate.decision.executionMode} enforcement=${gate.enforcementEligibility}`,
 );
+
+const evaluation = await runCodeEvaluation();
+console.log(`code evaluation: ${JSON.stringify(evaluation)}`);

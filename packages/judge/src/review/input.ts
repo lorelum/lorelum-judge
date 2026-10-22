@@ -4,15 +4,23 @@ import {
   identityOf,
   instrumentIdentityV2,
   measurementDefinitionIdentityV2,
+  projectCodeSource,
+  type ReviewPlan,
+  reviewPlanIdentity,
+  type SourceSnapshot,
   snapshot,
+  sourceSnapshotIdentity,
   validateMeasurementDefinitionV2,
+  validateReviewPlan,
+  validateSourceSnapshot,
 } from "@lorelum/judge-protocol";
 import type { RuntimeMessage } from "@lorelum/judge-runtime";
 
-import { buildManifest, validateMaterials } from "../evidence.js";
+import { buildManifest, escapeEvidenceText, validateMaterials } from "../evidence.js";
 import { compilePrompt } from "../prompt-compiler.js";
 import { buildReviewPrompt } from "../review-prompt.js";
 import { isRecord } from "../type-guards.js";
+import { buildCodeReviewPrompt } from "./code-prompt.js";
 
 export { generationFor, instrumentFor, llmRequestFacts, validateMethod } from "./method.js";
 
@@ -20,7 +28,12 @@ import { instrumentFor, validateMethod } from "./method.js";
 import { type PrepareReviewResult, REVIEW_INPUT_SCHEMA } from "./types.js";
 import { validation } from "./validation.js";
 
-function prepare(input: unknown, checkerPort: unknown, modelPort: unknown): PrepareReviewResult {
+function prepare(
+  input: unknown,
+  checkerPort: unknown,
+  modelPort: unknown,
+  code?: { plan: ReviewPlan; source: SourceSnapshot; followUpReferences?: readonly string[] },
+): PrepareReviewResult {
   if (!isRecord(input)) {
     return { ok: false, issues: [validation("$", "input must be an object")] };
   }
@@ -94,7 +107,15 @@ function prepare(input: unknown, checkerPort: unknown, modelPort: unknown): Prep
   let renderIdentity: string | undefined;
   if (method.kind === "llm") {
     const compiled = compilePrompt({
-      prompt: buildReviewPrompt(definition.value),
+      prompt:
+        code === undefined
+          ? buildReviewPrompt(definition.value)
+          : buildCodeReviewPrompt(
+              code.plan,
+              code.source,
+              code.followUpReferences ??
+                code.source.items.filter((item) => item.role === "opinion").map((item) => item.id),
+            ),
       evidence: materials,
     });
     if (!compiled.ok) {
@@ -120,6 +141,58 @@ function prepare(input: unknown, checkerPort: unknown, modelPort: unknown): Prep
   }
 
   const instrument = instrumentFor(method, repetitions, promptIdentity);
+  if (code !== undefined) {
+    instrument.method.parserVersion = "lorelum.judge.review-parser/v2";
+    if (instrument.method.kind === "llm")
+      instrument.method.compilerVersion = "lorelum.judge.review-compiler/v2";
+    else {
+      instrument.method.implementationVersion = "lorelum.judge.review-execution/v2";
+      instrument.method.resultProtocolVersion = "lorelum.judge.review-result/v2";
+    }
+  }
+  let shownLines: Map<string, Set<number>> | undefined;
+  if (code !== undefined) {
+    const planned = measurementDefinitionIdentityV2(code.plan.definition);
+    const actual = measurementDefinitionIdentityV2(definition.value);
+    if (!planned.ok || !actual.ok || planned.identity !== actual.identity)
+      return {
+        ok: false,
+        issues: [validation("$.definition", "definition differs from the review plan")],
+      };
+    shownLines = new Map();
+    for (const item of code.source.items) {
+      const material = materials.find((entry) => entry.id === item.id);
+      const projected = manifest.items.find((entry) => entry.id === item.id);
+      const expected = projectCodeSource(item);
+      const normalized = validateMaterials([{ id: item.id, status: "present", text: expected }]);
+      if (!normalized.ok || material === undefined || material.text !== normalized.value[0]?.text)
+        return {
+          ok: false,
+          issues: [
+            validation("$.evidence", `source ${item.id} must use its original numbered lines`),
+          ],
+        };
+      const escaped =
+        method.kind === "llm" ? escapeEvidenceText(material.text ?? "") : (material.text ?? "");
+      const rendered = Array.from(escaped)
+        .slice(0, projected?.render?.renderedLength ?? Array.from(escaped).length)
+        .join("");
+      const lines = rendered.split("\n");
+      if (projected?.render?.state === "truncated") lines.pop();
+      const complete = new Set<number>();
+      if (projected?.render?.state !== "withheld")
+        for (const line of lines) {
+          const match = /^(\d+):/.exec(line);
+          if (match !== null) complete.add(Number(match[1]));
+        }
+      shownLines.set(item.id, complete);
+    }
+    if (materials.some((material) => !code.source.items.some((item) => item.id === material.id)))
+      return {
+        ok: false,
+        issues: [validation("$.evidence", "evidence must belong to the source snapshot")],
+      };
+  }
   const definitionId = measurementDefinitionIdentityV2(definition.value);
   const instrumentId = instrumentIdentityV2(instrument);
   if (!definitionId.ok || !instrumentId.ok) {
@@ -141,6 +214,7 @@ function prepare(input: unknown, checkerPort: unknown, modelPort: unknown): Prep
     method,
     repetitions,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(code === undefined ? {} : { plan: code.plan, source: code.source }),
   });
   if (!inputIdentity.ok) {
     return {
@@ -168,6 +242,20 @@ function prepare(input: unknown, checkerPort: unknown, modelPort: unknown): Prep
       definitionIdentity: definitionId.identity,
       instrumentIdentity: instrumentId.identity,
       evidenceIdentity: evidenceId.identity,
+      ...(code === undefined
+        ? {}
+        : {
+            codeReview: {
+              definition: definition.value,
+              source: code.source,
+              manifest,
+              plan: code.plan,
+              ...(shownLines === undefined ? {} : { shownLines }),
+              ...(code.followUpReferences === undefined
+                ? {}
+                : { followUpReferences: code.followUpReferences }),
+            },
+          }),
       ...(copied.id !== undefined && typeof copied.id === "string" ? { id: copied.id } : {}),
     },
   };
@@ -176,8 +264,24 @@ function prepare(input: unknown, checkerPort: unknown, modelPort: unknown): Prep
 export function prepareReview(
   input: unknown,
   ports: { readonly checker?: unknown; readonly model?: unknown },
+  code?: { plan: ReviewPlan; source: SourceSnapshot; followUpReferences?: readonly string[] },
 ): PrepareReviewResult {
   try {
+    if (code !== undefined) {
+      const source = validateSourceSnapshot(code.source);
+      if (!source.ok) return source;
+      const plan = validateReviewPlan(code.plan, source.value);
+      if (!plan.ok) return plan;
+      const sourceId = sourceSnapshotIdentity(source.value);
+      const planId = reviewPlanIdentity(plan.value);
+      if (!sourceId.ok) return sourceId;
+      if (!planId.ok) return planId;
+      return prepare(input, ports.checker, ports.model, {
+        ...code,
+        source: source.value,
+        plan: plan.value,
+      });
+    }
     return prepare(input, ports.checker, ports.model);
   } catch (error) {
     return {

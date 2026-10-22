@@ -108,6 +108,34 @@ on the record's `schema`.
   dispatchers, so v1 artifacts keep their identity and a v2 method is not
   silently treated as the v1 record.
 
+## Code evaluation records
+
+`CodeTarget`, `SourceSnapshot/v1`, `ReviewPlan/v1`, `ReviewResult/v2`,
+`ReviewExecution/v2` and `CodeEvaluationReport/v1` support source-aware qualitative
+evaluation. Their validators and schema-specific identity helpers do not change
+existing verdict, measurement, calibration or gate semantics.
+
+- Source items bind raw-content identity, version, side and original line range.
+  `projectCodeSource` is the canonical numbered-line projection; normalization and
+  evidence identity remain separate from original bytes. Comparison manifests may
+  record reader-established additions/deletions; missing excerpts do not prove absence.
+- `ReviewPlan.evidenceBudget` bounds final evidence projection as well as
+  preparation and participates in plan identity. It does not limit the trusted
+  instructions or structural metadata.
+- v2 results retain `Verdict/v1` and add observations, multiple problems per
+  criterion, pending conditions and explicit opinion/reassessment references.
+  Locations must cite code actually shown, on the correct side and version.
+- A v2 execution records the source/plan, versioned parser and actual model facts.
+  Illegal detail makes the attempt partial even if every verdict is legal; partial
+  attempts never produce a complete measurement run. Rejected details remain in
+  diagnostics/raw result rather than being silently discarded.
+- Reports bind those records and distinguish execution status from incomplete
+  goals. A report identity is not calibration or delivery permission. No score,
+  credential or provider SDK object belongs to these contracts.
+- The `code-evaluation.schema.json` definitions describe source, plan, result and
+  report; `review-execution-v2.schema.json` binds their execution. Existing v1
+  review and gate consumers retain their schemas and defaults.
+
 ## Calibration and gate records
 
 Calibration datasets, reports, and user-facing gate decisions are new v1 records.
