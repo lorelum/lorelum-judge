@@ -1,17 +1,17 @@
 import { randomUUID } from "node:crypto";
 import {
-  type CodeEvaluationReport,
   type CodeSourceItem,
   type CodeSourceRole,
   type CodeTarget,
   codeEvaluationReportIdentity,
+  codeSourceLines,
   identityOf,
   type PreparationRecord,
   type ReviewPlan,
   reviewPlanIdentity,
+  type SourceIssue,
   type SourceSnapshot,
   snapshot,
-  sourceSnapshotIdentity,
   validateCodeEvaluationReport,
   validateCodeTarget,
 } from "@lorelum/judge-protocol";
@@ -20,6 +20,11 @@ import { validateMethod } from "../review/method.js";
 import { collectCodeSources } from "../sources/index.js";
 import type { SourceSession } from "../sources/types.js";
 import { isRecord } from "../type-guards.js";
+import {
+  type CodeEvaluationDraft,
+  type EvaluationStage,
+  finalizeCodeEvaluationReport,
+} from "./finalize.js";
 import { evaluationEvidence, makeEvaluationPlan } from "./plan.js";
 import { type ContextSelection, prepareEvaluation } from "./prepare.js";
 import { CODE_REPORT_RENDERER_VERSION, renderCodeEvaluation } from "./render.js";
@@ -100,9 +105,7 @@ function addReference(
 ): void {
   const content = identityOf("lorelum.judge.provided-reference/v1", text);
   if (!content.ok) throw new Error("invalid reference text");
-  const normalized = text.replace(/\r\n?/g, "\n");
-  const lines =
-    normalized === "" ? 0 : normalized.split("\n").length - (normalized.endsWith("\n") ? 1 : 0);
+  const lines = codeSourceLines(text).length;
   source.items.push({
     id,
     path: name,
@@ -245,19 +248,18 @@ export async function evaluateCode(
     comparisons: [],
     consistent: true,
   };
-  const report: CodeEvaluationReport = {
+  const report: CodeEvaluationDraft = {
     schema: "lorelum.judge.code-evaluation-report/v1",
     id: input.id ?? `evaluation-${randomUUID()}`,
-    status: "failed",
     request,
     source,
-    sourceIdentity: "",
     preparation,
-    issues: [],
-    limitations: [],
     rendererVersion: CODE_REPORT_RENDERER_VERSION,
   };
-  let phase = "sources";
+  const diagnostics: SourceIssue[] = [];
+  let phase: EvaluationStage = "sources";
+  let failureStage: EvaluationStage | undefined;
+  let freshness: SourceSnapshot | undefined;
   try {
     const selectors = [
       target,
@@ -344,7 +346,7 @@ export async function evaluateCode(
         selector.kind === "local" || selector.kind === "git" || selector.kind === "github",
     );
     if (external && ports.allowModelDisclosure !== true) {
-      report.issues.push({
+      diagnostics.push({
         code: "disclosure_not_authorized",
         message: "读取来源内容尚未获准发送给所配置模型；调用方须显式允许模型披露。",
         fatal: true,
@@ -385,7 +387,7 @@ export async function evaluateCode(
               (item) => item.id === requirement.source && item.role === "requirement",
             )?.text;
       if (origin === undefined || !origin.includes(requirement.text)) {
-        report.issues.push({
+        diagnostics.push({
           code: "unsupported_requirement",
           message: "准备结果的要求不能在其声明来源中找到原文。",
           source: requirement.source,
@@ -465,121 +467,37 @@ export async function evaluateCode(
     );
     if (!evaluated.ok) {
       for (const issue of evaluated.issues)
-        report.issues.push({ code: issue.code, message: issue.message });
+        diagnostics.push({ code: issue.code, message: issue.message });
       throw new Error("evaluation input failed validation");
     }
     report.execution = evaluated.value.execution;
     if (evaluated.value.result !== undefined) report.result = evaluated.value.result;
-    report.status =
-      evaluated.value.completeness === "complete"
-        ? "completed"
-        : evaluated.value.completeness === "cancelled"
-          ? "cancelled"
-          : evaluated.value.completeness === "partial"
-            ? "partial"
-            : "failed";
-    if (
-      report.execution.attempts.some((attempt) =>
-        attempt.evidenceBundle?.items.some((item) => item.render?.state !== "rendered"),
-      )
-    )
-      report.limitations.push(
-        "正式评价的证据投影存在截断或未展示材料；已读取内容不等于已完整覆盖目标。",
-      );
-    if (report.result !== undefined) {
-      for (const reference of requiredFollowUps) {
-        const matches = report.result.followUps.filter(
-          (observation) => observation.reference === reference,
-        );
-        if (matches.length !== 1)
-          report.issues.push({
-            code: "missing_follow_up",
-            message: "指定的意见或原问题没有唯一有效的核实结果。",
-            source: reference,
-          });
-      }
-      for (const followUp of report.result.followUps)
-        if (!requiredFollowUps.includes(followUp.reference) && requiredFollowUps.length > 0)
-          report.issues.push({
-            code: "unknown_follow_up",
-            message: "核实结果引用了未请求的原意见或问题。",
-            source: followUp.reference,
-          });
-      if (
-        report.result.pending.length > 0 ||
-        report.result.followUps.some((observation) => observation.outcome === "unresolved") ||
-        report.result.verdicts.some(
-          (verdict) => verdict.verdict === "unknown" || verdict.verdict === "insufficient",
-        )
-      )
-        report.limitations.push("部分检查存在未解决前提或资料不足，不能视为目标已全部完成。");
-    }
     for (const session of sessions) await session.verify();
     if (controller.signal.aborted) throw new Error("cancelled");
-    const observed = mergeSources(sessions, roles);
-    // Preserve exactly the source snapshot measured by the plan; later observations
-    // describe freshness, not a replacement input for an already finished execution.
-    if (!observed.consistent)
-      report.limitations.push(
-        "评价期间观察到来源更新；结论仅对应报告中固定的版本，不代表当前最新内容。",
-      );
-    for (const issue of observed.issues) {
-      if (
-        !source.issues.some(
-          (existing) =>
-            existing.code === issue.code &&
-            existing.source === issue.source &&
-            existing.message === issue.message,
-        )
-      )
-        report.issues.push(issue);
-    }
+    // Freshness observations do not replace the snapshot bound to the measured plan.
+    freshness = mergeSources(sessions, roles);
   } catch {
-    report.status = timedOut
-      ? "failed"
-      : controller.signal.aborted
-        ? "cancelled"
-        : report.execution !== undefined && report.result !== undefined
-          ? "partial"
-          : "failed";
-    if (!report.issues.some((issue) => issue.fatal))
-      report.issues.push({
-        code: timedOut ? "timeout" : controller.signal.aborted ? "cancelled" : `${phase}_failed`,
-        message: timedOut
-          ? "本次评价超过总时限，未完整完成。"
-          : controller.signal.aborted
-            ? "本次请求已取消。"
-            : `本次${phase === "sources" ? "来源取得" : phase === "preparation" ? "评价准备" : "评价执行"}未能完整完成；不能据此判断代码没有问题。`,
-        fatal: report.execution === undefined,
-      });
+    failureStage = phase;
     if (sessions.length > 0 && report.source.items.length === 0)
       report.source = mergeSources(sessions, roles);
   } finally {
     clearTimeout(timer);
     ports.signal?.removeEventListener("abort", abort);
   }
-  if (timedOut) {
-    report.status = "failed";
-    if (!report.issues.some((issue) => issue.code === "timeout"))
-      report.issues.push({ code: "timeout", message: "本次评价超过总时限。" });
-  }
-  report.issues.push(...report.source.issues);
-  if (!report.source.consistent)
-    report.limitations.push("读取期间观察到来源变化，本报告不代表一致或最新的源版本。");
-  if (report.source.omitted.length > 0) report.limitations.push("存在未读取或未覆盖的来源内容。");
-  if (report.source.items.some((item) => !item.complete))
-    report.limitations.push("部分材料仅包含提供的 patch 或选定行范围，不表示已检查完整文件。");
-  if (
-    report.status === "completed" &&
-    (report.issues.length > 0 || report.limitations.length > 0 || !report.source.consistent)
-  )
-    report.status = "partial";
-  const sourceId = sourceSnapshotIdentity(report.source);
-  if (!sourceId.ok) return { ok: false, issues: sourceId.issues };
-  report.sourceIdentity = sourceId.identity;
-  const checked = validateCodeEvaluationReport(report);
-  if (!checked.ok) return { ok: false, issues: checked.issues };
-  return { ok: true, value: checked.value, text: renderCodeEvaluation(checked.value) };
+  const stop = timedOut
+    ? { kind: "timeout" as const, stage: phase }
+    : controller.signal.aborted
+      ? { kind: "cancelled" as const, stage: phase }
+      : failureStage === undefined
+        ? undefined
+        : { kind: "failed" as const, stage: failureStage };
+  const finalized = finalizeCodeEvaluationReport(report, {
+    issues: diagnostics,
+    ...(stop === undefined ? {} : { stop }),
+    ...(freshness === undefined ? {} : { freshness }),
+  });
+  if (!finalized.ok) return finalized;
+  return { ok: true, value: finalized.value, text: renderCodeEvaluation(finalized.value) };
 }
 
 export { CODE_STANDARDS, CODE_STANDARDS_VERSION } from "./plan.js";

@@ -1,4 +1,6 @@
+import { escapeEvidenceText, normalizeEvidenceText } from "./evidence-text.js";
 import type { EvidenceBundle } from "./generated/evidence-bundle.js";
+import type { EvidenceItem } from "./generated/evidence-item.js";
 import type { InstrumentProfileV2 } from "./generated/instrument-profile-v2.js";
 import type { MeasurementDefinitionV2 } from "./generated/measurement-definition-v2.js";
 import type { Verdict } from "./generated/verdict.js";
@@ -158,17 +160,57 @@ export interface ReviewResultContext {
   definition: MeasurementDefinitionV2;
   source: SourceSnapshot;
   manifest: EvidenceBundle;
-  /** Original complete line numbers visible after final prompt projection. */
+  /** Explicit rendering mode, taken from the actual instrument method. */
+  projectionMode: CodeProjectionMode;
+  /** Optional caller restriction; can only remove otherwise visible lines. */
   shownLines?: ReadonlyMap<string, ReadonlySet<number>>;
   followUpReferences?: readonly string[];
   allowPartial?: boolean;
 }
 
+export type CodeProjectionMode = "plain" | "escaped";
+
+/** A terminal separator ends the last line; it does not create another source line. */
+export function codeSourceLines(text: string): string[] {
+  const normalized = text.replace(/\r\n?/g, "\n");
+  if (normalized === "") return [];
+  const lines = normalized.split("\n");
+  if (normalized.endsWith("\n")) lines.pop();
+  return lines;
+}
+
 /** Canonical original-line projection shared by execution and citation validation. */
 export function projectCodeSource(item: CodeSourceItem): string {
-  const text = item.text.replace(/\r\n?/g, "\n");
-  if (text === "") return "";
-  const lines = text.split("\n");
-  if (text.endsWith("\n")) lines.pop();
-  return lines.map((line, index) => `${item.startLine + index}:${line}`).join("\n");
+  return codeSourceLines(item.text)
+    .map((line, index) => `${item.startLine + index}:${line}`)
+    .join("\n");
+}
+
+/** The rendered prefix and original line numbers whose complete contents are visible. */
+export function projectVisibleCodeSource(
+  item: CodeSourceItem,
+  projection: EvidenceItem["render"],
+  mode: CodeProjectionMode,
+): { text: string; completeLines: ReadonlySet<number>; originalLength: number } {
+  const numbered = normalizeEvidenceText(projectCodeSource(item));
+  const characters = Array.from(mode === "escaped" ? escapeEvidenceText(numbered) : numbered);
+  const text =
+    projection?.state === "withheld"
+      ? ""
+      : characters.slice(0, projection?.renderedLength ?? characters.length).join("");
+  const completeLines = new Set<number>();
+  const visibleLength = projection?.state === "withheld" ? 0 : Array.from(text).length;
+  let offset = 0;
+  const rendered = characters.join("");
+  if (rendered !== "")
+    for (const [index, line] of rendered.split("\n").entries()) {
+      offset += Array.from(line).length;
+      if (offset <= visibleLength) completeLines.add(item.startLine + index);
+      offset += 1;
+    }
+  return {
+    text,
+    completeLines,
+    originalLength: characters.length,
+  };
 }

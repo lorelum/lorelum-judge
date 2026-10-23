@@ -1,13 +1,14 @@
 import { stripVTControlCharacters } from "node:util";
-import type {
-  CodeEvaluationReport,
-  CodeLocation,
-  CodeSourceItem,
-  SourceIssue,
+import {
+  type CodeEvaluationReport,
+  type CodeLocation,
+  type CodeSourceItem,
+  projectVisibleCodeSource,
+  type SourceIssue,
 } from "@lorelum/judge-protocol";
 import { CODE_STANDARDS } from "./plan.js";
 
-export const CODE_REPORT_RENDERER_VERSION = "lorelum.judge.code-report-renderer/v2";
+export const CODE_REPORT_RENDERER_VERSION = "lorelum.judge.code-report-renderer/v3";
 
 const severity = { high: "重要影响", medium: "局部影响", low: "有限影响" } as const;
 const attribution = {
@@ -194,19 +195,38 @@ export function renderCodeEvaluation(report: CodeEvaluationReport): string {
   }
   lines.push("", "## 检查范围与限制", "");
   const target = report.source.items.filter((item) => item.role === "target");
+  const execution = report.execution;
+  const manifest = execution?.attempts.find(
+    (attempt) => attempt.evidenceBundle !== undefined,
+  )?.evidenceBundle;
+  const projectionById =
+    manifest === undefined ? undefined : new Map(manifest.items.map((item) => [item.id, item]));
+  const projectionMode = execution?.instrument.method.kind === "llm" ? "escaped" : "plain";
   lines.push(
     `评价对象：${
       target
         .map((item) => {
-          const shown = report.execution?.shownLines?.[item.id];
-          const projection =
-            shown === undefined
-              ? "未生成正式投影"
-              : item.endLine === 0
+          const evidence = projectionById?.get(item.id);
+          let projection = "无正式投影记录";
+          if (evidence !== undefined) {
+            const shown = projectVisibleCodeSource(
+              item,
+              evidence.render,
+              projectionMode,
+            ).completeLines;
+            let first: number | undefined;
+            let last = 0;
+            for (const line of shown) {
+              first ??= line;
+              last = line;
+            }
+            projection =
+              item.endLine === 0
                 ? "空内容"
-                : shown.length === 0
+                : first === undefined
                   ? "无完整可见行"
-                  : `第 ${shown[0]}–${shown.at(-1)} 完整行`;
+                  : `第 ${first}–${last} 完整行`;
+          }
           return `${sourceName(item)}（${item.side === "old" ? "修改前，" : item.side === "new" ? "修改后，" : ""}已取得${item.endLine === 0 ? "空内容" : `第 ${item.startLine}–${item.endLine} 行`}；正式投影：${projection}）`;
         })
         .join("；") || "未取得可评价对象"

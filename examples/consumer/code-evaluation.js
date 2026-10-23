@@ -128,6 +128,18 @@ function respondToEvaluation(body) {
     result.summary = [];
     result.problems = [];
   }
+  if (context.request.includes("保留未知判断")) {
+    result.verdicts = result.verdicts.map((verdict) => ({
+      ...verdict,
+      verdict: "unknown",
+      evidenceIds: [],
+      rationale: "仍需取得实际调用方的前提。",
+    }));
+    result.summary = [];
+    result.problems = [];
+    result.pending = [];
+    result.followUps = [];
+  }
   return result;
 }
 
@@ -190,6 +202,20 @@ export async function runCodeEvaluation() {
       verdictOnly.value.result.verdicts.some((verdict) => verdict.verdict === "weak") &&
         verdictOnly.value.result.verdicts.some((verdict) => verdict.verdict === "unmet"),
       "negative judgments were lost",
+    );
+    const uncertain = await evaluate("unknown-report-completion", {
+      target: { kind: "snippet", text: fixed },
+      request: "保留未知判断，不把未知包装成已完成。",
+    });
+    assert(
+      uncertain.value.status === "partial",
+      "unknown judgment was promoted to complete coverage",
+    );
+    const promoted = structuredClone(uncertain.value);
+    promoted.status = "completed";
+    assert(
+      !codeEvaluationReportIdentity(promoted).ok,
+      "public record validation accepted a forged completed report",
     );
     await evaluate("files", {
       target: { kind: "files", files: [{ path: "list.js", text: broken }] },
@@ -365,6 +391,7 @@ export async function runCodeEvaluation() {
     }
     console.log(initial.text);
     console.log(verdictOnly.text);
+    console.log(uncertain.text);
     return {
       cases: cases.map(({ label, report }) => ({
         label,

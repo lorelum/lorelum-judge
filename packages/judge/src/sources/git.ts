@@ -190,10 +190,6 @@ export async function collectGitSource(
     request?: SourceReadRequest,
   ): Promise<void> => {
     if (collector.cancelled()) return;
-    if (collector.snapshot.items.length >= collector.limits.maxFiles) {
-      collector.omit(path, "file_limit", "Source item limit reached");
-      return;
-    }
     if (entry.mode !== "100644" && entry.mode !== "100755") {
       collector.omit(
         path,
@@ -213,15 +209,9 @@ export async function collectGitSource(
       }
       if (!bytes) {
         const size = Number((await command(["cat-file", "-s", entry.oid])).toString("utf8").trim());
-        if (!Number.isSafeInteger(size) || size > collector.limits.maxFileBytes) {
-          collector.omit(path, "file_limit", "Git blob exceeds raw byte limit");
-          return;
-        }
         if (!collector.reserveBytes(size, path)) return;
         bytes = await command(["cat-file", "blob", entry.oid]);
       }
-      if (request?.kind === "search" && !bytes.toString("utf8").includes(request.query ?? ""))
-        return;
       collector.add({
         path,
         bytes,

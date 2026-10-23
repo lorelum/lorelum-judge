@@ -56,3 +56,19 @@
 - [x] 完成本轮最终验证记录，已追加修正提交并更新同一 PR #62；保留草稿，不合并或发布。
 
 本轮修正提交：`d4dc4bf8aa9df7c28685004c8746e19fc2eba9bf`。验证为 727 pass、0 fail、1770 assertions；公开消费为 24 场景、49 次本地 HTTP 请求。用户审查的固定基线及逐项处理已写入 PR；旧提交的独立复核不作为本修正提交已获独立审查的声明。
+
+## 结构性审查修正：收敛三处权威
+
+- [x] GitHub 原始内容与公开补读统一进入 SourceCollector / validRequest，保留 transport 专属能力。
+- [x] v1/v2 各使用唯一 result assessor，删除 attempt 的双重 verdict assessment 与重复诊断拼接。
+- [x] 只准备一次 typed result context；strict 与 salvage 共用逐项检查，删除 candidate 复制和整体验证循环。
+- [x] 统一 canonical source 行拆分与完整可见行投影，执行准备、引用验证和展示共同使用。
+- [x] 单一确定性 completion policy / report finalizer；停止、覆盖、freshness 与展示文案分离，公开 validator 使用相同完成约束。
+- [x] 完成必要行为回归、实际 JS/Node 消费 smoke、文档和统一验证，追加提交并更新同一 PR，不合并或发布。
+
+结构修正集成验证：`bun run validate` 通过，744 tests、1998 assertions、30 test files；
+6 个 package build 与 Node ESM dist load；25 个实际 JS/Node 消费场景、51 次本地 HTTP
+模型请求。未知判断场景实际生成 `partial` 中文报告，并验证公开 identity API 拒绝将其
+篡改为 `completed`。无真实付费模型调用；本轮未重做线上 GitHub 或私有鉴权验证。
+集成阶段将相互引用的执行与 measurement schemas 显式加入共享 Ajv 注册表，
+避免入口导入顺序影响 schema 引用解析；未修改这些 schemas 或默认 v1 identity。

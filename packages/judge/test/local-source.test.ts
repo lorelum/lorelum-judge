@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { collectDirectSource } from "../src/sources/direct.js";
 import { collectGitSource } from "../src/sources/git.js";
 import { collectLocalSource } from "../src/sources/local.js";
 
@@ -144,3 +145,112 @@ test("a verification budget refusal is uncertainty rather than an observed chang
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("local and supplied sources agree on mixed separators, slices and raw identity", async () => {
+  const root = await mkdtemp(join(tmpdir(), "judge-source-lines-"));
+  const path = join(root, "a.ts");
+  try {
+    for (const text of ["first\rsecond\r\nthird\n", "first\nsecond\nthird", "", "\r"]) {
+      await writeFile(path, text);
+      const sessions = [
+        await collectLocalSource({ kind: "local", path }, { roots: [root] }),
+        await collectDirectSource({ kind: "files", files: [{ path: "a.ts", text }] }, {}),
+      ];
+      const endLine = text === "" ? 0 : text === "\r" ? 1 : 3;
+      for (const session of sessions) {
+        expect(session.snapshot.issues).toEqual([]);
+        const original = session.snapshot.items[0];
+        expect(original).toMatchObject({ text, startLine: 1, endLine, complete: true });
+        expect(original?.contentIdentity).toBe(
+          `sha256:${createHash("sha256").update(text).digest("hex")}`,
+        );
+        await session.read({ kind: "list", path: "a.ts", startLine: 0 });
+        expect(session.snapshot.issues.some((issue) => issue.code === "invalid_request")).toBe(
+          true,
+        );
+        if (endLine !== 3) continue;
+        await session.read({ kind: "read", path: "a.ts", startLine: 1, endLine: 3 });
+        expect(session.snapshot.items).toHaveLength(1);
+        expect(session.snapshot.items[0]?.id).toBe(original?.id);
+        await session.read({
+          kind: "search",
+          path: "a.ts",
+          query: "second",
+          startLine: 2,
+          endLine: 2,
+        });
+        expect(session.snapshot.items.at(-1)).toMatchObject({
+          text: "second",
+          startLine: 2,
+          endLine: 2,
+          complete: false,
+          contentIdentity: original?.contentIdentity,
+        });
+        await session.read({ kind: "read", path: "a.ts", startLine: 4 });
+        expect(session.snapshot.issues.some((issue) => issue.code === "range_unavailable")).toBe(
+          true,
+        );
+      }
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("pinned Git context uses the same range, identity and deduplication rules", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "judge-source-git-range-"));
+  const git = (...args: string[]) =>
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "core.autocrlf=false",
+        "-c",
+        "core.hooksPath=",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "user.name=Source Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        ...args,
+      ],
+      { cwd: directory, encoding: "utf8", windowsHide: true },
+    );
+  try {
+    git("init", "--quiet", "--template=");
+    const text = "first\rsecond\r\nthird\n";
+    await writeFile(join(directory, "a.ts"), text);
+    git("add", "a.ts");
+    git("commit", "--quiet", "-m", "base");
+    const session = await collectLocalSource({ kind: "local", path: directory, ref: "HEAD" }, {});
+    const original = session.snapshot.items[0];
+    expect(session.snapshot.issues).toEqual([]);
+    expect(original).toMatchObject({ text, startLine: 1, endLine: 3, complete: true });
+    await session.read({ kind: "read", path: "a.ts", startLine: 1, endLine: 3 });
+    expect(session.snapshot.items).toHaveLength(1);
+    await session.read({
+      kind: "search",
+      path: "a.ts",
+      query: "second",
+      startLine: 2,
+      endLine: 2,
+    });
+    expect(session.snapshot.items.at(-1)).toMatchObject({
+      text: "second",
+      startLine: 2,
+      endLine: 2,
+      complete: false,
+      version: original?.version,
+      contentIdentity: original?.contentIdentity,
+    });
+    await session.read({ kind: "list", path: "a.ts", startLine: 0 });
+    expect(session.snapshot.issues.some((issue) => issue.code === "invalid_request")).toBe(true);
+    await session.verify();
+    expect(session.snapshot.consistent).toBe(true);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 20_000);

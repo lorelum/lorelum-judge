@@ -78,13 +78,6 @@ export async function executeCodeReview(
       planIdentity: planId.identity,
       plannedCount: prepared.value.repetitions,
       attempts: [first, ...attempts.slice(1)],
-      ...(code.shownLines === undefined
-        ? {}
-        : {
-            shownLines: Object.fromEntries(
-              [...code.shownLines].map(([id, lines]) => [id, [...lines]]),
-            ),
-          }),
       ...(code.followUpReferences === undefined
         ? {}
         : { followUpReferences: [...code.followUpReferences] }),

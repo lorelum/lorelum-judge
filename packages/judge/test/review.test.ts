@@ -1,4 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import {
+  projectCodeSource,
+  type ReviewPlan,
+  type SourceSnapshot,
+  sourceSnapshotIdentity,
+  validateReviewExecutionV2,
+} from "@lorelum/judge-protocol";
 import type { ModelPort, ModelRequest, ModelResponse } from "@lorelum/judge-runtime";
 import { ModelPortError } from "@lorelum/judge-runtime";
 import type {
@@ -8,7 +15,7 @@ import type {
   ProgramCheckerOutput,
   ReviewMethodInput,
 } from "../src/index.js";
-import { executeReview, REVIEW_SYSTEM_PROMPT } from "../src/index.js";
+import { executeCodeReview, executeReview, REVIEW_SYSTEM_PROMPT } from "../src/index.js";
 
 const hex = (character: string) => `sha256:${character.repeat(64)}`;
 
@@ -600,4 +607,101 @@ describe("executeReview validation", () => {
     );
     expect(result.ok).toBe(false);
   });
+});
+
+test("v2 lifecycle keeps one missing diagnostic, legal partials, and the invalid raw sibling", async () => {
+  const source: SourceSnapshot = {
+    schema: "lorelum.judge.source-snapshot/v1",
+    items: ["e1", "e2"].map((id): SourceSnapshot["items"][number] => ({
+      id,
+      role: "target",
+      path: `${id}.ts`,
+      side: "current",
+      version: "provided",
+      contentIdentity: hex("a"),
+      text: "return 1;\n",
+      startLine: 1,
+      endLine: 1,
+      complete: true,
+      provenance: "provided",
+    })),
+    issues: [],
+    discovered: [],
+    omitted: [],
+    comparisons: [],
+    consistent: true,
+  };
+  const sourceId = sourceSnapshotIdentity(source);
+  if (!sourceId.ok) throw new Error(JSON.stringify(sourceId.issues));
+  const baseDefinition = definition();
+  const [firstCriterion, ...otherCriteria] = baseDefinition.criteria;
+  const [firstMetadata, ...otherMetadata] = baseDefinition.metadata;
+  if (firstCriterion === undefined || firstMetadata === undefined)
+    throw new Error("fixture has no criterion");
+  const plan: ReviewPlan = {
+    schema: "lorelum.judge.review-plan/v1",
+    request: "inspect the code",
+    task: "inspect",
+    standardsVersion: "test/v1",
+    definition: {
+      ...baseDefinition,
+      schema: "lorelum.judge.measurement-definition/v2",
+      criteria: [
+        { ...firstCriterion, schema: "lorelum.judge.criterion/v1" },
+        ...otherCriteria.map((criterion): ReviewPlan["definition"]["criteria"][number] => ({
+          ...criterion,
+          schema: "lorelum.judge.criterion/v1",
+        })),
+      ],
+      metadata: [firstMetadata, ...otherMetadata],
+    },
+    sourceIdentity: sourceId.identity,
+    requirements: [],
+    excluded: [],
+    focus: [],
+  };
+  const raw = {
+    schema: "lorelum.judge.review-result/v2",
+    verdicts: [met("c1", "e1")],
+    summary: [],
+    problems: [],
+    followUps: [],
+    pending: [
+      { id: "invalid", criterionId: "c1", question: 42, reason: "uncertain", evidenceIds: ["e1"] },
+      {
+        id: "valid",
+        criterionId: "c1",
+        question: "what happens?",
+        reason: "uncertain",
+        evidenceIds: ["e1"],
+      },
+    ],
+  };
+  const result = await executeCodeReview(
+    {
+      ...input(),
+      plan,
+      source,
+      evidence: source.items.map((item) => ({
+        id: item.id,
+        status: "present",
+        text: projectCodeSource(item),
+      })),
+    },
+    { checker: () => raw },
+  );
+  if (!result.ok) throw new Error(JSON.stringify(result.issues));
+  const attempt = result.value.execution.attempts[0];
+  expect(attempt.status).toBe("partial");
+  expect(attempt.issues?.filter((entry) => entry.code === "missing_verdict")).toHaveLength(1);
+  expect(attempt.rawResult).toEqual(raw);
+  expect(attempt.result?.pending.map((entry) => entry.id)).toEqual(["valid"]);
+  expect(attempt.result?.verdicts).toEqual(attempt.verdicts);
+  expect(result.value.execution.shownLines).toBeUndefined();
+  expect(validateReviewExecutionV2(result.value.execution, plan, source).ok).toBe(true);
+  const altered = structuredClone(result.value.execution);
+  const verdict = altered.attempts[0].result?.verdicts[0];
+  if (!verdict) throw new Error("expected a legal partial verdict");
+  verdict.rationale = "tampered";
+  expect(validateReviewExecutionV2(altered, plan, source).ok).toBe(false);
 });

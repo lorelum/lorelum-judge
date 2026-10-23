@@ -1,6 +1,7 @@
 import {
   assessCodeReviewResult,
   assessVerdicts,
+  type CodeReviewAssessment,
   type ReviewAttempt,
   type ReviewResultV2,
 } from "@lorelum/judge-protocol";
@@ -26,17 +27,6 @@ import {
   partialAttempt,
 } from "./record.js";
 import type { LlmFacts, PreparedReview, ReviewFailure, ReviewPorts } from "./types.js";
-
-function assess(
-  definition: PreparedReview["definition"],
-  rawVerdicts: readonly unknown[],
-  bundle: PreparedReview["manifest"],
-): Assessed {
-  return assessVerdicts(definition.criteria, rawVerdicts, {
-    bundle,
-    requireAll: true,
-  });
-}
 
 function checkerFailure(error: unknown): ReviewFailure {
   let rawMessage = "";
@@ -195,14 +185,11 @@ export async function executeAttempt(
       } else raw = parsed.verdicts;
     }
 
-    let assessed = assess(definition, raw, manifest);
-    let result: ReviewResultV2 | undefined;
-    if (prepared.codeReview !== undefined) {
-      const checked = assessCodeReviewResult(structured, prepared.codeReview);
-      result = checked.result;
-      if (checked.issues.length > 0)
-        assessed = { ...assessed, issues: [...assessed.issues, ...checked.issues] };
-    }
+    const assessed: CodeReviewAssessment =
+      prepared.codeReview === undefined
+        ? assessVerdicts(definition.criteria, raw, { bundle: manifest, requireAll: true })
+        : assessCodeReviewResult(structured, prepared.codeReview);
+    const result = assessed.result;
     context = finished();
     const record =
       request === undefined

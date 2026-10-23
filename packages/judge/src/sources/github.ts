@@ -1,20 +1,14 @@
 import { Buffer } from "node:buffer";
-import { createHash, randomUUID } from "node:crypto";
-import type { CodeSide, CodeSourceRole, CodeTarget, SourceSnapshot } from "@lorelum/judge-protocol";
-import type { SourceLimits, SourceOptions, SourceReadRequest, SourceSession } from "./types.js";
+import { createHash } from "node:crypto";
+import type { CodeSide, CodeSourceRole, CodeTarget } from "@lorelum/judge-protocol";
+import { SourceCollector, validRequest } from "./shared.js";
+import type { SourceOptions, SourceReadRequest, SourceSession } from "./types.js";
 
 type Json = Record<string, unknown>;
 type Entry = { path: string; sha: string; type: string; mode: string; size?: number };
 type Tree = { entries: Map<string, Entry>; complete: boolean };
 type View = { repo: string; sha: string; side: CodeSide; tree: Tree };
 type Route = { repo: string; kind: string; tail: string; fragment: string };
-const defaults: SourceLimits = {
-  maxFiles: 64,
-  maxBytes: 4 * 1024 * 1024,
-  maxFileBytes: 512 * 1024,
-  maxEntries: 20000,
-  maxRequests: 128,
-};
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 const object = (value: unknown): Json => {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -69,54 +63,22 @@ export async function collectGithubSource(
   target: Extract<CodeTarget, { kind: "github" }>,
   options: SourceOptions,
 ): Promise<SourceSession> {
-  const snapshot: SourceSnapshot = {
-    schema: "lorelum.judge.source-snapshot/v1",
-    items: [],
-    issues: [],
-    discovered: [],
-    omitted: [],
-    comparisons: [],
-    consistent: true,
-  };
-  const limits = { ...defaults, ...options.limits };
+  const collector = new SourceCollector(options);
+  const { snapshot, limits } = collector;
   const views: View[] = [];
   const trees = new Map<string, Promise<Tree>>();
-  const blobs = new Map<string, { text: string; identity: string }>();
-  const included = new Set<string>();
-  const seenDiscovered = new Set<string>();
-  const seenOmitted = new Set<string>();
-  const namespace = randomUUID();
-  let requests = 0;
-  let entries = 0;
-  let bytes = 0;
-  let acquiredBytes = 0;
-  let serial = 0;
+  const blobs = new Map<string, Uint8Array>();
   let root: Route | undefined;
   let verifyState: (() => Promise<boolean>) | undefined;
   const requirementVerifiers: { source: string; verify: () => Promise<boolean> }[] = [];
   const issue = (code: string, source?: string, fatal = false, detail?: string) => {
-    snapshot.issues.push({
-      code,
-      message: `GitHub source: ${code}${detail ? ` (${detail})` : ""}`,
-      ...(source ? { source } : {}),
-      ...(fatal ? { fatal: true } : {}),
-    });
+    collector.issue(code, `GitHub source: ${code}${detail ? ` (${detail})` : ""}`, source, fatal);
   };
   const omitted = (path: string, code: string) => {
-    if (!seenOmitted.has(path)) {
-      seenOmitted.add(path);
-      snapshot.omitted.push(path);
-    }
-    issue(code, path);
-  };
-  const discover = (path: string) => {
-    if (!seenDiscovered.has(path)) {
-      seenDiscovered.add(path);
-      snapshot.discovered.push(path);
-    }
+    collector.omit(path, code, `GitHub source: ${code}`);
   };
   const active = () => {
-    if (options.signal?.aborted) throw new Error("cancelled");
+    if (collector.cancelled()) throw new Error("cancelled");
   };
   const authorize = (repo: string) => {
     if (
@@ -132,7 +94,7 @@ export async function collectGithubSource(
   const api = async (repo: string, path: string): Promise<unknown> => {
     active();
     authorize(repo);
-    if (++requests > limits.maxRequests) throw new Error("request_limit");
+    if (!collector.request()) throw new Error("request_limit");
     const headers: Record<string, string> = {
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
@@ -196,6 +158,7 @@ export async function collectGithubSource(
     if (cached) return cached;
     const load = async (): Promise<Tree> => {
       const result: Tree = { entries: new Map(), complete: true };
+      let enumerating = true;
       const add = (raw: unknown, prefix = "") => {
         const row = object(raw);
         const path = prefix + string(row.path);
@@ -206,8 +169,9 @@ export async function collectGithubSource(
           path.includes("\\")
         )
           throw new Error("invalid_tree_path");
-        if (++entries > limits.maxEntries) {
+        if (!collector.discover(path)) {
           result.complete = false;
+          enumerating = false;
           return;
         }
         const entry: Entry = {
@@ -223,30 +187,21 @@ export async function collectGithubSource(
       if (!Array.isArray(recursive.tree)) throw new Error("invalid_tree");
       if (recursive.truncated !== true) {
         for (const row of recursive.tree) {
-          if (entries >= limits.maxEntries) {
-            result.complete = false;
-            break;
-          }
+          if (!enumerating) break;
           add(row);
         }
       } else {
         // Recursive trees are capped by GitHub. Walk each directory instead; never treat the prefix as complete.
         const queue = [{ id: version, prefix: "" }];
         for (let cursor = 0; cursor < queue.length; cursor++) {
-          if (entries >= limits.maxEntries) {
-            result.complete = false;
-            break;
-          }
+          if (!enumerating) break;
           const next = queue[cursor];
           if (!next) break;
           const response = object(await api(repo, `git/trees/${next.id}`));
           if (!Array.isArray(response.tree)) throw new Error("invalid_tree");
           if (response.truncated === true) result.complete = false;
           for (const raw of response.tree) {
-            if (entries >= limits.maxEntries) {
-              result.complete = false;
-              break;
-            }
+            if (!enumerating) break;
             add(raw, next.prefix);
             const row = object(raw);
             if (row.type === "tree")
@@ -266,59 +221,15 @@ export async function collectGithubSource(
     views.push(value);
     return value;
   };
-  const addText = (
-    path: string,
-    text: string,
-    role: CodeSourceRole,
-    side: CodeSide,
-    version: string,
-    identity: string,
-    start = 1,
-    end?: number,
-    whole = true,
-  ) => {
-    const key = `${path}:${side}:${version}:${start}:${end ?? "all"}`;
-    if (included.has(key)) return;
-    const size = Buffer.byteLength(text);
-    if (
-      snapshot.items.length >= limits.maxFiles ||
-      size > limits.maxFileBytes ||
-      bytes + size > limits.maxBytes
-    ) {
-      omitted(path, "content_limit");
-      return;
-    }
-    active();
-    bytes += size;
-    included.add(key);
-    let lineCount = text ? 1 : 0;
-    for (let index = 0; index < text.length - 1; index++)
-      if (text.charCodeAt(index) === 10) lineCount++;
-    snapshot.items.push({
-      id: `github.${namespace}.${++serial}`,
-      role,
-      path,
-      side,
-      version,
-      contentIdentity: identity,
-      text,
-      startLine: start,
-      endLine: end ?? lineCount,
-      complete: whole,
-      provenance: "github",
-    });
-  };
   const readFile = async (
     selected: View,
     path: string,
     role: CodeSourceRole,
-    start?: number,
-    end?: number,
-    query?: string,
+    request?: SourceReadRequest,
   ) => {
     const entry = selected.tree.entries.get(path);
     if (!entry || entry.type === "tree") throw new Error("file_not_found");
-    discover(path);
+    if (!collector.discover(path)) return;
     if (entry.type !== "blob" || entry.mode === "160000") {
       omitted(path, "submodule_unavailable");
       return;
@@ -327,21 +238,10 @@ export async function collectGithubSource(
       omitted(path, "symlink_not_followed");
       return;
     }
-    if (entry.size !== undefined && entry.size > limits.maxFileBytes) {
-      omitted(path, "file_size_limit");
-      return;
-    }
-    if (snapshot.items.length >= limits.maxFiles || bytes >= limits.maxBytes) {
-      omitted(path, "content_limit");
-      return;
-    }
     const cacheKey = `${selected.repo}:${entry.sha}`;
-    let cached = blobs.get(cacheKey);
-    if (cached === undefined) {
-      if (entry.size !== undefined && acquiredBytes + entry.size > limits.maxBytes) {
-        omitted(path, "content_limit");
-        return;
-      }
+    let data = blobs.get(cacheKey);
+    if (data === undefined) {
+      if (entry.size !== undefined && !collector.canAcquireBytes(entry.size, path)) return;
       const blob = object(await api(selected.repo, `git/blobs/${entry.sha}`));
       if (
         sha(blob.sha) !== entry.sha ||
@@ -349,69 +249,28 @@ export async function collectGithubSource(
         typeof blob.size !== "number"
       )
         throw new Error("invalid_blob");
-      if (blob.size > limits.maxFileBytes) {
-        omitted(path, "file_size_limit");
-        return;
-      }
-      if (acquiredBytes + blob.size > limits.maxBytes) {
-        omitted(path, "content_limit");
-        return;
-      }
-      const data = Buffer.from(string(blob.content).replace(/\s/g, ""), "base64");
-      if (data.byteLength !== blob.size) throw new Error("invalid_blob_size");
-      acquiredBytes += data.byteLength;
+      if (!collector.canAcquireBytes(blob.size, path)) return;
+      const bytes = Buffer.from(string(blob.content).replace(/\s/g, ""), "base64");
+      if (!collector.reserveBytes(bytes.byteLength, path)) return;
+      if (bytes.byteLength !== blob.size) throw new Error("invalid_blob_size");
       const hashAlgorithm = entry.sha.length === 64 ? "sha256" : "sha1";
       if (
-        createHash(hashAlgorithm).update(`blob ${data.length}\0`).update(data).digest("hex") !==
+        createHash(hashAlgorithm).update(`blob ${bytes.length}\0`).update(bytes).digest("hex") !==
         entry.sha
       )
         throw new Error("blob_identity_mismatch");
-      let text: string;
-      try {
-        text = new TextDecoder("utf-8", { fatal: true }).decode(data);
-      } catch {
-        omitted(path, "binary_unavailable");
-        return;
-      }
-      if (text.includes("\0")) {
-        omitted(path, "binary_unavailable");
-        return;
-      }
-      if (
-        text.startsWith("version https://git-lfs.github.com/spec/v1\n") ||
-        text.startsWith("version https://git-lfs.github.com/spec/v1\r\n")
-      ) {
-        omitted(path, "lfs_unavailable");
-        return;
-      }
-      cached = { text, identity: `sha256:${createHash("sha256").update(data).digest("hex")}` };
-      blobs.set(cacheKey, cached);
+      data = bytes;
+      blobs.set(cacheKey, data);
     }
-    const { text } = cached;
-    if (query !== undefined && !text.includes(query)) return;
-    const lines = text === "" ? [] : text.split("\n");
-    if (text.endsWith("\n")) lines.pop();
-    const from = start ?? 1;
-    const to = Math.min(end ?? lines.length, lines.length);
-    if (
-      !Number.isInteger(from) ||
-      from < 1 ||
-      (end !== undefined && (!Number.isInteger(end) || end < from)) ||
-      (text !== "" && from > lines.length)
-    )
-      throw new Error("invalid_line_range");
-    const whole = from === 1 && to === lines.length;
-    addText(
+    collector.add({
       path,
-      whole ? text : lines.slice(from - 1, to).join("\n"),
+      bytes: data,
       role,
-      selected.side,
-      selected.sha,
-      cached.identity,
-      from,
-      text ? to : 0,
-      whole,
-    );
+      side: selected.side,
+      version: selected.sha,
+      provenance: "github",
+      ...(request ? { request } : {}),
+    });
   };
   const collectTree = async (selected: View, prefix = "", role: CodeSourceRole = "target") => {
     const rows = [...selected.tree.entries.values()]
@@ -423,7 +282,7 @@ export async function collectGithubSource(
     if (prefix && !rows.length && !selected.tree.entries.has(prefix))
       throw new Error("path_not_found");
     for (const entry of rows) {
-      discover(entry.path);
+      if (!collector.discover(entry.path)) break;
       try {
         await readFile(selected, entry.path, role);
       } catch (error) {
@@ -431,7 +290,7 @@ export async function collectGithubSource(
       }
     }
   };
-  const pages = async (repo: string, endpoint: string, accept: (row: Json) => void) => {
+  const pages = async (repo: string, endpoint: string, accept: (row: Json) => boolean) => {
     for (let page = 1; ; page++) {
       const rows = await api(
         repo,
@@ -439,11 +298,7 @@ export async function collectGithubSource(
       );
       if (!Array.isArray(rows)) throw new Error("invalid_response");
       for (const raw of rows) {
-        if (++entries > limits.maxEntries) {
-          omitted(`${repo}/${endpoint}`, "entry_limit");
-          return;
-        }
-        accept(object(raw));
+        if (!accept(object(raw))) return;
       }
       if (rows.length < 100) return;
     }
@@ -457,15 +312,18 @@ export async function collectGithubSource(
         ? `Path: ${row.path}\nCommit: ${typeof row.commit_id === "string" ? row.commit_id : "unknown"}\nLine: ${typeof row.line === "number" ? row.line : "outdated"}\nSide: ${typeof row.side === "string" ? row.side : "unknown"}\n\n`
         : "";
     const text = title + location + body;
-    discover(path);
-    addText(
-      path,
-      text,
-      role,
-      "current",
-      `github-content:${digest(JSON.stringify(row))}`,
-      `sha256:${digest(text)}`,
-    );
+    if (!collector.discover(path)) return false;
+    const bytes = Buffer.from(text);
+    if (collector.reserveBytes(bytes.byteLength, path))
+      collector.add({
+        path,
+        bytes,
+        role,
+        side: "current",
+        version: `github-content:${digest(JSON.stringify(row))}`,
+        provenance: "github",
+      });
+    return true;
   };
   const issueSource = async (repo: string, number: string, fragment = "") => {
     const row = object(await api(repo, `issues/${number}`));
@@ -531,7 +389,7 @@ export async function collectGithubSource(
       const after = current.tree.entries.get(path);
       if (before?.type === "tree" && after?.type === "tree") continue;
       if (before?.sha === after?.sha && before?.mode === after?.mode) continue;
-      discover(path);
+      if (!collector.discover(path)) break;
       for (const selected of [old, current]) {
         const entry = selected.tree.entries.get(path);
         if (!entry || entry.type === "tree") continue;
@@ -582,6 +440,7 @@ export async function collectGithubSource(
     await collectTree(match.selected, match.path);
   };
   const read = async (request: SourceReadRequest): Promise<void> => {
+    if (!validRequest(collector, request)) return;
     try {
       active();
       if (!root) throw new Error("source_unavailable");
@@ -596,15 +455,15 @@ export async function collectGithubSource(
       const side = request.side ?? (views.some((v) => v.side === "new") ? "new" : "current");
       const selected = views.find((v) => v.side === side);
       if (!selected) throw new Error("side_unavailable");
-      if (request.kind === "read")
-        await readFile(selected, path, "context", request.startLine, request.endLine);
+      if (request.kind === "read") await readFile(selected, path, "context", request);
       else if (request.kind === "list") {
-        for (const entry of selected.tree.entries.values())
-          if (!path || entry.path === path || entry.path.startsWith(`${path}/`))
-            discover(entry.path);
+        for (const entry of selected.tree.entries.values()) {
+          if (!path || entry.path === path || entry.path.startsWith(`${path}/`)) {
+            if (!collector.discover(entry.path)) break;
+          }
+        }
         if (!selected.tree.complete) issue("list_incomplete", path);
       } else if (request.kind === "search") {
-        if (!request.query) throw new Error("missing_search_query");
         // Search is literal and local to the pinned tree; no code-search index can silently use another revision.
         for (const entry of selected.tree.entries.values()) {
           if (
@@ -612,7 +471,7 @@ export async function collectGithubSource(
             (path && entry.path !== path && !entry.path.startsWith(`${path}/`))
           )
             continue;
-          await readFile(selected, entry.path, "context", undefined, undefined, request.query);
+          await readFile(selected, entry.path, "context", request);
         }
         if (!selected.tree.complete) issue("search_incomplete", path);
       } else throw new Error("unsupported_read_kind");
@@ -621,6 +480,7 @@ export async function collectGithubSource(
     }
   };
   const verify = async () => {
+    if (!collector.beginVerification()) return;
     try {
       active();
       if (verifyState && !(await verifyState())) {
@@ -645,8 +505,6 @@ export async function collectGithubSource(
   };
   try {
     active();
-    for (const value of Object.values(limits))
-      if (!Number.isSafeInteger(value) || value < 1) throw new Error("invalid_source_limits");
     root = routeOf(target.url);
     authorize(root.repo);
     const { repo, kind, tail, fragment } = root;

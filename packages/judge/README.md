@@ -80,6 +80,8 @@ GitHub 使用只读 REST tree/blob，无需 clone；本地 Git 需要主机安�
 发现 20,000 项、128 次读取请求；可在 `sources.limits` 调整。
 采集与每轮核验分别受原始字节预算约束，核验预算不跨轮累积。
 无法核验会保留不确定性，不伪装成已证实的来源变化。
+所有来源共用 `SourceCollector` 的内容、行范围、去重及预算规则；GitHub 缓存命中
+仍需通过公开补读 admission 并占用请求预算，REST 请求同样计入上限。
 默认最多两轮按需补查、每轮八项；`limits.maxContextRounds: 0` 禁止额外补查，
 仍会执行一次任务与标准准备。准备调用与一次正式评价分账，无隐式重试。
 `timeoutMs` 是整个高层请求的时限，`signal` 可取消；迟到响应不会恢复成功。
@@ -89,7 +91,7 @@ GitHub 使用只读 REST tree/blob，无需 clone；本地 Git 需要主机安�
 来源变化或无效引用均如实保留。完整记录固定版本与身份，旧报告不冒充更新后的 PR。
 最终证据投影的截断／未展示、核实或复查的 `unresolved` 都使报告保持 `partial`；
 范围说明分别列出已取得行和正式投影的完整可见行，不把读取等同于完整评价。
-中文 renderer v2 展示逐项判断、判断说明和引用资料；合法的负面 verdict 即使没有
+中文 renderer v3 展示逐项判断、判断说明和引用资料；合法的负面 verdict 即使没有
 problem 或 summary，也不能被空列表解释为“没有问题”。`completed` 表示本次评价目标
 已完成，不表示要求已满足或代码已通过质量门禁。未提供判断说明时如实标记，不补造理由。
 PR 关联 Issue 的要求也参与 freshness 核验；核验 HTTP／网络错误只表示无法核实，
@@ -99,6 +101,14 @@ PR 关联 Issue 的要求也参与 freshness 核验；核验 HTTP／网络错误
 `executeCodeReview` 是需要自行组合已准备计划和来源的低层 v2 执行入口；
 普通消费者使用 `evaluateCode`。原有 `review`／`executeReview` 的 v1 默认行为不变，
 新评价不自动进入 gate，也不复用旧校准来声称报告可信。
+
+内部仅保留三处规则权威：来源 collector、prepared result context／assessor、
+report finalizer。v1/v2 每个 attempt 只选择一个 assessor；v2 的严格校验与合法
+partial 提取复用一次准备的来源、criterion、引用和完整可见行索引，不逐项重验整个结果。
+投影模式由真实执行方法显式决定；执行、引用校验与展示共用 protocol 投影函数，
+外部 `shownLines` 只能进一步收紧范围。高层 finalizer 从执行、覆盖、停止与 freshness
+事实推导状态后生成说明文字；公开报告 validator 使用同一 completion policy。
+修改或清空 `limitations` 不会改变完成状态，也不能把 unknown 结果伪装成 `completed`。
 
 ## Review execution
 

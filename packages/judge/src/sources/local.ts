@@ -36,10 +36,6 @@ export async function readLocalBytes(
   try {
     const before = await handle.stat({ bigint: true });
     if (!before.isFile()) throw new Error("Source is not a regular file");
-    if (before.size > BigInt(collector.limits.maxFileBytes)) {
-      collector.omit(path, "file_limit", "File exceeds raw byte limit");
-      return;
-    }
     if (!collector.reserveBytes(Number(before.size), path, verifying)) return;
     const bytes = Buffer.allocUnsafe(Number(before.size));
     let count = 0;
@@ -50,10 +46,6 @@ export async function readLocalBytes(
       count += result.bytesRead;
     }
     const after = await handle.stat({ bigint: true });
-    if (count > collector.limits.maxFileBytes) {
-      collector.omit(path, "file_limit", "File grew beyond raw byte limit");
-      return;
-    }
     if (
       before.size !== after.size ||
       before.mtimeNs !== after.mtimeNs ||
@@ -143,8 +135,6 @@ export async function collectLocalSource(
           collector.issue("source_changed", "File changed between reads", path);
         }
         observed.set(path, identity);
-        if (request.kind === "search" && !data.bytes.toString("utf8").includes(request.query ?? ""))
-          return;
         collector.add({
           path: relative(base, path).split(sep).join("/"),
           bytes: data.bytes,

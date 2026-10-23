@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { validateReviewExecutionV2 } from "@lorelum/judge-protocol";
+import { validateCodeEvaluationReport, validateReviewExecutionV2 } from "@lorelum/judge-protocol";
 import type { ModelPort, ModelRequest } from "@lorelum/judge-runtime";
 import { type EvaluationPorts, evaluateCode } from "../src/index.js";
 
@@ -521,4 +521,100 @@ test("terminal LF, CRLF and CR in requirements and opinions do not invalidate th
         .map((item) => item.endLine),
     ).toEqual([1, 1]);
   }
+});
+
+test("record validation cannot promote unknown or insufficient judgments to a completed report", async () => {
+  for (const judgment of ["unknown", "insufficient"]) {
+    const model: ModelPort = {
+      async generate(request) {
+        if (request.messages[0]?.content.includes("You prepare"))
+          return { kind: "message", content: JSON.stringify(preparation) };
+        const response = evaluatedResponse(request);
+        return {
+          kind: "message",
+          content: JSON.stringify({
+            ...response,
+            verdicts: response.verdicts.map((verdict) => ({
+              ...verdict,
+              verdict: judgment,
+              evidenceIds: [],
+              rationale: "必要的调用条件尚不可获得。",
+            })),
+          }),
+        };
+      },
+    };
+    const result = await evaluateCode(
+      { target: { kind: "snippet", text: "export const value = 1;" } },
+      { model, method, limits: { maxContextRounds: 0 } },
+    );
+    if (!result.ok) throw new Error(JSON.stringify(result.issues));
+    expect(result.value.execution?.attempts[0]?.status).toBe("completed");
+    expect(result.value.status).toBe("partial");
+    const changed = structuredClone(result.value);
+    changed.limitations = [];
+    expect(validateCodeEvaluationReport(changed).ok).toBe(true);
+    changed.status = "completed";
+    expect(validateCodeEvaluationReport(changed).ok).toBe(false);
+  }
+});
+
+test("explanatory text does not change completion of otherwise completed facts", async () => {
+  const model: ModelPort = {
+    async generate(request) {
+      return {
+        kind: "message",
+        content: JSON.stringify(
+          request.messages[0]?.content.includes("You prepare")
+            ? preparation
+            : evaluatedResponse(request),
+        ),
+      };
+    },
+  };
+  const result = await evaluateCode(
+    { target: { kind: "snippet", text: "export const value = 1;" } },
+    { model, method, limits: { maxContextRounds: 0 } },
+  );
+  if (!result.ok) throw new Error(JSON.stringify(result.issues));
+  expect(result.value.status).toBe("completed");
+  const annotated = structuredClone(result.value);
+  annotated.limitations = ["宿主补充说明，不是未完成或停止事实。"];
+  expect(validateCodeEvaluationReport(annotated).ok).toBe(true);
+});
+
+test("one missing criterion produces one assessment diagnostic", async () => {
+  const model: ModelPort = {
+    async generate(request) {
+      if (request.messages[0]?.content.includes("You prepare"))
+        return {
+          kind: "message",
+          content: JSON.stringify({
+            ...preparation,
+            standards: ["behavior", "boundaries"],
+            excluded: preparation.excluded.filter((entry) => entry.id !== "boundaries"),
+          }),
+        };
+      const response = evaluatedResponse(request);
+      return {
+        kind: "message",
+        content: JSON.stringify({
+          ...response,
+          verdicts: response.verdicts.filter((verdict) => verdict.criterionId !== "boundaries"),
+        }),
+      };
+    },
+  };
+  const result = await evaluateCode(
+    { target: { kind: "snippet", text: "export const value = 1;" } },
+    { model, method, limits: { maxContextRounds: 0 } },
+  );
+  if (!result.ok) throw new Error(JSON.stringify(result.issues));
+  expect(result.value.status).toBe("partial");
+  expect(
+    result.value.execution?.attempts[0]?.issues?.filter(
+      (issue) => issue.code === "missing_verdict",
+    ),
+  ).toHaveLength(1);
+  expect(result.value.result?.verdicts.map((verdict) => verdict.criterionId)).toEqual(["behavior"]);
 });

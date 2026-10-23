@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import type {
   CodeSide,
@@ -5,6 +6,7 @@ import type {
   CodeSourceRole,
   SourceSnapshot,
 } from "@lorelum/judge-protocol";
+import { codeSourceLines } from "@lorelum/judge-protocol";
 import type { SourceLimits, SourceOptions, SourceReadRequest } from "./types.js";
 
 export const DEFAULT_SOURCE_LIMITS: Readonly<SourceLimits> = {
@@ -109,7 +111,13 @@ export class SourceCollector {
     return !this.cancelled();
   }
 
-  reserveBytes(size: number, path: string, verifying = false): boolean {
+  canAcquireBytes(size: number, path: string, verifying = false): boolean {
+    if (size > this.limits.maxFileBytes) {
+      if (verifying)
+        this.issue("verification_unavailable", "File exceeds raw verification byte limit", path);
+      else this.omit(path, "file_limit", "File exceeds raw byte limit");
+      return false;
+    }
     const used = verifying ? this.verifiedBytes : this.acquiredBytes;
     if (!Number.isSafeInteger(size) || size < 0 || used + size > this.limits.maxBytes) {
       if (verifying)
@@ -117,10 +125,16 @@ export class SourceCollector {
       else this.omit(path, "byte_limit", "Raw source acquisition byte budget exhausted");
       return false;
     }
+    return true;
+  }
+
+  reserveBytes(size: number, path: string, verifying = false): boolean {
+    if (!this.canAcquireBytes(size, path, verifying)) return false;
     if (verifying) this.verifiedBytes += size;
     else this.acquiredBytes += size;
     return true;
   }
+
   discover(path: string): boolean {
     if (this.seen.has(path)) return true;
     if (++this.entries > this.limits.maxEntries) {
@@ -164,18 +178,8 @@ export class SourceCollector {
       this.issue("invalid_range", "Source line range must be one-based and ordered", path);
       return;
     }
-    const key = JSON.stringify([path, side, input.version, identity, first, last]);
-    if (this.emitted.has(key)) return;
-    if (
-      this.snapshot.items.length >= this.limits.maxFiles ||
-      bytes.byteLength > this.limits.maxFileBytes ||
-      this.bytes + bytes.byteLength > this.limits.maxBytes
-    ) {
-      this.omit(
-        path,
-        "byte_or_file_limit",
-        "Source omitted because its raw bytes exceed the remaining source budget",
-      );
+    if (bytes.byteLength > this.limits.maxFileBytes) {
+      this.omit(path, "file_limit", "File exceeds raw byte limit");
       return;
     }
     let text: string;
@@ -186,19 +190,16 @@ export class SourceCollector {
       this.omit(path, "binary_or_encoding", "Source is binary or is not valid UTF-8");
       return;
     }
-    if (
-      text.startsWith("version https://git-lfs.github.com/spec/v1\n") ||
-      text.startsWith("version https://git-lfs.github.com/spec/v1\r\n")
-    ) {
+    const lines = codeSourceLines(text);
+    if (lines[0] === "version https://git-lfs.github.com/spec/v1") {
       this.omit(path, "lfs_pointer", "Git LFS pointer is not the referenced file content");
       return;
     }
-    const lines = text === "" ? [] : text.split("\n");
-    if (text.endsWith("\n")) lines.pop();
+    if (request?.kind === "search" && !text.includes(request.query ?? "")) return;
     const origin = input.startLine ?? 1;
     const start = Math.max(first, origin);
     const end = Math.min(last ?? origin + lines.length - 1, origin + lines.length - 1);
-    if (lines.length && start > end) {
+    if ((lines.length && start > end) || (!lines.length && first !== origin)) {
       this.issue("range_unavailable", "Requested source lines are unavailable", path);
       return;
     }
@@ -206,7 +207,17 @@ export class SourceCollector {
       start === origin && end === origin + lines.length - 1
         ? text
         : lines.slice(start - origin, end - origin + 1).join("\n");
-    this.bytes += bytes.byteLength;
+    const key = JSON.stringify([path, side, input.version, identity, start, end]);
+    if (this.emitted.has(key)) return;
+    const size = Buffer.byteLength(selected);
+    if (
+      this.snapshot.items.length >= this.limits.maxFiles ||
+      this.bytes + size > this.limits.maxBytes
+    ) {
+      this.omit(path, "byte_or_file_limit", "Source output budget exhausted");
+      return;
+    }
+    this.bytes += size;
     this.emitted.add(key);
     this.snapshot.items.push({
       id: `source:${this.namespace}:${createHash("sha256").update(key).digest("hex")}`,

@@ -16,7 +16,7 @@ import {
 } from "@lorelum/judge-protocol";
 import type { RuntimeMessage } from "@lorelum/judge-runtime";
 
-import { buildManifest, escapeEvidenceText, validateMaterials } from "../evidence.js";
+import { buildManifest, validateMaterials } from "../evidence.js";
 import { compilePrompt } from "../prompt-compiler.js";
 import { buildReviewPrompt } from "../review-prompt.js";
 import { isRecord } from "../type-guards.js";
@@ -150,7 +150,6 @@ function prepare(
       instrument.method.resultProtocolVersion = "lorelum.judge.review-result/v2";
     }
   }
-  let shownLines: Map<string, Set<number>> | undefined;
   if (code !== undefined) {
     const planned = measurementDefinitionIdentityV2(code.plan.definition);
     const actual = measurementDefinitionIdentityV2(definition.value);
@@ -159,10 +158,8 @@ function prepare(
         ok: false,
         issues: [validation("$.definition", "definition differs from the review plan")],
       };
-    shownLines = new Map();
     for (const item of code.source.items) {
       const material = materials.find((entry) => entry.id === item.id);
-      const projected = manifest.items.find((entry) => entry.id === item.id);
       const expected = projectCodeSource(item);
       const normalized = validateMaterials([{ id: item.id, status: "present", text: expected }]);
       if (!normalized.ok || material === undefined || material.text !== normalized.value[0]?.text)
@@ -172,20 +169,6 @@ function prepare(
             validation("$.evidence", `source ${item.id} must use its original numbered lines`),
           ],
         };
-      const escaped =
-        method.kind === "llm" ? escapeEvidenceText(material.text ?? "") : (material.text ?? "");
-      const rendered = Array.from(escaped)
-        .slice(0, projected?.render?.renderedLength ?? Array.from(escaped).length)
-        .join("");
-      const lines = rendered.split("\n");
-      if (projected?.render?.state === "truncated") lines.pop();
-      const complete = new Set<number>();
-      if (projected?.render?.state !== "withheld")
-        for (const line of lines) {
-          const match = /^(\d+):/.exec(line);
-          if (match !== null) complete.add(Number(match[1]));
-        }
-      shownLines.set(item.id, complete);
     }
     if (materials.some((material) => !code.source.items.some((item) => item.id === material.id)))
       return {
@@ -250,7 +233,7 @@ function prepare(
               source: code.source,
               manifest,
               plan: code.plan,
-              ...(shownLines === undefined ? {} : { shownLines }),
+              projectionMode: method.kind === "llm" ? "escaped" : "plain",
               ...(code.followUpReferences === undefined
                 ? {}
                 : { followUpReferences: code.followUpReferences }),

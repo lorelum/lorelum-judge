@@ -41,3 +41,11 @@ summary 为本次评价结果的一部分，引用问题/标准/证据；渲染�
 ## 验证与实施分工
 
 主线程拥有设计、接口边界、集成和最终完成依据。protocol/review 为一个负责人；local/Git 与 GitHub 在共同来源接口确定后独立实现；高层编排依赖契约，主线程完成。仅保留错误版本、无效引用假成功、缺资料、越界和取消等实际风险回归，复用现有消费 runner 与 HTTP 工具。执行公开入口 smoke、bun run validate 和 strict validation；不重复既有传输测试，不调用真实收费模型。真实服务未验证须披露。
+
+## 结构权威收敛
+
+- 来源内容与公开补读接纳统一由 SourceCollector / validRequest 负责。GitHub 只保留 transport、授权、分页、blob 验证、缓存与固定版本解析；缓存命中也必须经过公开请求 admission，原始字节进入同一个 collector。
+- protocol 提供 codeSourceLines，作为来源终止换行的唯一行拆分规则；同一确定性投影函数同时负责归一化、escaping、按 Unicode code point 截断和完整可见行计算。调用方明确提供 plain/escaped 模式，不根据长度猜测；额外 shownLines 仅能收紧可见范围。
+- 每次 v2 result assessment 只准备一次已验证并索引的 context；strict 与 partial salvage 共用 typed entry checks 和 ID/reference 集合。删除逐条复制 candidate result 再整体验证的循环。v1/v2 各选一个 assessor，统一输出 normalized verdicts、issues 与可选 structured result；共享 lifecycle 不重复 assessment。
+- protocol 的 deriveCodeEvaluationCompletion 统一解释既有 source、execution、result 与结构化停止／freshness 诊断事实，返回 status、覆盖原因和待核实引用；不读取中文 limitations。judge 的单个 finalizer 汇总事实并生成 report、issues 与中文 limitations。公开 report validator 复用同一完成约束，不能把合法 unknown 的 partial 报告篡改成 completed。
+- 不引入通用状态机、重试或新权限机制，不改变默认 v1 measurement/calibration/gate identity。保留已有只读边界、非法明细诊断、取消与 late-result 语义，以及普通 JS ESM 消费示例。

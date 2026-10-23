@@ -191,8 +191,8 @@ export async function collectDirectSource(
       found = true;
       if (!collector.discover(material.path)) break;
       if (request.kind === "list") continue;
-      if (request.kind === "search" && !material.text.includes(request.query ?? "")) continue;
       const bytes = Buffer.from(material.text);
+      if (!collector.reserveBytes(bytes.byteLength, material.path)) continue;
       collector.add({
         path: material.path,
         bytes,
@@ -216,6 +216,7 @@ export async function collectDirectSource(
     for (const material of materials) {
       if (!collector.discover(material.path)) break;
       const bytes = Buffer.from(material.text);
+      if (!collector.reserveBytes(bytes.byteLength, material.path)) continue;
       collector.add({
         path: material.path,
         bytes,

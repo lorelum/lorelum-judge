@@ -5,8 +5,8 @@ import type { ModelPort } from "@lorelum/judge-runtime";
 import { evaluateCode } from "../src/index.js";
 import { collectGithubSource } from "../src/sources/github.js";
 
-function blob(text: string) {
-  const bytes = Buffer.from(text);
+function blob(text: string | Uint8Array) {
+  const bytes = typeof text === "string" ? Buffer.from(text, "utf8") : Buffer.from(text);
   return {
     sha: createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"),
     size: bytes.length,
@@ -415,4 +415,137 @@ test("unavailable GitHub verification preserves uncertainty until an actual ref 
   await session.verify();
   expect(session.snapshot.consistent).toBe(false);
   expect(session.snapshot.issues.some((item) => item.code === "source_changed")).toBe(true);
+});
+
+function repositoryFiles(files: Record<string, string | Uint8Array>, observed: string[] = []) {
+  const version = "a".repeat(40);
+  const contents = Object.entries(files).map(([path, text]) => ({ path, content: blob(text) }));
+  return http(
+    {
+      "/repos/up/project/commits/main": { sha: version },
+      [`/repos/up/project/git/trees/${version}?recursive=1`]: {
+        tree: contents.map(({ path, content }) => ({
+          path,
+          type: "blob",
+          mode: "100644",
+          sha: content.sha,
+          size: content.size,
+        })),
+        truncated: false,
+      },
+      ...Object.fromEntries(
+        contents.map(({ content }) => [`/repos/up/project/git/blobs/${content.sha}`, content]),
+      ),
+    },
+    observed,
+  );
+}
+
+const repositoryTarget = {
+  kind: "github",
+  url: "https://github.com/up/project/tree/main",
+} as const;
+
+test("cached public reads are admitted and counted alongside REST requests", async () => {
+  const observed: string[] = [];
+  const session = await collectGithubSource(repositoryTarget, {
+    github: { fetch: repositoryFiles({ "a.ts": "one\ntwo\nthree\n" }, observed) },
+    limits: { maxRequests: 5 },
+  });
+  expect(session.snapshot.issues).toEqual([]);
+  expect(observed).toHaveLength(3);
+  const originalId = session.snapshot.items[0]?.id;
+  await session.read({ kind: "list", path: "", startLine: 0 });
+  expect(session.snapshot.issues.some((issue) => issue.code === "invalid_request")).toBe(true);
+  await session.read({ kind: "read", path: "a.ts", startLine: 2, endLine: 2 });
+  expect(session.snapshot.items.at(-1)).toMatchObject({ text: "two", startLine: 2, endLine: 2 });
+  await session.read({ kind: "read", path: "a.ts", startLine: 3, endLine: 3 });
+  expect(session.snapshot.items).toHaveLength(2);
+  expect(session.snapshot.items[0]?.id).toBe(originalId);
+  expect(session.snapshot.issues.some((issue) => issue.code === "request_limit")).toBe(true);
+  expect(observed).toHaveLength(3);
+});
+
+test("REST acquisition cannot exceed the shared request budget", async () => {
+  const observed: string[] = [];
+  const session = await collectGithubSource(repositoryTarget, {
+    github: { fetch: repositoryFiles({ "a.ts": "code" }, observed) },
+    limits: { maxRequests: 2 },
+  });
+  expect(observed).toHaveLength(2);
+  expect(observed.some((path) => path.includes("/git/blobs/"))).toBe(false);
+  expect(session.snapshot.items).toEqual([]);
+  expect(session.snapshot.issues.some((issue) => issue.code === "request_limit")).toBe(true);
+});
+
+test("cached slices spend output bytes once per distinct range and retain raw identity", async () => {
+  const observed: string[] = [];
+  const text = "aaa\rbbb\rccc\r";
+  const session = await collectGithubSource(repositoryTarget, {
+    github: { fetch: repositoryFiles({ "a.ts": text }, observed) },
+    limits: { maxBytes: 18 },
+  });
+  const original = session.snapshot.items[0];
+  expect(original).toMatchObject({ text, startLine: 1, endLine: 3, complete: true });
+  await session.read({ kind: "read", path: "a.ts", startLine: 2, endLine: 2 });
+  const slice = session.snapshot.items.at(-1);
+  expect(slice).toMatchObject({ text: "bbb", startLine: 2, endLine: 2, complete: false });
+  expect(slice?.contentIdentity).toBe(original?.contentIdentity);
+  await session.read({ kind: "read", path: "a.ts", startLine: 2, endLine: 2 });
+  expect(session.snapshot.items.at(-1)?.id).toBe(slice?.id);
+  await session.read({ kind: "search", path: "a.ts", query: "ccc", startLine: 3, endLine: 3 });
+  expect(session.snapshot.items.at(-1)).toMatchObject({ text: "ccc", startLine: 3, endLine: 3 });
+  expect(session.snapshot.issues).toEqual([]);
+  await session.read({ kind: "read", path: "a.ts", startLine: 1, endLine: 1 });
+  expect(session.snapshot.items).toHaveLength(3);
+  expect(session.snapshot.issues.some((issue) => issue.code === "byte_or_file_limit")).toBe(true);
+  expect(observed).toHaveLength(3);
+});
+
+test("rejected binary, invalid UTF-8 and LFS bytes still consume acquisition budget", async () => {
+  for (const rejected of [
+    Buffer.from([0, 1, 2]),
+    Buffer.from([0xff, 0xfe, 0xfd]),
+    Buffer.from("version https://git-lfs.github.com/spec/v1\n"),
+    Buffer.from("version https://git-lfs.github.com/spec/v1\r"),
+  ]) {
+    const observed: string[] = [];
+    const session = await collectGithubSource(repositoryTarget, {
+      github: { fetch: repositoryFiles({ "a.bin": rejected, "b.ts": "code" }, observed) },
+      limits: { maxBytes: rejected.byteLength },
+    });
+    expect(session.snapshot.items).toEqual([]);
+    expect(session.snapshot.omitted).toEqual(["a.bin", "b.ts"]);
+    expect(observed).toHaveLength(3);
+    expect(session.snapshot.issues.some((issue) => issue.code === "byte_limit")).toBe(true);
+    expect(
+      session.snapshot.issues.some((issue) =>
+        ["binary_or_encoding", "lfs_pointer"].includes(issue.code),
+      ),
+    ).toBe(true);
+  }
+});
+
+test("duplicate blobs keep distinct paths while repeated full ranges deduplicate", async () => {
+  const observed: string[] = [];
+  const session = await collectGithubSource(repositoryTarget, {
+    github: {
+      fetch: repositoryFiles({ "a.ts": "same\n", "b.ts": "same\n", "empty.ts": "" }, observed),
+    },
+    limits: Object.fromEntries([["maxFileBytes", undefined]]),
+  });
+  expect(session.snapshot.issues).toEqual([]);
+  expect(session.snapshot.items.map((item) => item.path)).toEqual(["a.ts", "b.ts", "empty.ts"]);
+  expect(new Set(session.snapshot.items.map((item) => item.id)).size).toBe(3);
+  expect(session.snapshot.items.find((item) => item.path === "empty.ts")).toMatchObject({
+    text: "",
+    startLine: 1,
+    endLine: 0,
+    complete: true,
+  });
+  await session.read({ kind: "read", path: "a.ts", startLine: 1, endLine: 1 });
+  expect(session.snapshot.items).toHaveLength(3);
+  expect(observed.filter((path) => path.includes("/git/blobs/"))).toHaveLength(2);
+  await session.read({ kind: "read", path: "empty.ts", startLine: 2 });
+  expect(session.snapshot.issues.some((issue) => issue.code === "range_unavailable")).toBe(true);
 });
