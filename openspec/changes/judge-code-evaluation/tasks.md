@@ -53,4 +53,6 @@
 - [x] renderer v2 显示逐项判断、判断说明和引用资料；负面 verdict 不再被空问题列表隐藏。不强制伪造 problem。
 - [x] 保留并执行 PR 关联 Issue verifier，PR SHA 不变而要求更新时也记录真实来源变化。
 - [x] GitHub 核验错误保留 verification_unavailable 与脱敏原因；只有实际 identity 不匹配才标记 inconsistent，取消仍单独处理。
-- [ ] 完成本轮最终验证记录、追加修正提交并更新同一 PR；不合并或发布。
+- [x] 完成本轮最终验证记录，已追加修正提交并更新同一 PR #62；保留草稿，不合并或发布。
+
+本轮修正提交：`d4dc4bf8aa9df7c28685004c8746e19fc2eba9bf`。验证为 727 pass、0 fail、1770 assertions；公开消费为 24 场景、49 次本地 HTTP 请求。用户审查的固定基线及逐项处理已写入 PR；旧提交的独立复核不作为本修正提交已获独立审查的声明。
