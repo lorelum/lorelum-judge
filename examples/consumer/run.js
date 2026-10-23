@@ -1,7 +1,7 @@
-import { runCodeEvaluation } from "./code-evaluation.mjs";
-import { runMockLlmReview } from "./mock-llm-review.mjs";
-import { runProgramReview } from "./program-review.mjs";
-import { runReviewToGate } from "./review-to-gate.mjs";
+import { runCodeEvaluation } from "./code-evaluation.js";
+import { runMockLlmReview } from "./mock-llm-review.js";
+import { runProgramReview } from "./program-review.js";
+import { runReviewToGate } from "./review-to-gate.js";
 
 const program = await runProgramReview();
 console.log(

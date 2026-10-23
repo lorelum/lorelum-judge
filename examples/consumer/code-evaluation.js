@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { evaluateCode } from "@lorelum/judge";
 import { codeEvaluationReportIdentity } from "@lorelum/judge-protocol";
 import { createOpenAiCompatibleModel, describeEndpoint } from "@lorelum/provider-openai-compatible";
-import { exampleGitHubSource } from "./github-evaluation-source.mjs";
-import { assert, startMockModel } from "./shared.mjs";
+import { exampleGitHubSource } from "./github-evaluation-source.js";
+import { assert, startMockModel } from "./shared.js";
 
 /** A deliberately narrow deterministic evaluator, not a claim about real model quality. */
 function respondToEvaluation(body) {
