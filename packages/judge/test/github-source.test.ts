@@ -1,0 +1,551 @@
+import { expect, test } from "bun:test";
+import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
+import type { ModelPort } from "@lorelum/judge-runtime";
+import { evaluateCode } from "../src/index.js";
+import { collectGithubSource } from "../src/sources/github.js";
+
+function blob(text: string | Uint8Array) {
+  const bytes = typeof text === "string" ? Buffer.from(text, "utf8") : Buffer.from(text);
+  return {
+    sha: createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"),
+    size: bytes.length,
+    encoding: "base64",
+    content: bytes.toString("base64"),
+  };
+}
+function http(routes: Record<string, unknown>, observed: string[] = []): typeof globalThis.fetch {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+    expect(url.origin).toBe("https://api.github.com");
+    expect(init?.method).toBe("GET");
+    expect(init?.redirect).toBe("error");
+    const key = url.pathname + url.search;
+    observed.push(key);
+    const row = routes[key];
+    return new Response(JSON.stringify(row ?? { message: "Not found" }), {
+      status: row === undefined ? 404 : 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof globalThis.fetch;
+}
+
+test("fork PR uses merge-base trees, recovers a truncated tree and binds inline opinions and requirements", async () => {
+  const base = "a".repeat(40);
+  const head = "b".repeat(40);
+  const mergeBase = "c".repeat(40);
+  const subtree = "d".repeat(40);
+  const old = blob("old behavior\n");
+  const current = blob("new behavior\n");
+  const pull = {
+    title: "Change",
+    body: "Fixes #7",
+    base: { sha: base },
+    head: { sha: head, repo: { full_name: "fork/project" } },
+  };
+  const routes: Record<string, unknown> = {
+    "/repos/up/project/pulls/3": pull,
+    [`/repos/up/project/compare/${base}...fork%3A${head}`]: {
+      merge_base_commit: { sha: mergeBase },
+    },
+    [`/repos/up/project/git/trees/${mergeBase}?recursive=1`]: {
+      tree: [{ path: "src/a.ts", sha: old.sha, type: "blob", mode: "100644", size: old.size }],
+      truncated: false,
+    },
+    [`/repos/fork/project/git/trees/${head}?recursive=1`]: { tree: [], truncated: true },
+    [`/repos/fork/project/git/trees/${head}`]: {
+      tree: [{ path: "src", sha: subtree, type: "tree", mode: "040000" }],
+    },
+    [`/repos/fork/project/git/trees/${subtree}`]: {
+      tree: [{ path: "a.ts", sha: current.sha, type: "blob", mode: "100644", size: current.size }],
+    },
+    [`/repos/up/project/git/blobs/${old.sha}`]: old,
+    [`/repos/fork/project/git/blobs/${current.sha}`]: current,
+    "/repos/up/project/issues/3/comments?per_page=100&page=1": [],
+    "/repos/up/project/pulls/3/reviews?per_page=100&page=1": [],
+    "/repos/up/project/pulls/3/comments?per_page=100&page=1": [
+      {
+        id: 44,
+        body: "Check the boundary",
+        path: "src/a.ts",
+        commit_id: head,
+        line: 1,
+        side: "RIGHT",
+      },
+    ],
+    "/repos/up/project/issues/7": { title: "Requirement", body: "Must preserve the boundary" },
+    "/repos/up/project/issues/7/comments?per_page=100&page=1": [],
+  };
+  const observed: string[] = [];
+  const session = await collectGithubSource(
+    { kind: "github", url: "https://github.com/up/project/pull/3#discussion_r44" },
+    { github: { fetch: http(routes, observed) } },
+  );
+  expect(session.snapshot.issues).toEqual([]);
+  expect(session.snapshot.comparisons[0]).toMatchObject({ base, head, mergeBase });
+  expect(
+    session.snapshot.items
+      .filter((item) => item.path === "src/a.ts")
+      .map((item) => [item.side, item.version, item.text]),
+  ).toEqual([
+    ["old", mergeBase, "old behavior\n"],
+    ["new", head, "new behavior\n"],
+  ]);
+  expect(
+    session.snapshot.items.some(
+      (item) => item.role === "opinion" && item.text.includes("Check the boundary"),
+    ),
+  ).toBe(true);
+  expect(
+    session.snapshot.items.some(
+      (item) => item.role === "requirement" && item.text.includes("Must preserve the boundary"),
+    ),
+  ).toBe(true);
+  routes["/repos/up/project/issues/7"] = {
+    title: "Requirement",
+    body: "New incompatible requirement",
+  };
+  await session.verify();
+  expect(session.snapshot.consistent).toBe(false);
+  expect(
+    session.snapshot.issues.some(
+      (item) =>
+        item.code === "source_changed" && item.source === "https://github.com/up/project/issues/7",
+    ),
+  ).toBe(true);
+  routes["/repos/up/project/pulls/3"] = { ...pull, head: { sha: "e".repeat(40) } };
+  await session.verify();
+  expect(session.snapshot.consistent).toBe(false);
+  expect(
+    session.snapshot.issues.some(
+      (item) =>
+        item.code === "source_changed" &&
+        item.source === "https://github.com/up/project/pull/3#discussion_r44",
+    ),
+  ).toBe(true);
+  expect(observed.some((path) => path.includes("/pulls/3/files"))).toBe(false);
+});
+
+test("slash ref with multiple valid path interpretations is rejected rather than guessed", async () => {
+  const a = "a".repeat(40);
+  const b = "b".repeat(40);
+  const content = blob("code");
+  const session = await collectGithubSource(
+    { kind: "github", url: "https://github.com/up/project/blob/feature/topic/a.ts" },
+    {
+      github: {
+        fetch: http({
+          "/repos/up/project/commits/feature": { sha: a },
+          "/repos/up/project/commits/feature%2Ftopic": { sha: b },
+          [`/repos/up/project/git/trees/${a}?recursive=1`]: {
+            tree: [{ path: "topic/a.ts", type: "blob", mode: "100644", sha: content.sha }],
+          },
+          [`/repos/up/project/git/trees/${b}?recursive=1`]: {
+            tree: [{ path: "a.ts", type: "blob", mode: "100644", sha: content.sha }],
+          },
+        }),
+      },
+    },
+  );
+  expect(session.snapshot.items).toEqual([]);
+  expect(
+    session.snapshot.issues.some((issue) => issue.code === "ambiguous_ref" && issue.fatal),
+  ).toBe(true);
+});
+
+test("issue comments paginate without upgrading opinions to requirements", async () => {
+  const first = Array.from({ length: 100 }, (_, id) => ({ id: id + 1, body: `opinion ${id}` }));
+  const session = await collectGithubSource(
+    { kind: "github", url: "https://github.com/up/project/issues/7" },
+    {
+      limits: { maxFiles: 110 },
+      github: {
+        fetch: http({
+          "/repos/up/project/issues/7": { title: "Requirement", body: "Required behavior" },
+          "/repos/up/project/issues/7/comments?per_page=100&page=1": first,
+          "/repos/up/project/issues/7/comments?per_page=100&page=2": [
+            { id: 101, body: "last opinion" },
+          ],
+        }),
+      },
+    },
+  );
+  expect(
+    session.snapshot.items.filter((item) => item.role === "requirement").map((item) => item.text),
+  ).toEqual(["Requirement\n\nRequired behavior"]);
+  expect(
+    session.snapshot.items.find((item) => item.path.endsWith("#issuecomment-101")),
+  ).toMatchObject({ role: "opinion", text: "last opinion" });
+});
+
+test("pre-cancel and unauthorized repositories perform no network reads", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let calls = 0;
+  const fetcher = (async () => {
+    calls++;
+    throw new Error("must not request");
+  }) as unknown as typeof globalThis.fetch;
+  const cancelled = await collectGithubSource(
+    { kind: "github", url: "https://github.com/up/project" },
+    { signal: controller.signal, github: { fetch: fetcher, token: "private-secret" } },
+  );
+  const denied = await collectGithubSource(
+    { kind: "github", url: "https://github.com/up/project" },
+    { github: { fetch: fetcher, repositories: ["other/project"], token: "private-secret" } },
+  );
+  expect(calls).toBe(0);
+  expect(cancelled.snapshot.issues.some((issue) => issue.code === "cancelled" && issue.fatal)).toBe(
+    true,
+  );
+  expect(
+    denied.snapshot.issues.some(
+      (issue) => issue.code === "repository_not_authorized" && issue.fatal,
+    ),
+  ).toBe(true);
+  expect(JSON.stringify([cancelled.snapshot, denied.snapshot])).not.toContain("private-secret");
+});
+
+test("cancellation during final source verification preserves completed evaluation but cancels the request", async () => {
+  const controller = new AbortController();
+  const commit = "a".repeat(40);
+  const content = blob("export const value = 1;\n");
+  const underlying = http({
+    "/repos/up/project/commits/main": { sha: commit },
+    [`/repos/up/project/git/trees/${commit}?recursive=1`]: {
+      tree: [{ path: "a.ts", type: "blob", mode: "100644", sha: content.sha, size: content.size }],
+      truncated: false,
+    },
+    [`/repos/up/project/git/blobs/${content.sha}`]: content,
+  });
+  let evaluated = false;
+  const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (evaluated) {
+      controller.abort();
+      throw new Error("cancelled during final verification");
+    }
+    return underlying(input, init);
+  }) as typeof globalThis.fetch;
+  const model: ModelPort = {
+    async generate(request) {
+      if (request.messages[0]?.content.includes("You prepare"))
+        return {
+          kind: "message",
+          content: JSON.stringify({
+            task: "inspect",
+            focus: [],
+            standards: ["behavior"],
+            requirements: [],
+            excluded: ["boundaries", "security", "concurrency", "performance", "maintenance"].map(
+              (id) => ({ id, reason: "Source cancellation regression." }),
+            ),
+            reads: [],
+          }),
+        };
+      const user = request.messages.find((message) => message.role === "user")?.content ?? "";
+      const marker = "Untrusted review context:\n";
+      const context = JSON.parse(user.slice(user.lastIndexOf(marker) + marker.length)) as {
+        sources: { id: string }[];
+      };
+      evaluated = true;
+      return {
+        kind: "message",
+        content: JSON.stringify({
+          schema: "lorelum.judge.review-result/v2",
+          verdicts: [
+            {
+              schema: "lorelum.judge.verdict/v1",
+              criterionId: "behavior",
+              verdict: "strong",
+              evidenceIds: [context.sources[0]?.id],
+              rationale: "The shown declaration is consistent.",
+            },
+          ],
+          summary: [],
+          problems: [],
+          pending: [],
+          followUps: [],
+        }),
+      };
+    },
+  };
+  const result = await evaluateCode(
+    { target: "https://github.com/up/project/blob/main/a.ts" },
+    {
+      model,
+      method: {
+        kind: "llm",
+        provider: { protocol: "openai.chat-completions/v1", adapterVersion: "1" },
+        endpointIdentity: `sha256:${"a".repeat(64)}`,
+        model: { provider: "offline", name: "cancel-source" },
+      },
+      allowModelDisclosure: true,
+      signal: controller.signal,
+      limits: { maxContextRounds: 0 },
+      sources: { github: { fetch } },
+    },
+  );
+  if (!result.ok) throw new Error(JSON.stringify(result.issues));
+  expect(result.value.execution?.attempts[0]?.status).toBe("completed");
+  expect(result.value.result?.verdicts[0]?.verdict).toBe("strong");
+  expect(result.value.status).toBe("cancelled");
+});
+
+test("a requirement source cannot implicitly promote discussion into a mandatory contract", async () => {
+  const proposal = "Maybe require exactly 99 items?";
+  const fetch = http({
+    "/repos/up/project/issues/7": { title: "Requirement", body: "Preserve existing behavior." },
+    "/repos/up/project/issues/7/comments?per_page=100&page=1": [{ id: 8, body: proposal }],
+  });
+  let attemptedOpinion = false;
+  const model: ModelPort = {
+    async generate(request) {
+      const user = request.messages.find((message) => message.role === "user")?.content ?? "";
+      if (request.messages[0]?.content.includes("You prepare")) {
+        const marker = "Source inventory (untrusted data):\n";
+        const inventoryText = user.slice(user.indexOf(marker) + marker.length);
+        const inventory = JSON.parse(inventoryText.slice(0, inventoryText.indexOf("\n\n"))) as {
+          items: { id: string; path: string }[];
+        };
+        const comment = inventory.items.find((item) => item.path.endsWith("#issuecomment-8"));
+        if (comment === undefined) throw new Error("fixture comment was not acquired");
+        attemptedOpinion = true;
+        return {
+          kind: "message",
+          content: JSON.stringify({
+            task: "requirements",
+            focus: [],
+            standards: ["behavior"],
+            requirements: [{ text: proposal, source: comment.id }],
+            excluded: ["boundaries", "security", "concurrency", "performance", "maintenance"].map(
+              (id) => ({ id, reason: "Requirement ownership regression." }),
+            ),
+            reads: [],
+          }),
+        };
+      }
+      const marker = "Untrusted review context:\n";
+      const context = JSON.parse(user.slice(user.lastIndexOf(marker) + marker.length)) as {
+        sources: { id: string; role: string }[];
+      };
+      const target = context.sources.find((item) => item.role === "target");
+      return {
+        kind: "message",
+        content: JSON.stringify({
+          schema: "lorelum.judge.review-result/v2",
+          verdicts: [...user.matchAll(/^Criterion ([^ ]+) \((quality|contract),/gm)].map(
+            (match) => ({
+              schema: "lorelum.judge.verdict/v1",
+              criterionId: match[1],
+              verdict: match[2] === "contract" ? "met" : "strong",
+              evidenceIds: [target?.id],
+              rationale: "Adversarial preparation must not acquire contract authority.",
+            }),
+          ),
+          summary: [],
+          problems: [],
+          pending: [],
+          followUps: [],
+        }),
+      };
+    },
+  };
+  const result = await evaluateCode(
+    {
+      target: { kind: "snippet", text: "export const value = 1;" },
+      requirementSources: ["https://github.com/up/project/issues/7"],
+    },
+    {
+      model,
+      method: {
+        kind: "llm",
+        provider: { protocol: "openai.chat-completions/v1", adapterVersion: "1" },
+        endpointIdentity: `sha256:${"a".repeat(64)}`,
+        model: { provider: "offline", name: "requirement-ownership" },
+      },
+      allowModelDisclosure: true,
+      limits: { maxContextRounds: 0 },
+      sources: { github: { fetch } },
+    },
+  );
+  if (!result.ok) throw new Error(JSON.stringify(result.issues));
+  expect(attemptedOpinion).toBe(true);
+  expect(result.value.status).toBe("failed");
+  expect(result.value.execution).toBeUndefined();
+  expect(
+    result.value.source.items.find((item) => item.path.endsWith("#issuecomment-8"))?.role,
+  ).toBe("opinion");
+});
+
+test("unavailable GitHub verification preserves uncertainty until an actual ref mismatch is observed", async () => {
+  const commit = "a".repeat(40);
+  const content = blob("export const value = 1;\n");
+  const routes: Record<string, unknown> = {
+    "/repos/up/project/commits/main": { sha: commit },
+    [`/repos/up/project/git/trees/${commit}?recursive=1`]: {
+      tree: [{ path: "a.ts", type: "blob", mode: "100644", sha: content.sha, size: content.size }],
+      truncated: false,
+    },
+    [`/repos/up/project/git/blobs/${content.sha}`]: content,
+  };
+  const underlying = http(routes);
+  let unavailable = false;
+  const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+    if (unavailable && url.pathname === "/repos/up/project/commits/main")
+      return new Response("Service unavailable", { status: 503 });
+    return underlying(input, init);
+  }) as typeof globalThis.fetch;
+  const session = await collectGithubSource(
+    { kind: "github", url: "https://github.com/up/project/blob/main/a.ts" },
+    { github: { fetch } },
+  );
+  expect(session.snapshot.issues).toEqual([]);
+  unavailable = true;
+  await session.verify();
+  expect(session.snapshot.consistent).toBe(true);
+  expect(session.snapshot.issues.some((item) => item.code === "verification_unavailable")).toBe(
+    true,
+  );
+  expect(session.snapshot.issues.some((item) => item.code === "source_changed")).toBe(false);
+  unavailable = false;
+  await session.verify();
+  expect(session.snapshot.consistent).toBe(true);
+  routes["/repos/up/project/commits/main"] = { sha: "b".repeat(40) };
+  await session.verify();
+  expect(session.snapshot.consistent).toBe(false);
+  expect(session.snapshot.issues.some((item) => item.code === "source_changed")).toBe(true);
+});
+
+function repositoryFiles(files: Record<string, string | Uint8Array>, observed: string[] = []) {
+  const version = "a".repeat(40);
+  const contents = Object.entries(files).map(([path, text]) => ({ path, content: blob(text) }));
+  return http(
+    {
+      "/repos/up/project/commits/main": { sha: version },
+      [`/repos/up/project/git/trees/${version}?recursive=1`]: {
+        tree: contents.map(({ path, content }) => ({
+          path,
+          type: "blob",
+          mode: "100644",
+          sha: content.sha,
+          size: content.size,
+        })),
+        truncated: false,
+      },
+      ...Object.fromEntries(
+        contents.map(({ content }) => [`/repos/up/project/git/blobs/${content.sha}`, content]),
+      ),
+    },
+    observed,
+  );
+}
+
+const repositoryTarget = {
+  kind: "github",
+  url: "https://github.com/up/project/tree/main",
+} as const;
+
+test("cached public reads are admitted and counted alongside REST requests", async () => {
+  const observed: string[] = [];
+  const session = await collectGithubSource(repositoryTarget, {
+    github: { fetch: repositoryFiles({ "a.ts": "one\ntwo\nthree\n" }, observed) },
+    limits: { maxRequests: 5 },
+  });
+  expect(session.snapshot.issues).toEqual([]);
+  expect(observed).toHaveLength(3);
+  const originalId = session.snapshot.items[0]?.id;
+  await session.read({ kind: "list", path: "", startLine: 0 });
+  expect(session.snapshot.issues.some((issue) => issue.code === "invalid_request")).toBe(true);
+  await session.read({ kind: "read", path: "a.ts", startLine: 2, endLine: 2 });
+  expect(session.snapshot.items.at(-1)).toMatchObject({ text: "two", startLine: 2, endLine: 2 });
+  await session.read({ kind: "read", path: "a.ts", startLine: 3, endLine: 3 });
+  expect(session.snapshot.items).toHaveLength(2);
+  expect(session.snapshot.items[0]?.id).toBe(originalId);
+  expect(session.snapshot.issues.some((issue) => issue.code === "request_limit")).toBe(true);
+  expect(observed).toHaveLength(3);
+});
+
+test("REST acquisition cannot exceed the shared request budget", async () => {
+  const observed: string[] = [];
+  const session = await collectGithubSource(repositoryTarget, {
+    github: { fetch: repositoryFiles({ "a.ts": "code" }, observed) },
+    limits: { maxRequests: 2 },
+  });
+  expect(observed).toHaveLength(2);
+  expect(observed.some((path) => path.includes("/git/blobs/"))).toBe(false);
+  expect(session.snapshot.items).toEqual([]);
+  expect(session.snapshot.issues.some((issue) => issue.code === "request_limit")).toBe(true);
+});
+
+test("cached slices spend output bytes once per distinct range and retain raw identity", async () => {
+  const observed: string[] = [];
+  const text = "aaa\rbbb\rccc\r";
+  const session = await collectGithubSource(repositoryTarget, {
+    github: { fetch: repositoryFiles({ "a.ts": text }, observed) },
+    limits: { maxBytes: 18 },
+  });
+  const original = session.snapshot.items[0];
+  expect(original).toMatchObject({ text, startLine: 1, endLine: 3, complete: true });
+  await session.read({ kind: "read", path: "a.ts", startLine: 2, endLine: 2 });
+  const slice = session.snapshot.items.at(-1);
+  expect(slice).toMatchObject({ text: "bbb", startLine: 2, endLine: 2, complete: false });
+  expect(slice?.contentIdentity).toBe(original?.contentIdentity);
+  await session.read({ kind: "read", path: "a.ts", startLine: 2, endLine: 2 });
+  expect(session.snapshot.items.at(-1)?.id).toBe(slice?.id);
+  await session.read({ kind: "search", path: "a.ts", query: "ccc", startLine: 3, endLine: 3 });
+  expect(session.snapshot.items.at(-1)).toMatchObject({ text: "ccc", startLine: 3, endLine: 3 });
+  expect(session.snapshot.issues).toEqual([]);
+  await session.read({ kind: "read", path: "a.ts", startLine: 1, endLine: 1 });
+  expect(session.snapshot.items).toHaveLength(3);
+  expect(session.snapshot.issues.some((issue) => issue.code === "byte_or_file_limit")).toBe(true);
+  expect(observed).toHaveLength(3);
+});
+
+test("rejected binary, invalid UTF-8 and LFS bytes still consume acquisition budget", async () => {
+  for (const rejected of [
+    Buffer.from([0, 1, 2]),
+    Buffer.from([0xff, 0xfe, 0xfd]),
+    Buffer.from("version https://git-lfs.github.com/spec/v1\n"),
+    Buffer.from("version https://git-lfs.github.com/spec/v1\r"),
+  ]) {
+    const observed: string[] = [];
+    const session = await collectGithubSource(repositoryTarget, {
+      github: { fetch: repositoryFiles({ "a.bin": rejected, "b.ts": "code" }, observed) },
+      limits: { maxBytes: rejected.byteLength },
+    });
+    expect(session.snapshot.items).toEqual([]);
+    expect(session.snapshot.omitted).toEqual(["a.bin", "b.ts"]);
+    expect(observed).toHaveLength(3);
+    expect(session.snapshot.issues.some((issue) => issue.code === "byte_limit")).toBe(true);
+    expect(
+      session.snapshot.issues.some((issue) =>
+        ["binary_or_encoding", "lfs_pointer"].includes(issue.code),
+      ),
+    ).toBe(true);
+  }
+});
+
+test("duplicate blobs keep distinct paths while repeated full ranges deduplicate", async () => {
+  const observed: string[] = [];
+  const session = await collectGithubSource(repositoryTarget, {
+    github: {
+      fetch: repositoryFiles({ "a.ts": "same\n", "b.ts": "same\n", "empty.ts": "" }, observed),
+    },
+    limits: Object.fromEntries([["maxFileBytes", undefined]]),
+  });
+  expect(session.snapshot.issues).toEqual([]);
+  expect(session.snapshot.items.map((item) => item.path)).toEqual(["a.ts", "b.ts", "empty.ts"]);
+  expect(new Set(session.snapshot.items.map((item) => item.id)).size).toBe(3);
+  expect(session.snapshot.items.find((item) => item.path === "empty.ts")).toMatchObject({
+    text: "",
+    startLine: 1,
+    endLine: 0,
+    complete: true,
+  });
+  await session.read({ kind: "read", path: "a.ts", startLine: 1, endLine: 1 });
+  expect(session.snapshot.items).toHaveLength(3);
+  expect(observed.filter((path) => path.includes("/git/blobs/"))).toHaveLength(2);
+  await session.read({ kind: "read", path: "empty.ts", startLine: 2 });
+  expect(session.snapshot.issues.some((issue) => issue.code === "range_unavailable")).toBe(true);
+});

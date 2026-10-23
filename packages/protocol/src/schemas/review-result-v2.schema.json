@@ -1,0 +1,6 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:review-result:v2",
+  "title": "ReviewResultV2",
+  "$ref": "urn:lorelum:judge:code-evaluation:v1#/$defs/result"
+}

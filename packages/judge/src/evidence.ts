@@ -1,7 +1,9 @@
 import {
   type EvidenceBundle,
   type EvidenceItem,
+  escapeEvidenceText,
   identityOf,
+  normalizeEvidenceText,
   type ValidationIssue,
   type ValidationResult,
   validateEvidenceBundle,
@@ -30,14 +32,8 @@ export interface EvidenceMaterial {
  * endings, and no trailing spaces or tabs. Text that differs only in these ways
  * produces identical output and identities.
  */
-export function normalizeText(text: string): string {
-  return text
-    .normalize("NFC")
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .map((line) => line.replace(/[ \t]+$/, ""))
-    .join("\n");
-}
+export const normalizeText = normalizeEvidenceText;
+export { escapeEvidenceText };
 
 export function isWellFormed(text: string): boolean {
   return !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text);
@@ -137,10 +133,6 @@ export interface ManifestResult {
 
 function codePoints(text: string): string[] {
   return Array.from(text);
-}
-
-export function escapeEvidenceText(text: string): string {
-  return text.replace(/<(\/?)(evidence)/gi, "&lt;$1$2");
 }
 
 function remapItemPath(path: string, sources: readonly number[]): string {

@@ -1,7 +1,13 @@
-import { assessVerdicts, type ReviewAttempt } from "@lorelum/judge-protocol";
+import {
+  assessCodeReviewResult,
+  assessVerdicts,
+  type CodeReviewAssessment,
+  type ReviewAttempt,
+  type ReviewResultV2,
+} from "@lorelum/judge-protocol";
 import type { ModelResponseMetadata } from "@lorelum/judge-runtime";
 
-import { parseReviewResponse } from "../review-parser.js";
+import { parseJsonObject, parseReviewResponse } from "../review-parser.js";
 import {
   providerFailure,
   ReviewAbortError,
@@ -21,17 +27,6 @@ import {
   partialAttempt,
 } from "./record.js";
 import type { LlmFacts, PreparedReview, ReviewFailure, ReviewPorts } from "./types.js";
-
-function assess(
-  definition: PreparedReview["definition"],
-  rawVerdicts: readonly unknown[],
-  bundle: PreparedReview["manifest"],
-): Assessed {
-  return assessVerdicts(definition.criteria, rawVerdicts, {
-    bundle,
-    requireAll: true,
-  });
-}
 
 function checkerFailure(error: unknown): ReviewFailure {
   let rawMessage = "";
@@ -62,6 +57,8 @@ function llmFacts(
 export interface AttemptOutcome {
   readonly attempt: ReviewAttempt;
   readonly assessed?: Assessed;
+  readonly result?: ReviewResultV2;
+  readonly rawResult?: unknown;
 }
 
 export async function executeAttempt(
@@ -92,6 +89,7 @@ export async function executeAttempt(
     let raw: readonly unknown[] | undefined;
     let responseMetadata: ModelResponseMetadata | undefined;
     let responseMetadataInvalid = false;
+    let structured: unknown;
 
     if (method.kind === "program") {
       const checker = ports.checker;
@@ -105,6 +103,7 @@ export async function executeAttempt(
         () => attemptController.abort(),
       );
       raw = readCheckerOutput(output);
+      if (prepared.codeReview !== undefined) structured = output;
       if (raw === undefined) {
         return {
           attempt: failedAttempt(finished(), {
@@ -163,7 +162,10 @@ export async function executeAttempt(
           ),
         };
       }
-      const parsed = parseReviewResponse(facts.content);
+      const parsed =
+        prepared.codeReview === undefined
+          ? parseReviewResponse(facts.content)
+          : parseJsonObject(facts.content);
       if (!parsed.ok) {
         return {
           attempt: failedAttempt(
@@ -177,10 +179,17 @@ export async function executeAttempt(
           ),
         };
       }
-      raw = parsed.verdicts;
+      if ("value" in parsed) {
+        structured = parsed.value;
+        raw = Array.isArray(parsed.value.verdicts) ? parsed.value.verdicts : [];
+      } else raw = parsed.verdicts;
     }
 
-    const assessed = assess(definition, raw, manifest);
+    const assessed: CodeReviewAssessment =
+      prepared.codeReview === undefined
+        ? assessVerdicts(definition.criteria, raw, { bundle: manifest, requireAll: true })
+        : assessCodeReviewResult(structured, prepared.codeReview);
+    const result = assessed.result;
     context = finished();
     const record =
       request === undefined
@@ -197,12 +206,16 @@ export async function executeAttempt(
           record,
         ),
         assessed,
+        ...(result === undefined ? {} : { result }),
+        ...(structured === undefined ? {} : { rawResult: structured }),
       };
     }
     if (assessed.verdicts.length > 0) {
       return {
         attempt: partialAttempt(context, assessed.verdicts, assessed.issues, record),
         assessed,
+        ...(result === undefined ? {} : { result }),
+        ...(structured === undefined ? {} : { rawResult: structured }),
       };
     }
     return {
@@ -219,6 +232,7 @@ export async function executeAttempt(
         },
       ),
       assessed,
+      ...(structured === undefined ? {} : { rawResult: structured }),
     };
   } catch (error) {
     const finishedAt = clock.now().toISOString();
