@@ -30,10 +30,20 @@ Direct material, local files/directories and Git selections, and GitHub file/dir
 - **WHEN** a PR changes during reading or its complete change enumeration cannot be obtained
 - **THEN** the report binds the observed snapshot and states the change or incomplete coverage without claiming current complete coverage
 
+#### Scenario: Linked PR requirement changes
+
+- **WHEN** an Issue whose material was consumed as a PR requirement changes while PR base/head remain unchanged
+- **THEN** freshness verification detects the linked requirement change and does not claim that all consumed sources remain current
+
 #### Scenario: New file regression attribution
 
 - **WHEN** a problem cites a newly added file without old-side code
 - **THEN** introduction attribution requires reader-established absence in the matching comparison and MUST NOT fabricate old evidence or infer absence from omitted content
+
+#### Scenario: Terminal newline in explicit references
+
+- **WHEN** an explicit requirement or opinion ends in LF, CRLF or CR
+- **THEN** its raw text is retained and its source range follows the canonical terminal-newline convention without invalidating the evaluation
 
 
 ### Requirement: Context acquisition is bounded and read only
@@ -72,6 +82,11 @@ Context acquisition MUST enforce caller-authorized roots/repositories, disclosur
 - **WHEN** unchanged local or working-tree contents are verified more than once
 - **THEN** each pass receives its bounded verification budget and unavailable verification MUST NOT be reported as observed content changes
 
+#### Scenario: Unavailable GitHub freshness verification
+
+- **WHEN** a freshness request fails with a network error, HTTP error or exhausted request budget
+- **THEN** verification is recorded as unavailable rather than as observed content change; an actual identity mismatch still marks the source inconsistent
+
 
 
 ### Requirement: Standards and evidence constrain conclusions
@@ -92,6 +107,11 @@ A versioned result envelope MUST retain original Verdict/v1 values alongside sum
 - **WHEN** verdicts are valid but a problem cites the wrong version, side or unseen line
 - **THEN** the invalid item is diagnosed, legal partial observations remain visible and no completed execution or clean report is produced
 
+#### Scenario: Arbitrary legal verdict order
+
+- **WHEN** a complete or partial result returns legal verdicts in a different criterion order
+- **THEN** result/measurement consistency is compared by criterion ID while still requiring matching values, rationale and evidence references
+
 #### Scenario: Existing review consumer
 
 - **WHEN** an existing caller uses the default v1 review path
@@ -110,6 +130,11 @@ Reports MUST provide a concise overall description, concrete problems with impac
 
 - **WHEN** final evidence is truncated or withheld, or a requested follow-up is unresolved despite decisive ordinary verdicts
 - **THEN** the report remains partial, distinguishes acquired from projected scope, and does not erase a legitimately completed underlying evaluation
+
+#### Scenario: Negative verdict without problem details
+
+- **WHEN** a legal negative verdict has no corresponding problem or summary entry
+- **THEN** the Chinese report preserves the judgment, provided rationale and references and does not infer a clean result from the empty detail lists
 
 
 #### Scenario: Public consumer completes the chain

@@ -22,6 +22,8 @@ scripts therefore load built `exports.import` entries, not `src`.
   Issue 要求、实际有限上下文补查、意见核实与问题复查。真实本地 HTTP 经过既有模型 provider；
   GitHub 用内存 REST 数据、Git 用临时仓库，无外部服务或真实凭据。
   确定性模型只识别示例中的条数问题，不代表真实模型的评价质量。
+  另覆盖仅有负面逐项判断、verdict 逆序以及要求／意见末尾 CRLF；实际打印对应中文报告，
+  不通过固定措辞断言替代观察。
 
 The policy in these examples is illustrative. It is not a calibration artifact
 and proves nothing about model quality; synthetic calibration remains a

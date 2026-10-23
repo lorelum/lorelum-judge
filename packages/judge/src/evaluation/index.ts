@@ -100,7 +100,9 @@ function addReference(
 ): void {
   const content = identityOf("lorelum.judge.provided-reference/v1", text);
   if (!content.ok) throw new Error("invalid reference text");
-  const lines = text === "" ? 0 : text.split("\n").length;
+  const normalized = text.replace(/\r\n?/g, "\n");
+  const lines =
+    normalized === "" ? 0 : normalized.split("\n").length - (normalized.endsWith("\n") ? 1 : 0);
   source.items.push({
     id,
     path: name,

@@ -84,7 +84,7 @@ function respondToEvaluation(body) {
         },
       ]
     : [];
-  return {
+  const result = {
     schema: "lorelum.judge.review-result/v2",
     verdicts: criteria.map((criterion) => ({
       schema: "lorelum.judge.verdict/v1",
@@ -123,6 +123,12 @@ function respondToEvaluation(body) {
       evidenceIds: [source.id],
     })),
   };
+  if (context.request.includes("仅返回逐项判断")) {
+    result.verdicts.reverse();
+    result.summary = [];
+    result.problems = [];
+  }
+  return result;
 }
 
 export async function runCodeEvaluation() {
@@ -167,6 +173,23 @@ export async function runCodeEvaluation() {
     assert(
       initial.value.result.problems[0]?.id === "return-limit",
       "snippet did not report the behavioral defect",
+    );
+    const verdictOnly = await evaluate("verdict-only-reversed-newlines", {
+      target: { kind: "snippet", text: broken },
+      request: "仅返回逐项判断，核对返回条数约定。",
+      requirements: ["最多返回 20 条\r\n"],
+      opinions: [{ id: "limit", text: "当前实现没有限制返回条数\r\n" }],
+    });
+    assert(verdictOnly.value.status === "completed", "legal verdict-only output did not complete");
+    assert(
+      verdictOnly.value.result.problems.length === 0 &&
+        verdictOnly.value.result.summary.length === 0,
+      "fixture unexpectedly supplied detailed findings",
+    );
+    assert(
+      verdictOnly.value.result.verdicts.some((verdict) => verdict.verdict === "weak") &&
+        verdictOnly.value.result.verdicts.some((verdict) => verdict.verdict === "unmet"),
+      "negative judgments were lost",
     );
     await evaluate("files", {
       target: { kind: "files", files: [{ path: "list.js", text: broken }] },
@@ -341,6 +364,7 @@ export async function runCodeEvaluation() {
       );
     }
     console.log(initial.text);
+    console.log(verdictOnly.text);
     return {
       cases: cases.map(({ label, report }) => ({
         label,

@@ -119,6 +119,8 @@ existing verdict, measurement, calibration or gate semantics.
   `projectCodeSource` is the canonical numbered-line projection; normalization and
   evidence identity remain separate from original bytes. Comparison manifests may
   record reader-established additions/deletions; missing excerpts do not prove absence.
+  Provided requirements and opinions use the same LF/CRLF/CR line-count convention:
+  a terminal newline does not add a line, and the original text is retained.
 - `ReviewPlan.evidenceBudget` bounds final evidence projection as well as
   preparation and participates in plan identity. It does not limit the trusted
   instructions or structural metadata.
@@ -129,6 +131,8 @@ existing verdict, measurement, calibration or gate semantics.
   Illegal detail makes the attempt partial even if every verdict is legal; partial
   attempts never produce a complete measurement run. Rejected details remain in
   diagnostics/raw result rather than being silently discarded.
+  Result and measurement verdicts are compared by criterion ID, not response order;
+  verdict values, rationale and evidence references must still agree.
 - Reports bind those records and distinguish execution status from incomplete
   goals. A report identity is not calibration or delivery permission. No score,
   credential or provider SDK object belongs to these contracts.

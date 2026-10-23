@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { validateReviewExecutionV2 } from "@lorelum/judge-protocol";
 import type { ModelPort, ModelRequest } from "@lorelum/judge-runtime";
 import { type EvaluationPorts, evaluateCode } from "../src/index.js";
 
@@ -438,4 +439,86 @@ test("unresolved opinion and previous-problem references keep the overall reques
     "unresolved",
   ]);
   expect(result.value.status).toBe("partial");
+});
+
+test("criterion order does not reject complete or partial results, but changed rationale still does", async () => {
+  for (const invalidLocation of [false, true]) {
+    const model: ModelPort = {
+      async generate(request) {
+        if (request.messages[0]?.content.includes("You prepare"))
+          return { kind: "message", content: JSON.stringify(preparation) };
+        const response = evaluatedResponse(request, invalidLocation);
+        response.verdicts.reverse();
+        return { kind: "message", content: JSON.stringify(response) };
+      },
+    };
+    const result = await evaluateCode(
+      {
+        target: { kind: "snippet", text: "function list(items) { return items; }" },
+        requirements: ["最多返回 20 条"],
+      },
+      { model, method, limits: { maxContextRounds: 0 } },
+    );
+    if (!result.ok) throw new Error(JSON.stringify(result.issues));
+    expect(result.value.status).toBe(invalidLocation ? "partial" : "completed");
+    expect(
+      Object.fromEntries(
+        result.value.result?.verdicts.map((verdict) => [verdict.criterionId, verdict.verdict]) ??
+          [],
+      ),
+    ).toEqual({ behavior: "weak", "explicit-1": "unmet" });
+    if (!result.value.execution || !result.value.plan)
+      throw new Error("missing completed preparation or execution");
+    const corrupted = structuredClone(result.value.execution);
+    const verdict = corrupted.attempts[0]?.result?.verdicts[0];
+    if (!verdict) throw new Error("missing result verdict");
+    verdict.rationale = "Changed independently of the measurement.";
+    expect(validateReviewExecutionV2(corrupted, result.value.plan, result.value.source).ok).toBe(
+      false,
+    );
+  }
+});
+
+test("terminal LF, CRLF and CR in requirements and opinions do not invalidate their source ranges", async () => {
+  const model: ModelPort = {
+    async generate(request) {
+      if (request.messages[0]?.content.includes("You prepare"))
+        return { kind: "message", content: JSON.stringify(preparation) };
+      const response = evaluatedResponse(request);
+      return {
+        kind: "message",
+        content: JSON.stringify({
+          ...response,
+          followUps: [
+            {
+              id: "opinion-check",
+              reference: "opinion:limit",
+              outcome: "supported",
+              rationale: "可见实现直接返回全部元素。",
+              evidenceIds: response.verdicts[0]?.evidenceIds ?? [],
+            },
+          ],
+        }),
+      };
+    },
+  };
+  for (const ending of ["\n", "\r\n", "\r"]) {
+    const result = await evaluateCode(
+      {
+        target: { kind: "snippet", text: "function list(items) { return items; }" },
+        requirements: [`最多返回 20 条${ending}`],
+        opinions: [{ id: "limit", text: `实现未限制返回条数${ending}` }],
+      },
+      { model, method, limits: { maxContextRounds: 0 } },
+    );
+    if (!result.ok) throw new Error(JSON.stringify(result.issues));
+    expect(result.value.status).toBe("completed");
+    expect(result.value.execution?.attempts[0]?.status).toBe("completed");
+    expect(result.value.plan?.requirements[0]?.text).toBe(`最多返回 20 条${ending}`);
+    expect(
+      result.value.source.items
+        .filter((item) => item.role === "requirement" || item.role === "opinion")
+        .map((item) => item.endLine),
+    ).toEqual([1, 1]);
+  }
 });

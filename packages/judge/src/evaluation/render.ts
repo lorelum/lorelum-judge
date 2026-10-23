@@ -7,7 +7,7 @@ import type {
 } from "@lorelum/judge-protocol";
 import { CODE_STANDARDS } from "./plan.js";
 
-export const CODE_REPORT_RENDERER_VERSION = "lorelum.judge.code-report-renderer/v1";
+export const CODE_REPORT_RENDERER_VERSION = "lorelum.judge.code-report-renderer/v2";
 
 const severity = { high: "重要影响", medium: "局部影响", low: "有限影响" } as const;
 const attribution = {
@@ -25,6 +25,16 @@ const followUp = {
   resolved: "本次代码中原问题已不存在",
   persists: "原问题仍存在",
 } as const;
+
+const verdictLabels: Record<string, string> = {
+  strong: "有依据支持符合本项标准",
+  adequate: "存在有限不足",
+  weak: "存在实质问题",
+  met: "满足要求",
+  unmet: "不满足要求",
+  unknown: "无法判断",
+  insufficient: "依据不足",
+};
 
 function plain(value: string): string {
   return stripVTControlCharacters(value).replace(/\p{Cc}/gu, (character) =>
@@ -106,8 +116,23 @@ export function renderCodeEvaluation(report: CodeEvaluationReport): string {
     );
   }
   if (result !== undefined) {
+    if (
+      result.verdicts.some(
+        (verdict) =>
+          verdict.verdict === "weak" ||
+          verdict.verdict === "unmet" ||
+          verdict.verdict === "adequate",
+      )
+    )
+      lines.push("逐项判断记录了未满足的要求或具体不足，详见下方标准与要求对照。");
     for (const summary of result.summary) lines.push(plain(summary.text));
-    if (report.status === "completed" && problems.length === 0 && result.pending.length === 0) {
+    if (
+      report.status === "completed" &&
+      problems.length === 0 &&
+      result.pending.length === 0 &&
+      result.verdicts.length > 0 &&
+      result.verdicts.every((verdict) => verdict.verdict === "strong" || verdict.verdict === "met")
+    ) {
       lines.push("在本次已检查范围内，未记录有充分依据的问题；这不代表代码没有缺陷。");
     }
   }
@@ -125,6 +150,29 @@ export function renderCodeEvaluation(report: CodeEvaluationReport): string {
       `影响：${plain(problem.impact)}`,
       `依据：${plain(problem.rationale)}`,
     );
+  }
+  if (result !== undefined && result.verdicts.length > 0) {
+    lines.push("", "## 标准与要求对照", "");
+    for (const verdict of result.verdicts) {
+      const criterion = report.plan?.definition.criteria.find(
+        (entry) => entry.id === verdict.criterionId,
+      );
+      const standard = CODE_STANDARDS.find((entry) => entry.id === verdict.criterionId);
+      const label = standard?.title ?? criterion?.description ?? verdict.criterionId;
+      lines.push(
+        `- ${plain(label).trim()}：${verdictLabels[verdict.verdict] ?? plain(verdict.verdict)}`,
+        `  依据说明：${plain(verdict.rationale ?? "未提供判断说明。")}`,
+      );
+      if (verdict.evidenceIds.length > 0) {
+        const sources = verdict.evidenceIds.map((id) => {
+          const item = report.source.items.find((entry) => entry.id === id);
+          return item === undefined
+            ? "引用资料无法解析"
+            : `${sourceName(item)}${item.side === "old" ? "（修改前）" : item.side === "new" ? "（修改后）" : ""}`;
+        });
+        lines.push(`  引用资料：${sources.join("；")}`);
+      }
+    }
   }
   if (result !== undefined && result.followUps.length > 0) {
     lines.push("", "## 意见核实与问题复查", "");
@@ -186,7 +234,7 @@ export function renderCodeEvaluation(report: CodeEvaluationReport): string {
           ? "默认标准"
           : report.source.items.find((item) => item.id === criterion.source?.ref);
       lines.push(
-        `- ${plain(criterion.description)}（${typeof source === "string" ? source : source === undefined ? "明确要求" : sourceName(source)}）`,
+        `- ${plain(criterion.description).trim()}（${typeof source === "string" ? source : source === undefined ? "明确要求" : sourceName(source)}）`,
       );
     }
     for (const excluded of report.plan.excluded)

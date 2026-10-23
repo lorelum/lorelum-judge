@@ -417,10 +417,23 @@ export function validateReviewExecutionV2(
           ...(followUpReferences === undefined ? {} : { followUpReferences }),
         });
         if (!result.ok) issues.push(...prefixIssues(result.issues, `$.attempts[${index}].result`));
+        const measured = attempt.status === "completed" ? attempt.run?.verdicts : attempt.verdicts;
+        const reported = new Map(
+          attempt.result.verdicts.map((verdict) => [verdict.criterionId, verdict]),
+        );
         if (
-          JSON.stringify(
-            attempt.status === "completed" ? attempt.run?.verdicts : attempt.verdicts,
-          ) !== JSON.stringify(attempt.result.verdicts)
+          measured === undefined ||
+          measured.length !== reported.size ||
+          measured.some((verdict) => {
+            const other = reported.get(verdict.criterionId);
+            return (
+              other === undefined ||
+              verdict.verdict !== other.verdict ||
+              verdict.rationale !== other.rationale ||
+              verdict.evidenceIds.length !== other.evidenceIds.length ||
+              verdict.evidenceIds.some((id, index) => id !== other.evidenceIds[index])
+            );
+          })
         )
           issues.push(
             issue(`$.attempts[${index}].result.verdicts`, "result and measurement verdicts differ"),

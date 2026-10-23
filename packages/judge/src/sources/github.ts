@@ -93,10 +93,11 @@ export async function collectGithubSource(
   let serial = 0;
   let root: Route | undefined;
   let verifyState: (() => Promise<boolean>) | undefined;
-  const issue = (code: string, source?: string, fatal = false) => {
+  const requirementVerifiers: { source: string; verify: () => Promise<boolean> }[] = [];
+  const issue = (code: string, source?: string, fatal = false, detail?: string) => {
     snapshot.issues.push({
       code,
-      message: `GitHub source: ${code}`,
+      message: `GitHub source: ${code}${detail ? ` (${detail})` : ""}`,
       ...(source ? { source } : {}),
       ...(fatal ? { fatal: true } : {}),
     });
@@ -626,9 +627,20 @@ export async function collectGithubSource(
         snapshot.consistent = false;
         issue("source_changed", target.url);
       }
+      for (const reference of requirementVerifiers) {
+        if (!(await reference.verify())) {
+          snapshot.consistent = false;
+          issue("source_changed", reference.source);
+        }
+      }
     } catch (error) {
-      snapshot.consistent = false;
-      issue(errorCode(error), target.url);
+      const code = errorCode(error);
+      issue(
+        code === "cancelled" ? "cancelled" : "verification_unavailable",
+        target.url,
+        false,
+        code,
+      );
     }
   };
   try {
@@ -765,7 +777,11 @@ export async function collectGithubSource(
         const key = `${linkedRepo}/${linkedNumber}`;
         if (!refs.has(key)) {
           refs.add(key);
-          await issueSource(linkedRepo, linkedNumber);
+          const verify = await issueSource(linkedRepo, linkedNumber);
+          requirementVerifiers.push({
+            source: `https://github.com/${linkedRepo}/issues/${linkedNumber}`,
+            verify,
+          });
         }
       }
     }

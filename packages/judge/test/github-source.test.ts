@@ -101,10 +101,28 @@ test("fork PR uses merge-base trees, recovers a truncated tree and binds inline 
       (item) => item.role === "requirement" && item.text.includes("Must preserve the boundary"),
     ),
   ).toBe(true);
+  routes["/repos/up/project/issues/7"] = {
+    title: "Requirement",
+    body: "New incompatible requirement",
+  };
+  await session.verify();
+  expect(session.snapshot.consistent).toBe(false);
+  expect(
+    session.snapshot.issues.some(
+      (item) =>
+        item.code === "source_changed" && item.source === "https://github.com/up/project/issues/7",
+    ),
+  ).toBe(true);
   routes["/repos/up/project/pulls/3"] = { ...pull, head: { sha: "e".repeat(40) } };
   await session.verify();
   expect(session.snapshot.consistent).toBe(false);
-  expect(session.snapshot.issues.some((item) => item.code === "source_changed")).toBe(true);
+  expect(
+    session.snapshot.issues.some(
+      (item) =>
+        item.code === "source_changed" &&
+        item.source === "https://github.com/up/project/pull/3#discussion_r44",
+    ),
+  ).toBe(true);
   expect(observed.some((path) => path.includes("/pulls/3/files"))).toBe(false);
 });
 
@@ -357,4 +375,44 @@ test("a requirement source cannot implicitly promote discussion into a mandatory
   expect(
     result.value.source.items.find((item) => item.path.endsWith("#issuecomment-8"))?.role,
   ).toBe("opinion");
+});
+
+test("unavailable GitHub verification preserves uncertainty until an actual ref mismatch is observed", async () => {
+  const commit = "a".repeat(40);
+  const content = blob("export const value = 1;\n");
+  const routes: Record<string, unknown> = {
+    "/repos/up/project/commits/main": { sha: commit },
+    [`/repos/up/project/git/trees/${commit}?recursive=1`]: {
+      tree: [{ path: "a.ts", type: "blob", mode: "100644", sha: content.sha, size: content.size }],
+      truncated: false,
+    },
+    [`/repos/up/project/git/blobs/${content.sha}`]: content,
+  };
+  const underlying = http(routes);
+  let unavailable = false;
+  const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+    if (unavailable && url.pathname === "/repos/up/project/commits/main")
+      return new Response("Service unavailable", { status: 503 });
+    return underlying(input, init);
+  }) as typeof globalThis.fetch;
+  const session = await collectGithubSource(
+    { kind: "github", url: "https://github.com/up/project/blob/main/a.ts" },
+    { github: { fetch } },
+  );
+  expect(session.snapshot.issues).toEqual([]);
+  unavailable = true;
+  await session.verify();
+  expect(session.snapshot.consistent).toBe(true);
+  expect(session.snapshot.issues.some((item) => item.code === "verification_unavailable")).toBe(
+    true,
+  );
+  expect(session.snapshot.issues.some((item) => item.code === "source_changed")).toBe(false);
+  unavailable = false;
+  await session.verify();
+  expect(session.snapshot.consistent).toBe(true);
+  routes["/repos/up/project/commits/main"] = { sha: "b".repeat(40) };
+  await session.verify();
+  expect(session.snapshot.consistent).toBe(false);
+  expect(session.snapshot.issues.some((item) => item.code === "source_changed")).toBe(true);
 });
