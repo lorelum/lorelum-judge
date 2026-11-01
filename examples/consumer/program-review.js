@@ -1,7 +1,7 @@
 import { executeReview } from "@lorelum/judge";
 import { frozenRubricToDefinition } from "@lorelum/judge-protocol";
 
-import { assert, evidence, frozenRubric, metVerdict } from "./shared.mjs";
+import { assert, evidence, frozenRubric, metVerdict } from "./shared.js";
 
 /**
  * Program-checker example: the caller owns the check, Judge freezes the input,

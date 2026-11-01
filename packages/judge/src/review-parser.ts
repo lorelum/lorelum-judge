@@ -16,7 +16,11 @@ export type ReviewParseResult =
 const NUMBER = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/;
 const CODE_BLOCK = /^```(?:json)?[^\S\r\n]*\r?\n([\s\S]*?)\r?\n?```$/;
 
-function parserFailure(path: string, code: string, message: string): ReviewParseResult {
+function parserFailure(
+  path: string,
+  code: string,
+  message: string,
+): { readonly ok: false; readonly issues: readonly ReviewParserIssue[] } {
   return { ok: false, issues: [{ path, code, message }] };
 }
 
@@ -172,7 +176,7 @@ class JsonReadError extends Error {
   }
 }
 
-function parseJson(text: string): ReviewParseResult {
+function readJsonObject(text: string): JsonObjectParseResult {
   const reader = new JsonReader(text);
   let value: unknown;
   try {
@@ -194,16 +198,22 @@ function parseJson(text: string): ReviewParseResult {
   if (!isRecord(value)) {
     return parserFailure("$", "invalid_shape", "the response must be one JSON object");
   }
-  const record = value;
-  for (const key of Object.keys(record)) {
-    if (key !== "verdicts") {
-      return parserFailure("$", "unknown_field", `unexpected field "${key}"`);
-    }
+  return { ok: true, value };
+}
+
+export type JsonObjectParseResult =
+  | { readonly ok: true; readonly value: Record<string, unknown> }
+  | { readonly ok: false; readonly issues: readonly ReviewParserIssue[] };
+
+export function parseReviewResponse(input: unknown): ReviewParseResult {
+  const parsed = parseJsonObject(input);
+  if (!parsed.ok) return parsed;
+  for (const key of Object.keys(parsed.value)) {
+    if (key !== "verdicts") return parserFailure("$", "unknown_field", `unexpected field "${key}"`);
   }
-  if (!Array.isArray(record.verdicts)) {
+  if (!Array.isArray(parsed.value.verdicts))
     return parserFailure("$.verdicts", "invalid_shape", "verdicts must be an array");
-  }
-  return { ok: true, verdicts: record.verdicts };
+  return { ok: true, verdicts: parsed.value.verdicts };
 }
 
 /**
@@ -212,7 +222,7 @@ function parseJson(text: string): ReviewParseResult {
  * Ambiguous wrappers, duplicate keys, and malformed JSON are refused; nothing is
  * repaired and no second model call is made.
  */
-export function parseReviewResponse(input: unknown): ReviewParseResult {
+export function parseJsonObject(input: unknown): JsonObjectParseResult {
   if (typeof input !== "string") {
     return parserFailure("$", "invalid_input", "the response must be text");
   }
@@ -221,7 +231,7 @@ export function parseReviewResponse(input: unknown): ReviewParseResult {
     return parserFailure("$", "empty_response", "the response is empty");
   }
   if (!trimmed.startsWith("```")) {
-    return parseJson(trimmed);
+    return readJsonObject(trimmed);
   }
   const block = CODE_BLOCK.exec(trimmed);
   if (block === null) {
@@ -231,5 +241,5 @@ export function parseReviewResponse(input: unknown): ReviewParseResult {
       "expected exactly one complete json or unlabelled code block and no other text",
     );
   }
-  return parseJson((block[1] ?? "").trim());
+  return readJsonObject((block[1] ?? "").trim());
 }

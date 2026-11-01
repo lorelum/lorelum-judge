@@ -88,7 +88,7 @@ export function assert(condition, message) {
  * Starts a local Chat Completions mock. The example never uses an external
  * service or a real credential.
  */
-export async function startMockModel() {
+export async function startMockModel(respond) {
   const requests = [];
   const server = createServer((request, response) => {
     let text = "";
@@ -107,7 +107,7 @@ export async function startMockModel() {
           choices: [
             {
               message: {
-                content: JSON.stringify({ verdicts: [metVerdict()] }),
+                content: JSON.stringify(respond ? respond(body) : { verdicts: [metVerdict()] }),
               },
               finish_reason: "stop",
             },

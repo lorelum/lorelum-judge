@@ -2,7 +2,7 @@ import { executeReview } from "@lorelum/judge";
 import { frozenRubricToDefinition } from "@lorelum/judge-protocol";
 import { createOpenAiCompatibleModel, describeEndpoint } from "@lorelum/provider-openai-compatible";
 
-import { assert, evidence, frozenRubric, startMockModel } from "./shared.mjs";
+import { assert, evidence, frozenRubric, startMockModel } from "./shared.js";
 
 /**
  * Mock LLM example: a real local HTTP Chat Completions request is driven through

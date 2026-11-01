@@ -1,0 +1,71 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:review-execution:v2",
+  "title": "ReviewExecutionV2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "inputIdentity",
+    "definitionIdentity",
+    "instrumentIdentity",
+    "sourceIdentity",
+    "planIdentity",
+    "instrument",
+    "plannedCount",
+    "attempts"
+  ],
+  "properties": {
+    "schema": { "const": "lorelum.judge.review-execution/v2" },
+    "id": { "type": "string", "minLength": 1 },
+    "inputIdentity": { "$ref": "urn:lorelum:judge:code-evaluation:v1#/$defs/identity" },
+    "definitionIdentity": { "$ref": "urn:lorelum:judge:code-evaluation:v1#/$defs/identity" },
+    "instrumentIdentity": { "$ref": "urn:lorelum:judge:code-evaluation:v1#/$defs/identity" },
+    "sourceIdentity": { "$ref": "urn:lorelum:judge:code-evaluation:v1#/$defs/identity" },
+    "planIdentity": { "$ref": "urn:lorelum:judge:code-evaluation:v1#/$defs/identity" },
+    "instrument": { "$ref": "urn:lorelum:judge:instrument-profile:v2" },
+    "plannedCount": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "shownLines": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "uniqueItems": true,
+        "items": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "followUpReferences": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "attempts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "index", "status"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "index": { "type": "integer", "minimum": 0 },
+          "status": { "enum": ["completed", "partial", "failed", "cancelled", "not_started"] },
+          "startedAt": { "$ref": "urn:lorelum:judge:review-execution:v1#/definitions/timestamp" },
+          "finishedAt": { "$ref": "urn:lorelum:judge:review-execution:v1#/definitions/timestamp" },
+          "verdicts": {
+            "$ref": "urn:lorelum:judge:review-execution:v1#/definitions/attempt/properties/verdicts"
+          },
+          "issues": {
+            "$ref": "urn:lorelum:judge:review-execution:v1#/definitions/attempt/properties/issues"
+          },
+          "evidenceBundle": { "$ref": "urn:lorelum:judge:evidence-bundle:v1" },
+          "run": { "$ref": "urn:lorelum:judge:measurement-run:v2" },
+          "failure": { "$ref": "urn:lorelum:judge:review-execution:v1#/definitions/failure" },
+          "llm": { "$ref": "urn:lorelum:judge:review-execution:v1#/definitions/llm" },
+          "result": { "$ref": "urn:lorelum:judge:code-evaluation:v1#/$defs/result" },
+          "rawResult": {}
+        }
+      }
+    }
+  }
+}

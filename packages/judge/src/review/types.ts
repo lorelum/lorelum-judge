@@ -5,6 +5,8 @@ import type {
   ReviewAttempt,
   ReviewExecution,
   ReviewIssue,
+  ReviewPlan,
+  ReviewResultContext,
   ValidationIssue,
   ValidationResult,
   Verdict,
@@ -117,6 +119,7 @@ export interface PreparedReview {
   readonly instrumentIdentity: string;
   readonly evidenceIdentity: string;
   readonly id?: string;
+  readonly codeReview?: ReviewResultContext & { readonly plan: ReviewPlan };
 }
 
 export type PrepareReviewResult = ValidationResult<PreparedReview>;

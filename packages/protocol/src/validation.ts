@@ -1,9 +1,16 @@
 import { Ajv, type ErrorObject, type ValidateFunction } from "ajv";
-
+import codeEvaluationSchema from "./schemas/code-evaluation.schema.json" with { type: "json" };
 import criterionSchema from "./schemas/criterion.schema.json" with { type: "json" };
 import evidenceBundleSchema from "./schemas/evidence-bundle.schema.json" with { type: "json" };
 import evidenceItemSchema from "./schemas/evidence-item.schema.json" with { type: "json" };
+import instrumentV2Schema from "./schemas/instrument-profile-v2.schema.json" with { type: "json" };
+import definitionV2Schema from "./schemas/measurement-definition-v2.schema.json" with {
+  type: "json",
+};
 import measurementRunSchema from "./schemas/measurement-run.schema.json" with { type: "json" };
+import runV2Schema from "./schemas/measurement-run-v2.schema.json" with { type: "json" };
+import executionV1Schema from "./schemas/review-execution.schema.json" with { type: "json" };
+import codeExecutionSchema from "./schemas/review-execution-v2.schema.json" with { type: "json" };
 import verdictSchema from "./schemas/verdict.schema.json" with { type: "json" };
 
 export type IssueCode =
@@ -278,6 +285,12 @@ ajv.addSchema([
   evidenceItemSchema,
   evidenceBundleSchema,
   measurementRunSchema,
+  definitionV2Schema,
+  instrumentV2Schema,
+  runV2Schema,
+  executionV1Schema,
+  codeEvaluationSchema,
+  codeExecutionSchema,
 ]);
 
 /** Compiles a schema against the shared validator. */

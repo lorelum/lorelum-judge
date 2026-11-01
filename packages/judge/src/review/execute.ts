@@ -5,23 +5,29 @@ import {
   type ReviewExecution,
   validateReviewExecution,
 } from "@lorelum/judge-protocol";
-
+import type { AttemptOutcome } from "./execute-attempt.js";
 import { executeAttempt } from "./execute-attempt.js";
 import { type Assessed, aggregateFindings, reviewCompleteness } from "./findings.js";
 import { notStartedAttempt } from "./record.js";
 import type { ExecuteReviewResult, PreparedReview, ReviewPorts } from "./types.js";
 import { validation } from "./validation.js";
 
-async function runPreparedReviewInner(
+export async function collectReviewAttempts(
   prepared: PreparedReview,
   ports: ReviewPorts,
   signal?: AbortSignal,
-): Promise<ExecuteReviewResult> {
+): Promise<{
+  executionId: string;
+  attempts: ReviewAttempt[];
+  assessments: Assessed[];
+  outcomes: AttemptOutcome[];
+}> {
   const nextId = ports.nextId ?? ((prefix: string) => `${prefix}-${randomUUID()}`);
   const clock = ports.clock ?? { now: () => new Date() };
   const executionId = prepared.id ?? nextId("review");
   const attempts: ReviewAttempt[] = [];
   const assessments: Assessed[] = [];
+  const outcomes: AttemptOutcome[] = [];
   const activeSignal = signal ?? new AbortController().signal;
 
   for (let index = 0; index < prepared.repetitions; index += 1) {
@@ -41,9 +47,23 @@ async function runPreparedReviewInner(
       clock,
     );
     attempts.push(outcome.attempt);
+    outcomes.push(outcome);
     if (outcome.assessed !== undefined) assessments.push(outcome.assessed);
   }
 
+  return { executionId, attempts, assessments, outcomes };
+}
+
+async function runPreparedReviewInner(
+  prepared: PreparedReview,
+  ports: ReviewPorts,
+  signal?: AbortSignal,
+): Promise<ExecuteReviewResult> {
+  const { executionId, attempts, assessments } = await collectReviewAttempts(
+    prepared,
+    ports,
+    signal,
+  );
   const first = attempts[0];
   if (first === undefined) {
     return { ok: false, issues: [validation("$.attempts", "a review needs at least one attempt")] };

@@ -1,0 +1,287 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:code-evaluation:v1",
+  "title": "CodeEvaluationRecord",
+  "anyOf": [
+    { "$ref": "#/$defs/source" },
+    { "$ref": "#/$defs/plan" },
+    { "$ref": "#/$defs/result" },
+    { "$ref": "#/$defs/report" }
+  ],
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9_.:-]+$" },
+    "identity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "text": { "type": "string", "minLength": 1 },
+    "ids": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+    "strings": { "type": "array", "items": { "type": "string" } },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "$ref": "#/$defs/text" },
+        "message": { "$ref": "#/$defs/text" },
+        "source": { "type": "string" },
+        "fatal": { "type": "boolean" }
+      }
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "role",
+        "path",
+        "side",
+        "version",
+        "contentIdentity",
+        "text",
+        "startLine",
+        "endLine",
+        "complete",
+        "provenance"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "role": { "enum": ["target", "context", "requirement", "opinion"] },
+        "path": { "$ref": "#/$defs/text" },
+        "side": { "enum": ["current", "old", "new"] },
+        "version": { "$ref": "#/$defs/text" },
+        "contentIdentity": { "$ref": "#/$defs/identity" },
+        "text": { "type": "string" },
+        "startLine": { "type": "integer", "minimum": 1 },
+        "endLine": { "type": "integer", "minimum": 0 },
+        "complete": { "type": "boolean" },
+        "provenance": { "enum": ["provided", "local", "git", "github", "patch"] }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "items",
+        "issues",
+        "discovered",
+        "omitted",
+        "comparisons",
+        "consistent"
+      ],
+      "properties": {
+        "schema": { "const": "lorelum.judge.source-snapshot/v1" },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/item" } },
+        "issues": { "type": "array", "items": { "$ref": "#/$defs/issue" } },
+        "discovered": { "$ref": "#/$defs/strings" },
+        "omitted": { "$ref": "#/$defs/strings" },
+        "comparisons": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "kind", "base", "head"],
+            "properties": {
+              "source": { "$ref": "#/$defs/text" },
+              "kind": { "$ref": "#/$defs/text" },
+              "base": { "$ref": "#/$defs/text" },
+              "head": { "$ref": "#/$defs/text" },
+              "mergeBase": { "$ref": "#/$defs/text" },
+              "addedPaths": { "$ref": "#/$defs/strings" },
+              "deletedPaths": { "$ref": "#/$defs/strings" }
+            }
+          }
+        },
+        "consistent": { "type": "boolean" }
+      }
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["itemId", "startLine", "endLine"],
+      "properties": {
+        "itemId": { "$ref": "#/$defs/id" },
+        "startLine": { "type": "integer", "minimum": 1 },
+        "endLine": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "verdicts", "summary", "problems", "pending", "followUps"],
+      "properties": {
+        "schema": { "const": "lorelum.judge.review-result/v2" },
+        "verdicts": { "type": "array", "items": { "$ref": "urn:lorelum:judge:verdict:v1" } },
+        "summary": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["text", "criterionIds", "problemIds", "evidenceIds"],
+            "properties": {
+              "text": { "$ref": "#/$defs/text" },
+              "criterionIds": { "$ref": "#/$defs/ids" },
+              "problemIds": { "$ref": "#/$defs/ids" },
+              "evidenceIds": { "$ref": "#/$defs/ids" }
+            }
+          }
+        },
+        "problems": { "type": "array", "items": { "$ref": "#/$defs/problem" } },
+        "pending": { "type": "array", "items": { "$ref": "#/$defs/pending" } },
+        "followUps": { "type": "array", "items": { "$ref": "#/$defs/followUp" } }
+      }
+    },
+    "pending": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "criterionId", "question", "reason", "evidenceIds"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "criterionId": { "$ref": "#/$defs/id" },
+        "question": { "$ref": "#/$defs/text" },
+        "reason": { "$ref": "#/$defs/text" },
+        "evidenceIds": { "$ref": "#/$defs/ids" }
+      }
+    },
+    "followUp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "reference", "outcome", "rationale", "evidenceIds"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "reference": { "$ref": "#/$defs/text" },
+        "outcome": {
+          "enum": ["supported", "conditional", "unsupported", "unresolved", "resolved", "persists"]
+        },
+        "rationale": { "$ref": "#/$defs/text" },
+        "evidenceIds": { "$ref": "#/$defs/ids" }
+      }
+    },
+    "problem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "criterionId",
+        "title",
+        "severity",
+        "condition",
+        "impact",
+        "rationale",
+        "evidenceIds",
+        "locations",
+        "attribution"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "criterionId": { "$ref": "#/$defs/id" },
+        "title": { "$ref": "#/$defs/text" },
+        "severity": { "enum": ["high", "medium", "low"] },
+        "condition": { "$ref": "#/$defs/text" },
+        "impact": { "$ref": "#/$defs/text" },
+        "rationale": { "$ref": "#/$defs/text" },
+        "evidenceIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" },
+          "minItems": 1
+        },
+        "locations": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/location" } },
+        "attribution": {
+          "enum": ["introduced", "amplified", "pre_existing", "undetermined", "not_applicable"]
+        }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "request",
+        "task",
+        "standardsVersion",
+        "definition",
+        "sourceIdentity",
+        "requirements",
+        "excluded",
+        "focus"
+      ],
+      "properties": {
+        "schema": { "const": "lorelum.judge.review-plan/v1" },
+        "request": { "$ref": "#/$defs/text" },
+        "task": { "enum": ["inspect", "overview", "change", "requirements", "verify", "recheck"] },
+        "standardsVersion": { "$ref": "#/$defs/text" },
+        "definition": { "$ref": "urn:lorelum:judge:measurement-definition:v2" },
+        "sourceIdentity": { "$ref": "#/$defs/identity" },
+        "evidenceBudget": { "type": "integer", "minimum": 1, "maximum": 200000 },
+        "requirements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "text", "source"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "text": { "$ref": "#/$defs/text" },
+              "source": { "$ref": "#/$defs/text" }
+            }
+          }
+        },
+        "excluded": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "reason"],
+            "properties": { "id": { "$ref": "#/$defs/id" }, "reason": { "$ref": "#/$defs/text" } }
+          }
+        },
+        "focus": { "$ref": "#/$defs/strings" }
+      }
+    },
+    "preparation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "status"],
+      "properties": {
+        "stage": { "$ref": "#/$defs/text" },
+        "status": { "enum": ["completed", "failed", "cancelled"] },
+        "requestIdentity": { "$ref": "#/$defs/identity" },
+        "responseIdentity": { "$ref": "#/$defs/identity" },
+        "model": { "$ref": "#/$defs/text" },
+        "error": { "$ref": "#/$defs/text" }
+      }
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "status",
+        "request",
+        "source",
+        "sourceIdentity",
+        "preparation",
+        "issues",
+        "limitations",
+        "rendererVersion"
+      ],
+      "properties": {
+        "schema": { "const": "lorelum.judge.code-evaluation-report/v1" },
+        "id": { "$ref": "#/$defs/id" },
+        "status": { "enum": ["completed", "partial", "failed", "cancelled"] },
+        "request": { "$ref": "#/$defs/text" },
+        "source": { "$ref": "#/$defs/source" },
+        "sourceIdentity": { "$ref": "#/$defs/identity" },
+        "plan": { "$ref": "#/$defs/plan" },
+        "planIdentity": { "$ref": "#/$defs/identity" },
+        "execution": { "$ref": "urn:lorelum:judge:review-execution:v2" },
+        "preparation": { "type": "array", "items": { "$ref": "#/$defs/preparation" } },
+        "result": { "$ref": "#/$defs/result" },
+        "issues": { "type": "array", "items": { "$ref": "#/$defs/issue" } },
+        "limitations": { "$ref": "#/$defs/strings" },
+        "previousReportIdentity": { "$ref": "#/$defs/identity" },
+        "rendererVersion": { "$ref": "#/$defs/text" }
+      }
+    }
+  }
+}

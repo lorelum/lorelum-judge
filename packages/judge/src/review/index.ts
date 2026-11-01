@@ -5,6 +5,8 @@ import type { ExecuteReviewInput, ExecuteReviewResult, ReviewPorts } from "./typ
 import { validation } from "./validation.js";
 
 export type { ValidationResult } from "@lorelum/judge-protocol";
+export { parseJsonObject } from "../review-parser.js";
+export * from "./code-execute.js";
 export { runPreparedReview } from "./execute.js";
 export { reviewCompleteness } from "./findings.js";
 export { prepareReview } from "./input.js";

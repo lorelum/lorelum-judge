@@ -26,7 +26,7 @@ const modulesDirectory = join(temporaryRoot, "node_modules/@lorelum");
 try {
   mkdirSync(consumerDirectory, { recursive: true });
   for (const file of readdirSync(sourceDirectory)) {
-    if (file.endsWith(".mjs")) {
+    if (file.endsWith(".js") || file === "package.json") {
       copyFileSync(join(sourceDirectory, file), join(consumerDirectory, file));
     }
   }
@@ -53,7 +53,7 @@ try {
     );
   }
 
-  execFileSync("node", [join(consumerDirectory, "run.mjs")], {
+  execFileSync("node", [join(consumerDirectory, "run.js")], {
     cwd: temporaryRoot,
     stdio: "inherit",
   });

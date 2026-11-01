@@ -1,7 +1,7 @@
 import { evaluateReviewGate } from "@lorelum/judge";
 
-import { runProgramReview } from "./program-review.mjs";
-import { assert, policyFor } from "./shared.mjs";
+import { runProgramReview } from "./program-review.js";
+import { assert, policyFor } from "./shared.js";
 
 /**
  * Execution-to-gate example: the complete review is projected onto #9 semantics.
