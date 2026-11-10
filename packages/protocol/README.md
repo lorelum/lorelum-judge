@@ -140,6 +140,24 @@ existing verdict, measurement, calibration or gate semantics.
   report; `review-execution-v2.schema.json` binds their execution. Existing v1
   review and gate consumers retain their schemas and defaults.
 
+## Code suggestion records
+
+`CodeSuggestionResult/v1` and `CodeSuggestionReport/v1` are separate from code
+evaluation and do not change findings, measurement, gates, or execution authority.
+Suggestions bind selected problem IDs, their evidence, and source locations;
+suspected omissions require additional evaluation and are not findings. Categories
+are advice rather than approval. Checks and examples are proposed and unexecuted.
+Reports retain identities, selected problems, model method and available response
+facts, plus explicit gaps and limitations.
+
+`validateCodeSuggestionResult` requires the selected problems, snapshot, available
+evidence IDs and complete lines actually visible to the model. It validates structure,
+references and visibility, not the semantic correctness of advice or whether the
+snapshot still matches a workspace. `validateCodeSuggestionReport` additionally
+checks status, selection and coverage. The caller must validate evaluation and
+snapshot consistency and construct the visibility context from the actual projection.
+The record schemas are defined in `code-suggestion.schema.json`.
+
 ## Calibration and gate records
 
 Calibration datasets, reports, and user-facing gate decisions are new v1 records.

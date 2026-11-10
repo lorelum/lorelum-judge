@@ -1,4 +1,5 @@
 import { runCodeEvaluation } from "./code-evaluation.js";
+import { runCodeSuggestions } from "./code-suggestions.js";
 import { runMockLlmReview } from "./mock-llm-review.js";
 import { runProgramReview } from "./program-review.js";
 import { runReviewToGate } from "./review-to-gate.js";
@@ -20,3 +21,5 @@ console.log(
 
 const evaluation = await runCodeEvaluation();
 console.log(`code evaluation: ${JSON.stringify(evaluation)}`);
+const suggestions = await runCodeSuggestions();
+console.log(`code suggestions: ${JSON.stringify(suggestions)}`);

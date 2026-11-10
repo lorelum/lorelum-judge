@@ -29,6 +29,9 @@ or experimental module flags.
   确定性模型只识别示例中的条数问题，不代表真实模型的评价质量。
   另覆盖仅有负面逐项判断、verdict 逆序以及要求／意见末尾 CRLF；实际打印对应中文报告，
   不通过固定措辞断言替代观察。
+- `code-suggestions.js`: 先通过公开 API 生成评价，再使用该评价和本地 HTTP 模型替身
+  生成并打印建议；核对评价不变及单次建议请求。示例中的建议和检查均未执行，
+  确定性替身不证明真实模型的建议质量。
 
 The policy in these examples is illustrative. It is not a calibration artifact
 and proves nothing about model quality; synthetic calibration remains a

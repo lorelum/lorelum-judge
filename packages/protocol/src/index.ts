@@ -4,6 +4,7 @@ export * from "./code-evaluation.js";
 export * from "./code-evaluation-assessment.js";
 export * from "./code-evaluation-completion.js";
 export * from "./code-evaluation-validation.js";
+export * from "./code-suggestion.js";
 export * from "./criterion.js";
 export * from "./enforcement.js";
 export * from "./evidence.js";
