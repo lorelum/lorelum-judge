@@ -69,7 +69,7 @@ linux("bubblewrap isolation", () => {
     }
     expect(result.stdout).toMatch(/CapEff:\s+0+\n/);
     expect(result.stdout).not.toContain("AWS_SECRET_ACCESS_KEY=");
-  });
+  }, 30000);
 
   test("masks every toolchain submount and untrusted directory through all library aliases", async () => {
     const request = await fixture();

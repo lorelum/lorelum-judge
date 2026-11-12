@@ -34,5 +34,5 @@ jobs:
           sudo unshare --mount --propagation private /usr/bin/bash -c '
             set -e
             mount -t tmpfs -o mode=0755 tmpfs /usr/local
-            exec runuser -u "$1" -- env "PATH=$2" bun run validate
+            exec runuser -u "$1" -- env "PATH=$2" JUDGE_SANDBOX_DIAG=1 bun run validate
           ' -- "$(id -un)" "$PATH"
