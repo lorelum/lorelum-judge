@@ -6,6 +6,34 @@ collection, judgment, calibration, and gate decisions.
 It consumes `@lorelum/judge-protocol` and `@lorelum/judge-runtime`. It does not own
 provider SDKs, framework orchestration, or the engineering implementation workflow.
 
+## 评价后的代码建议
+
+`generateCodeSuggestions({ evaluation, problemIds?, source? }, ports)` 独立消费已有
+`evaluateCode` 报告，不重新评价；省略 `problemIds` 代表全部已有问题，显式空数组、
+重复或未知 ID 是输入错误。`source` 可提供待核对的代码快照，省略时使用报告中保存的
+快照；逐项比较实际内容、位置、版本及关联，不把该快照当成当前工作区或 PR。
+
+```ts
+import { generateCodeSuggestions } from "@lorelum/judge";
+
+// evaluation 是此前 evaluateCode 返回的 value；model 和 method 由调用方配置。
+const advice = await generateCodeSuggestions(
+  { evaluation, problemIds: ["problem-id"] },
+  { model, method, allowModelDisclosure: true },
+);
+if (!advice.ok) throw new Error(JSON.stringify(advice.issues));
+console.log(advice.text);
+console.log(advice.value.status); // completed、partial、failed 或 cancelled
+```
+
+读取器取得的内容再次发送给模型须显式授权 `allowModelDisclosure`，直接提供的文本不需要。
+每次最多一次模型调用；可使用 `signal`、`timeoutMs` 取消或限制调用，`evidenceBudget`
+控制模型可见材料。版本不一致、材料不全、问题未覆盖、模型失败或非法引用均保留为缺口
+或失败；原评价为 partial 时保留其限制。`renderCodeSuggestions(report, source)` 可对
+记录和原快照重新生成中文文本，不调用模型。建议分类不是 gate 或修改授权；示例和检查
+均未执行。不会读取文件、执行命令、应用修改、自动重评或启动后续工作流；模型的自然语言
+质量不能仅靠结构验证保证。
+
 ## 代码评价
 
 `evaluateCode(input, ports)` 接受普通代码评价请求，自行取得必要上下文，返回结构化报告

@@ -9,7 +9,7 @@ import { exampleGitHubSource } from "./github-evaluation-source.js";
 import { assert, startMockModel } from "./shared.js";
 
 /** A deliberately narrow deterministic evaluator, not a claim about real model quality. */
-function respondToEvaluation(body) {
+export function respondToEvaluation(body) {
   const system = body.messages.find((message) => message.role === "system")?.content ?? "";
   const user = body.messages.find((message) => message.role === "user")?.content ?? "";
   const materials = [

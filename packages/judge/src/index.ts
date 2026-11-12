@@ -1,4 +1,5 @@
 export * from "./calibration.js";
+export * from "./code-suggestions.js";
 export * from "./evaluation/index.js";
 export * from "./gate.js";
 export * from "./prompt-compiler.js";
