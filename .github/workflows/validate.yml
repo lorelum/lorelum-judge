@@ -28,6 +28,9 @@ jobs:
       # container permits user namespaces for the actual bubblewrap tests;
       # it receives no Docker socket, credentials, or elevated capabilities.
       - run: docker build -f .github/workflows/validate.Dockerfile -t lorelum-judge-validate .github/workflows
+      # The disposable hosted runner restricts unprivileged user namespaces.
+      # The mount-escape regression needs unshare as well as bubblewrap.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Run complete validation in isolated Linux environment
         run: |
           node_bin="$(dirname "$(command -v node)")"

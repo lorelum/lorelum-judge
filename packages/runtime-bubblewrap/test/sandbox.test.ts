@@ -311,7 +311,7 @@ linux("bubblewrap isolation", () => {
       signal: controller.signal,
       args: [
         "-c",
-        "/usr/bin/setsid /usr/bin/bash -c 'echo started > /work/allowed/started; sleep 1; echo escaped > /work/allowed/late' & wait",
+        "/usr/bin/setsid /usr/bin/bash -c 'echo started > /work/allowed/started; while [ ! -e /work/allowed/gate ]; do sleep 0.05; done; echo escaped > /work/allowed/late' & wait",
       ],
     });
     await Promise.race([
@@ -325,6 +325,7 @@ linux("bubblewrap isolation", () => {
     const cancelled = await pending;
     expect(cancelled.status).toBe("cancelled");
     expect(await Bun.file(path.join(request.root, "allowed", "started")).exists()).toBe(true);
+    await writeFile(path.join(request.root, "allowed", "gate"), "release");
     // Real time is essential to exercise cleanup of a separate Linux process.
     await Bun.sleep(1200);
     expect(await Bun.file(path.join(request.root, "allowed", "late")).exists()).toBe(false);
