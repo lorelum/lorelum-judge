@@ -15,6 +15,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22.21.0
@@ -22,4 +24,23 @@ jobs:
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
-      - run: bun run validate
+      # A clean toolchain avoids runner-owned files under /usr. The disposable
+      # container permits user namespaces for the actual bubblewrap tests;
+      # it receives no Docker socket, credentials, or elevated capabilities.
+      - run: docker build -f .github/workflows/validate.Dockerfile -t lorelum-judge-validate .github/workflows
+      - name: Run complete validation in isolated Linux environment
+        run: |
+          node_bin="$(dirname "$(command -v node)")"
+          bun_bin="$(dirname "$(command -v bun)")"
+          docker run --rm \
+            --security-opt apparmor=unconfined \
+            --security-opt seccomp=unconfined \
+            --security-opt systempaths=unconfined \
+            --user "$(id -u):$(id -g)" \
+            --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            --volume "$node_bin:$node_bin:ro" \
+            --volume "$bun_bin:$bun_bin:ro" \
+            --workdir "$GITHUB_WORKSPACE" \
+            --env HOME=/tmp \
+            --env "PATH=$bun_bin:$node_bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+            lorelum-judge-validate bun run validate
