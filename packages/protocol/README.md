@@ -1,5 +1,41 @@
 # @lorelum/judge-protocol
 
+## Controlled workflow records
+
+`WorkflowWorkspace`, `WorkflowAuthorization`, `WorkflowExecution`, `WorkflowEvidence`, and
+`WorkflowReport` are versioned data records. Their corresponding `validateWorkflow...`
+functions validate each record and `workflow...Identity` hashes the complete validated record.
+`validateWorkflowRecordChain` additionally checks plan, workspace, authorization, execution,
+evidence and report identity links, plan revision, check references and completion claims.
+Identity covers the ordered record, including paths, commands, disclosure recipients, isolation,
+and limits. A changed record has a different identity. The limits record supports elapsed and
+per-command time, model calls, actions, commands and output bytes. File read, model input and
+file write byte limits are not supported; declaring them as hard limits is rejected rather than
+silently ignored.
+Workspace inventories bind the host-reported complete candidate-view identity, Git metadata
+identity and root device/inode (decimal strings), and record Git provenance and explicit
+exclusions without reading excluded content. Those identities are host-supplied, not verified
+from filesystem data by protocol validation. Authorization records bind sandbox writable and
+command-readable directories separately
+from model file access, the disclosure recipient, expiry, and a verification configuration.
+The verification identity is `identityOf("workflow-verification/v1", verification)`; its
+configuration includes check commands, environment and limits, plus the host-computed identity
+of the full review and gate configuration. A null verification and identity mean none was
+configured. These hashes bind reported data; they do not verify the host's configuration or
+authenticate the model port. The host must verify those independently.
+
+These records describe what a host reported; neither a plan confirmation nor an authorization
+record authenticates a decision or grants a capability. The host must independently enforce
+current plan eligibility, explicit authorization, revocation, expiry, budgets, disclosure and
+isolation at every side effect. In particular, validation does not establish that a sandbox
+actually provides isolation, that evidence was independently collected, or that a judge issued
+a quality or enforcement decision. The evidence statuses preserve failed, cancelled, timed out,
+truncated, unavailable and not-started checks rather than treating missing evidence as success.
+If execution stops before a candidate exists, evidence and report retain a null candidate identity;
+such a report cannot be enforcement eligible. Reports keep quality, check completeness and
+enforcement eligibility separate.
+
+
 Owns versioned records that cross process, package, repository, or persistence
 boundaries. The package contains canonical primitives and contract schemas only.
 

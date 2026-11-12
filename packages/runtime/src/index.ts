@@ -6,4 +6,5 @@ export * from "./ports.js";
 export * from "./reference-runtime.js";
 export * from "./run.js";
 export * from "./runtime.js";
+export * from "./sandbox.js";
 export * from "./tools.js";

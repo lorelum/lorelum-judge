@@ -54,12 +54,14 @@ export async function runWorkflowPlanning() {
     },
   };
   const signal = new AbortController().signal;
-  const first = await session.generate({ model, runId: "initial", signal });
+  const disclosureIdentity = session.grantModelDisclosure(model);
+  const first = await session.generate({ model, runId: "initial", signal, disclosureIdentity });
   assert(first.ok && !first.value.eligible, "initial plan must await confirmation");
   const revision = await session.generate({
     model,
     runId: "revision",
     signal,
+    disclosureIdentity,
     instructions: "使用格式化 JSON",
   });
   assert(revision.ok, "revised plan must be generated");

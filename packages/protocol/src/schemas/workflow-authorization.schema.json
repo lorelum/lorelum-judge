@@ -1,0 +1,132 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:workflow-authorization:v1",
+  "title": "WorkflowAuthorization",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "planIdentity",
+    "planRevision",
+    "workspaceIdentity",
+    "readPaths",
+    "writePaths",
+    "writablePaths",
+    "commandReadPaths",
+    "commands",
+    "disclosures",
+    "modelRecipient",
+    "expiresAt",
+    "verification",
+    "verificationIdentity",
+    "isolation",
+    "limits",
+    "decision",
+    "decisionRef"
+  ],
+  "properties": {
+    "schema": { "const": "workflow-authorization/v1" },
+    "planIdentity": { "$ref": "#/definitions/identity" },
+    "planRevision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "workspaceIdentity": { "$ref": "#/definitions/identity" },
+    "readPaths": { "$ref": "#/definitions/strings" },
+    "writePaths": { "$ref": "#/definitions/strings" },
+    "writablePaths": { "$ref": "#/definitions/strings" },
+    "commandReadPaths": { "$ref": "#/definitions/strings" },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["executable", "args", "cwd"],
+        "properties": {
+          "executable": { "type": "string", "minLength": 1 },
+          "args": { "type": "array", "items": { "type": "string" } },
+          "cwd": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "disclosures": { "$ref": "#/definitions/strings" },
+    "modelRecipient": { "type": ["string", "null"], "minLength": 1 },
+    "expiresAt": { "type": ["string", "null"], "minLength": 1 },
+    "verificationIdentity": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+    "verification": { "anyOf": [{ "type": "null" }, { "$ref": "#/definitions/verification" }] },
+    "isolation": { "type": "string", "minLength": 1 },
+    "limits": { "$ref": "#/definitions/limits" },
+    "decision": { "enum": ["approved", "denied"] },
+    "decisionRef": { "type": "string", "minLength": 1 }
+  },
+  "definitions": {
+    "identity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "strings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "checks", "reviewConfigurationIdentity"],
+      "properties": {
+        "schema": { "const": "workflow-verification/v1" },
+        "reviewConfigurationIdentity": {
+          "type": ["string", "null"],
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "executable",
+              "args",
+              "cwd",
+              "version",
+              "environmentIdentity",
+              "timeoutMs",
+              "maxOutputBytes",
+              "readPaths"
+            ],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "executable": { "type": "string", "minLength": 1 },
+              "args": { "type": "array", "items": { "type": "string" } },
+              "cwd": { "type": "string", "minLength": 1 },
+              "version": { "type": ["string", "null"], "minLength": 1 },
+              "environmentIdentity": {
+                "type": ["string", "null"],
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "timeoutMs": { "$ref": "#/definitions/count" },
+              "maxOutputBytes": { "$ref": "#/definitions/count" },
+              "readPaths": { "$ref": "#/definitions/strings" }
+            }
+          }
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "totalTimeMs",
+        "commandTimeMs",
+        "modelCalls",
+        "actions",
+        "commands",
+        "outputBytes"
+      ],
+      "properties": {
+        "totalTimeMs": { "$ref": "#/definitions/count" },
+        "commandTimeMs": { "$ref": "#/definitions/count" },
+        "modelCalls": { "$ref": "#/definitions/count" },
+        "actions": { "$ref": "#/definitions/count" },
+        "commands": { "$ref": "#/definitions/count" },
+        "outputBytes": { "$ref": "#/definitions/count" }
+      }
+    },
+    "count": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+  }
+}
