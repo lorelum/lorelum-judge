@@ -135,7 +135,6 @@ async function runChecked(
     "ALL",
     "--new-session",
     "--die-with-parent",
-    "--as-pid-1",
     "--clearenv",
     "--setenv",
     "PATH",
@@ -222,8 +221,8 @@ async function runChecked(
     const terminate = (reason: NonNullable<typeof stop>): void => {
       if (stop) return;
       stop = reason;
-      // --die-with-parent also kills the sandbox process even after setsid();
-      // --as-pid-1 makes the kernel reap all remaining namespace descendants.
+      // Bubblewrap's PID 1 reaper owns namespace cleanup, including children
+      // that create a new session.
       if (child.pid) {
         try {
           process.kill(-child.pid, "SIGKILL");
