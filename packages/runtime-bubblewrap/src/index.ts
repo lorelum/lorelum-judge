@@ -227,7 +227,8 @@ async function runChecked(
       if (child.pid) {
         try {
           process.kill(-child.pid, "SIGKILL");
-          if (process.env.JUDGE_SANDBOX_DIAG === "1") console.error("sandbox kill", child.pid, reason);
+          if (process.env.JUDGE_SANDBOX_DIAG === "1")
+            console.error("sandbox kill", child.pid, reason);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ESRCH") reject(error);
         }
