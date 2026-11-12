@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:workflow-decision:v1",
+  "title": "WorkflowDecision",
+  "description": "A host-reported decision; the record does not authenticate its origin or grant operation permissions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "planId", "revision", "planIdentity", "action", "hostDecisionRef"],
+  "properties": {
+    "schema": { "const": "workflow-decision/v1" },
+    "planId": { "type": "string", "minLength": 1 },
+    "revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "planIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "action": { "enum": ["confirm", "revoke", "invalidate"] },
+    "hostDecisionRef": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Host-controlled audit event reference; not proof of identity or authorization."
+    }
+  }
+}

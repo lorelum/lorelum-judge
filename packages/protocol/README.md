@@ -36,6 +36,29 @@ JSON Schemas in `src/schemas` are the authority; TypeScript types in
   example `$.anchors[1].verdict`. `validateVerdict` validates its criterion first
   and reports problems with it as `invalid_criterion`.
 
+## Workflow planning records
+
+`WorkflowPlan` (`workflow-plan/v1`) records a task contract, source materials,
+goal, scope, steps, checks, non-goals, missing materials and unresolved conflicts.
+Each source has an id, kind, locator, version, content and availability status.
+Unavailable or truncated sources may be recorded, but an acceptance criterion
+must refer to an available source with nonempty content. Source IDs, acceptance
+IDs, step IDs and check IDs are unique within their respective collections.
+Every acceptance criterion must be referenced by a step and a check; references
+in steps, checks and conflicts must resolve. `validateWorkflowPlan` validates
+these invariants as well as the underlying task contract. Conflicts remain
+valid plan data, not a confirmation.
+
+`workflowPlanIdentity` hashes the entire validated plan, including source
+locator, version, content and status, and array order. Any change requires a
+new confirmation. `WorkflowDecision` (`workflow-decision/v1`) identifies a plan
+revision and identity, an action and a host audit event reference;
+`validateWorkflowDecision` checks its shape only. The host is responsible for
+authenticating and recording the user's decision: neither a decision record nor
+its reference proves identity or grants permission to execute, modify files,
+access credentials, install, use the network, or deliver. Plan confirmation
+must not proceed while conflicts remain unresolved.
+
 ## Measurement
 
 - `MeasurementDefinition` is a set of criteria. `InstrumentProfile` declares the

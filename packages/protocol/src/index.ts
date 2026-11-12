@@ -19,3 +19,4 @@ export * from "./rubric.js";
 export * from "./task-contract.js";
 export type { IssueCode, ValidationIssue, ValidationResult } from "./validation.js";
 export { SHA256_IDENTITY, snapshot } from "./validation.js";
+export * from "./workflow-plan.js";

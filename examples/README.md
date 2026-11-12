@@ -32,6 +32,8 @@ or experimental module flags.
 - `code-suggestions.js`: 先通过公开 API 生成评价，再使用该评价和本地 HTTP 模型替身
   生成并打印建议；核对评价不变及单次建议请求。示例中的建议和检查均未执行，
   确定性替身不证明真实模型的建议质量。
+- `workflow-planning.js`: 使用确定性模型生成、调整并明确确认计划；通过
+  公开工作流入口核对旧版本失效以及计划确认不授权实际操作。
 
 The policy in these examples is illustrative. It is not a calibration artifact
 and proves nothing about model quality; synthetic calibration remains a
