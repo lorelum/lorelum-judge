@@ -24,26 +24,15 @@ jobs:
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
-      # A clean toolchain avoids runner-owned files under /usr. The disposable
-      # container permits user namespaces for the actual bubblewrap tests;
-      # it receives no Docker socket, credentials, or elevated capabilities.
-      - run: docker build -f .github/workflows/validate.Dockerfile -t lorelum-judge-validate .github/workflows
-      # The disposable hosted runner restricts unprivileged user namespaces.
-      # The mount-escape regression needs unshare as well as bubblewrap.
+      # GitHub's disposable runner restricts user namespaces and ships
+      # user-writable files in /usr/local. Mask that tree only inside a private
+      # mount namespace; the actual validation runs as the unprivileged runner.
+      - run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - name: Run complete validation in isolated Linux environment
+      - name: Run complete validation with a trusted toolchain
         run: |
-          node_bin="$(dirname "$(command -v node)")"
-          bun_bin="$(dirname "$(command -v bun)")"
-          docker run --rm \
-            --security-opt apparmor=unconfined \
-            --security-opt seccomp=unconfined \
-            --security-opt systempaths=unconfined \
-            --user "$(id -u):$(id -g)" \
-            --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
-            --volume "$node_bin:$node_bin:ro" \
-            --volume "$bun_bin:$bun_bin:ro" \
-            --workdir "$GITHUB_WORKSPACE" \
-            --env HOME=/tmp \
-            --env "PATH=$bun_bin:$node_bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-            lorelum-judge-validate bun run validate
+          sudo unshare --mount --propagation private /usr/bin/bash -c '
+            set -e
+            mount -t tmpfs -o mode=0755 tmpfs /usr/local
+            exec runuser -u "$1" -- env "PATH=$2" bun run validate
+          ' -- "$(id -un)" "$PATH"

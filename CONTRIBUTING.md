@@ -10,11 +10,10 @@ bun run validate
 ```
 
 本地命令必须与 `.github/workflows/validate.yml` 使用相同的包管理器和验证入口。
-CI 在干净 Ubuntu 容器中以非 root 用户运行同一验证入口，避免托管 runner 的可写系统文件污染
-沙箱工具链。容器不挂载 Docker socket 或凭据；为实际验证 bubblewrap 用户命名空间，它关闭容器自身
-的 Docker seccomp、AppArmor 配置及默认系统路径屏蔽，并在一次性托管 runner 上允许非特权用户命名空间。
-这些设置只用于隔离测试，不适用于运行不可信任务；任务隔离仍由 bubblewrap 实现。本地 Linux 验证仍需满足
-adapter 文档中的内核和工具链要求。
+CI 在一次性托管 runner 上允许非特权用户命名空间，并仅在私有 mount namespace 中用空目录
+遮蔽 runner 提供的 `/usr/local`，避免其中可写文件进入沙箱工具链。验证以非 root 用户运行，
+不跳过隔离测试。这些 CI 设置不适用于运行不可信任务；本地 Linux 验证仍需满足 adapter 文档中的
+内核和工具链要求。
 
 ## 协作语言
 
