@@ -182,6 +182,11 @@ export async function discoverWorkspace(
     }
     if ((await git(absolute, ["ls-files", "--unmerged", "-z"], signal)).length)
       throw new Error("Unmerged Git index entries are unsupported");
+    // `git diff` trusts these index flags and can miss actual working-tree bytes.
+    // -v lowercases assume-unchanged entries; S denotes skip-worktree.
+    const indexTags = await git(absolute, ["ls-files", "-v", "-z", "--cached"], signal);
+    if (indexTags.some((entry) => entry[0] === "S" || /^[a-z] /.test(entry)))
+      throw new Error("Git index contains assume-unchanged or skip-worktree entries");
     const tracked = new Set(await git(absolute, ["ls-files", "-z", "--cached"], signal));
     const untracked = new Set(await git(absolute, ["ls-files", "-z", "--others"], signal));
     const modified = new Set([

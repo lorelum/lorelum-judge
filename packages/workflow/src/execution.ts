@@ -16,7 +16,12 @@ import {
   captureVerificationRecord,
   createExecutionRecords,
 } from "./execution-records.js";
-import { freezeCandidate, renderCandidateDiff } from "./frozen-candidate.js";
+import {
+  type BaselineFile,
+  collectFailureDiff,
+  freezeCandidate,
+  renderCandidateDiff,
+} from "./frozen-candidate.js";
 import type { PlanningSession } from "./index.js";
 import {
   cloneWorkspaceReview,
@@ -373,6 +378,8 @@ export class ControlledExecutionSession {
     const startedAt = performance.now();
     const observations: unknown[] = [];
     let root: string | null = null;
+    const baseline = new Map<string, BaselineFile>();
+    let baselineComplete = false;
     let runnerRoot: string | undefined;
     const verification = this.#verification;
     const authorizedChecker = this.#checker;
@@ -459,16 +466,21 @@ export class ControlledExecutionSession {
       }
       root = await createWorkspaceSnapshot(this.#review, guard, this.#controller.signal);
       guard();
-      const baseline = new Map<string, Uint8Array>();
       for (const file of this.#review.candidates) {
         if (file.status !== "present") continue;
         guard();
         const data = await readFile(await checkedPath(root, file.path, false));
         guard();
-        if (hash(data) !== file.contentIdentity)
+        if (
+          hash(data) !== file.contentIdentity ||
+          file.mode === null ||
+          ((await lstat(await checkedPath(root, file.path, false))).mode & 0o777) !== file.mode
+        )
           throw new Error("Private snapshot differs from reviewed workspace");
-        baseline.set(file.path, data);
+        guard();
+        baseline.set(file.path, { data, mode: file.mode });
       }
+      baselineComplete = true;
       for (;;) {
         const prompt = JSON.stringify({
           plan: plan.plan,
@@ -569,8 +581,10 @@ export class ControlledExecutionSession {
                 } finally {
                   usage.commandTimeMs += Math.ceil(performance.now() - started);
                 }
-                guard();
-                reserve("outputBytes", bytes(result.stdout) + bytes(result.stderr));
+                const outputSize = bytes(result.stdout) + bytes(result.stderr);
+                if (usage.outputBytes + outputSize > permission.limits.outputBytes)
+                  throw new Error("outputBytes budget exceeded");
+                usage.outputBytes += outputSize;
                 return result;
               },
             },
@@ -735,9 +749,12 @@ export class ControlledExecutionSession {
           } finally {
             usage.commandTimeMs += Math.ceil(performance.now() - started);
           }
-          guard();
-          reserve("outputBytes", bytes(result.stdout) + bytes(result.stderr));
+          const outputSize = bytes(result.stdout) + bytes(result.stderr);
+          if (usage.outputBytes + outputSize > permission.limits.outputBytes)
+            throw new Error("outputBytes budget exceeded");
+          usage.outputBytes += outputSize;
           observations.push({ type: "command", index: item.index, ...result });
+          guard();
           if (result.status !== "completed" || result.exitCode !== 0)
             throw new Error(`Command ${result.status}`);
         } else throw new Error("Unsupported model action");
@@ -760,11 +777,24 @@ export class ControlledExecutionSession {
             stopReason: reason,
           }
         : undefined;
+      let failureDiff: string | undefined;
+      let diffFailure: string | undefined;
+      if (root && baselineComplete) {
+        try {
+          // Reporting has its own small local-only deadline and byte/entry budgets.
+          failureDiff = await collectFailureDiff(root, baseline);
+        } catch (diffError) {
+          diffFailure =
+            diffError instanceof Error ? diffError.message : "unknown inspection failure";
+        }
+      }
+      usage.totalTimeMs = Math.ceil(performance.now() - startedAt);
       let records: unknown;
+      let failureReport: unknown;
       let recordFailure: string | undefined;
       if (planSnapshot && decisionRef) {
         try {
-          records = createExecutionRecords({
+          const chain = createExecutionRecords({
             plan: planSnapshot.plan,
             workspace: this.#review,
             permission,
@@ -775,12 +805,14 @@ export class ControlledExecutionSession {
             status,
             stopReason: reason,
             usage,
-            diff: "",
+            diff: failureDiff ?? "",
             reviewIdentity: null,
             gateIdentity: null,
             quality: "unknown",
             unknowns: [
-              "diff unavailable",
+              ...(failureDiff === undefined
+                ? [`diff unavailable${diffFailure ? `: ${diffFailure}` : ""}`]
+                : []),
               ...(failureEvidence
                 ? []
                 : ["candidate snapshot unavailable", "independent checks not completed"]),
@@ -788,6 +820,8 @@ export class ControlledExecutionSession {
               reason,
             ],
           });
+          records = chain;
+          failureReport = chain.report;
         } catch (recordError) {
           recordFailure =
             recordError instanceof Error ? recordError.message : "Unknown record error";
@@ -800,6 +834,11 @@ export class ControlledExecutionSession {
         usage,
         observations,
         ...(failureEvidence ? { evidence: failureEvidence } : {}),
+        ...(failureReport
+          ? { report: failureReport }
+          : failureDiff !== undefined
+            ? { report: { diff: failureDiff, unknowns: ["protocol record unavailable"] } }
+            : {}),
         ...(records ? { records } : {}),
       };
     } finally {

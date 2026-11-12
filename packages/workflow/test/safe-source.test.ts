@@ -24,6 +24,18 @@ describe.skipIf(process.platform !== "linux")("openat2 source reader", () => {
       const file = await readSafeSource(root, "file", identity);
       expect(file?.data.toString()).toBe("allowed");
       expect(file?.mode).toBe(0o640);
+      expect((await readSafeSource(root, "file", identity, undefined, 13))?.data.toString()).toBe(
+        "allowed",
+      );
+      await expect(readSafeSource(root, "file", identity, undefined, 12)).rejects.toThrow(
+        "output limit",
+      );
+      await expect(readSafeSource(root, "missing", identity, undefined, 1)).rejects.toThrow(
+        "output limit",
+      );
+      await expect(readSafeSource(root, "file", identity, undefined, -1)).rejects.toThrow(
+        "output limit",
+      );
       expect(await readSafeSource(root, "missing", identity)).toBeNull();
       await expect(readSafeSource(root, "symbolic", identity)).rejects.toThrow();
       await expect(readSafeSource(root, "hard", identity)).rejects.toThrow();

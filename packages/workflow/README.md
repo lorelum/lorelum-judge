@@ -47,6 +47,13 @@ approved verification configuration is supplied, the session copies the stopped
 candidate into an independent runner, runs authorized checks and invokes the
 public judge review. Success and early failures attempt to construct a validated
 protocol record chain, with missing evidence marked unknown or not started.
+The task's total time limit stops model and sandbox work. After stopping, local
+failure-report collection has a separate maximum of two seconds, 4 MiB of
+diagnostic data and 4096 inspected/accounted entries; it never calls the model
+or sandbox. An exceeded limit marks the diff unavailable rather than reporting
+an empty diff as fact. The source helper is aborted on the diagnostic deadline.
+Stopping and resource cleanup are control-plane operations outside the task's
+execution budget; filesystem cleanup may still depend on the operating system.
 The Linux bubblewrap consumer example exercises the complete path with a real
 temporary Git project and deterministic model; unsupported environments fail
 closed. Completion is not a quality verdict or permission to deliver.

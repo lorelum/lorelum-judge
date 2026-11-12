@@ -98,7 +98,12 @@ export async function safeSourceRoot(root: string, signal?: AbortSignal): Promis
   return new PinnedRoot(identity.dev, identity.ino, handle);
 }
 
-function invoke(args: string[], handle: FileHandle, signal?: AbortSignal): Promise<Buffer> {
+function invoke(
+  args: string[],
+  handle: FileHandle,
+  signal?: AbortSignal,
+  outputLimit = maxOutput,
+): Promise<Buffer> {
   signal?.throwIfAborted();
   const { promise, resolve: resolveOutput, reject } = Promise.withResolvers<Buffer>();
   const child = spawn(helper, args, { stdio: ["ignore", "pipe", "pipe", handle.fd] });
@@ -112,7 +117,7 @@ function invoke(args: string[], handle: FileHandle, signal?: AbortSignal): Promi
       : undefined;
   child.stdout?.on("data", (chunk: Buffer) => {
     size += chunk.length;
-    if (size > maxOutput) {
+    if (size > outputLimit) {
       failure = new Error("Secure source exceeds output limit");
       child.kill("SIGKILL");
     } else chunks.push(chunk);
@@ -154,14 +159,22 @@ export async function readSafeSource(
   path: string,
   expectedRoot: SafeSourceRoot,
   signal?: AbortSignal,
+  maxOutputBytes?: number,
 ): Promise<{ data: Buffer; mode: number } | null> {
   validateRoot(root);
+  if (
+    maxOutputBytes !== undefined &&
+    (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 0)
+  ) {
+    throw new Error("Invalid secure source output limit");
+  }
   const handle = handles.get(expectedRoot);
   if (!handle || path.includes("\0")) throw new Error("Invalid or closed secure source root");
   const result = await invoke(
     ["read", root, expectedRoot.dev, expectedRoot.ino, path],
     handle,
     signal,
+    maxOutputBytes === undefined ? maxOutput : Math.min(maxOutput, maxOutputBytes),
   );
   if (result.equals(Buffer.from("M\n"))) return null;
   const newline = result.indexOf(10);
