@@ -43,9 +43,9 @@ outside this adapter's contract.
 The monotonic time limit starts at `run()` entry and includes copy validation
 and toolchain scanning. Cancellation and expiry are checked between filesystem
 operations and prevent command startup; a single in-flight filesystem operation
-cannot be interrupted by this adapter. Once started, cancellation, timeout and
-output truncation kill bubblewrap and its PID namespace. No network access grant
-is supported.
+cannot be interrupted by this adapter. Bubblewrap retains its PID 1 reaper so
+that cancellation, timeout and output truncation kill the namespace, including
+descendants that created a new session. No network access grant is supported.
 
 Tests exercise actual sandbox escape attempts and process cleanup on Linux. They
 need the required kernel and bubblewrap features; a startup check alone is not

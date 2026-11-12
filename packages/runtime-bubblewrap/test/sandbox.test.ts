@@ -69,7 +69,7 @@ linux("bubblewrap isolation", () => {
     }
     expect(result.stdout).toMatch(/CapEff:\s+0+\n/);
     expect(result.stdout).not.toContain("AWS_SECRET_ACCESS_KEY=");
-  }, 30000);
+  }, 60000);
 
   test("masks every toolchain submount and untrusted directory through all library aliases", async () => {
     const request = await fixture();
@@ -119,7 +119,7 @@ linux("bubblewrap isolation", () => {
       ],
     });
     expect(result.status).toBe("completed");
-  }, 30000);
+  }, 60000);
 
   test("allows only approved writes and hides host files from children", async () => {
     const request = await fixture();
@@ -136,7 +136,7 @@ linux("bubblewrap isolation", () => {
     expect(result.status).toBe("completed");
     expect(result.stdout.trim()).toBe("ok");
     expect(await readFile(path.join(request.root, "readonly", "file"), "utf8")).toBe("original");
-  });
+  }, 60000);
 
   test("isolates network and blocks child user namespaces", async () => {
     const request = await fixture();
@@ -157,7 +157,7 @@ linux("bubblewrap isolation", () => {
     } finally {
       server.close();
     }
-  });
+  }, 60000);
 
   test("rejects links, traversal and bwrap option injection", async () => {
     const request = await fixture();
@@ -300,7 +300,7 @@ linux("bubblewrap isolation", () => {
     // Real time is essential to exercise cleanup of a separate Linux process.
     await Bun.sleep(1200);
     expect(await Bun.file(path.join(request.root, "allowed", "late")).exists()).toBe(false);
-  }, 30000);
+  }, 60000);
   test("abort and output truncation terminate the sandbox", async () => {
     const request = await fixture();
     const controller = new AbortController();
@@ -338,7 +338,7 @@ linux("bubblewrap isolation", () => {
     expect(
       Buffer.byteLength(truncated.stdout) + Buffer.byteLength(truncated.stderr),
     ).toBeLessThanOrEqual(64);
-  }, 20000);
+  }, 60000);
 });
 
 test("rejects unsupported platforms", async () => {

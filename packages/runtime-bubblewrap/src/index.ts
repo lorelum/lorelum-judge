@@ -210,10 +210,6 @@ async function runChecked(
       env: {},
       stdio: ["ignore", "pipe", "pipe"],
     });
-    if (process.env.JUDGE_SANDBOX_DIAG === "1") {
-      child.on("exit", (code, signal) => console.error("sandbox exit", child.pid, code, signal));
-      child.on("close", (code, signal) => console.error("sandbox close", child.pid, code, signal));
-    }
     let stop: "cancelled" | "timed_out" | "truncated" | undefined;
     let used = 0;
     const stdout: Buffer[] = [];
@@ -226,8 +222,6 @@ async function runChecked(
       if (child.pid) {
         try {
           process.kill(-child.pid, "SIGKILL");
-          if (process.env.JUDGE_SANDBOX_DIAG === "1")
-            console.error("sandbox kill", child.pid, reason);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ESRCH") reject(error);
         }
