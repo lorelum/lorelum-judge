@@ -74,8 +74,9 @@ the old review but invalidates it until a new proposal is generated and confirme
 unchanged inputs do not invalidate. Conflicting material must remain visible in the
 proposal and be resolved by the user before confirmation. `revoke()` withdraws a
 confirmation; `invalidate()` marks existing premises invalid. An in-flight response
-cannot overwrite a later input or state change. The host is responsible for reporting
-new material and conflicts and for supplying genuine user decisions: the model cannot
+or reentrant response property cannot overwrite a later input or state change, or
+publish a plan after cancellation. The host is responsible for reporting new
+material and conflicts and supplying genuine user decisions; the model cannot
 authenticate the user or approve its own work.
 
 State is held only in the session instance. There is no persistence, recovery,

@@ -342,4 +342,39 @@ describe("planning session", () => {
     expect(result.ok).toBe(false);
     expect(session.review()).toBeNull();
   });
+
+  test("a reentrant model response cannot approve stale premises", async () => {
+    const session = new PlanningSession("plan1", inputs);
+    const model = modelFor((plan) => {
+      Object.defineProperty(plan, "goal", {
+        enumerable: true,
+        get() {
+          session.updateInputs({ task, sources: [{ ...sources[0]!, version: "2" }] });
+          return "Add JSON output";
+        },
+      });
+      return plan;
+    });
+    const result = await generate(session, model);
+    expect(result.ok).toBe(false);
+    expect(session.review()).toBeNull();
+  });
+
+  test("cancellation while reading a model response cannot publish a plan", async () => {
+    const session = new PlanningSession("plan1", inputs);
+    const controller = new AbortController();
+    const model = modelFor((plan) => {
+      Object.defineProperty(plan, "goal", {
+        enumerable: true,
+        get() {
+          controller.abort();
+          return "Add JSON output";
+        },
+      });
+      return plan;
+    });
+    const result = await session.generate({ model, runId: "run", signal: controller.signal });
+    expect(result.ok).toBe(false);
+    expect(session.review()).toBeNull();
+  });
 });

@@ -242,6 +242,9 @@ export class PlanningSession {
     }
     const identity = workflowPlanIdentity(plan);
     if (!identity.ok) return { ok: false, error: { kind: "validation", issues: identity.issues } };
+    if (generation !== this.#generation)
+      return stateError("Planning inputs or session state changed during generation");
+    if (options.signal.aborted) return stateError("Planning request was aborted");
     this.#plan = plan;
     this.#acceptanceProposed = !("acceptance" in inputs.task);
     this.#identity = identity.identity;
