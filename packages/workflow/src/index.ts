@@ -46,6 +46,8 @@ export interface GeneratePlanOptions {
   readonly model: ModelPort;
   readonly runId: string;
   readonly signal: AbortSignal;
+  /** Identity returned by an explicit host disclosure grant for current inputs. */
+  readonly disclosureIdentity: Identity;
   readonly instructions?: string;
   readonly config?: ModelGenerationConfig;
 }
@@ -115,6 +117,43 @@ export class PlanningSession {
   #identity: Identity | undefined;
   #status: PlanningStatus = "empty";
   #generation = 0;
+  readonly #invalidationListeners = new Set<() => void>();
+  #disclosureIdentity: Identity | undefined;
+  #disclosureModel: ModelPort | undefined;
+
+  /** Trusted host call after explicitly obtaining the user's disclosure decision. */
+  grantModelDisclosure(model: ModelPort): Identity {
+    if (this.#disclosureModel && this.#disclosureModel !== model) this.#invalidatePremises();
+    const result = identityOf("workflow-planning-disclosure/v1", this.#inputs);
+    if (!result.ok) throw new Error("Cannot identify planning disclosure");
+    this.#disclosureIdentity = result.identity;
+    this.#disclosureModel = model;
+    return result.identity;
+  }
+
+  revokeModelDisclosure(): void {
+    this.#disclosureIdentity = undefined;
+    this.#disclosureModel = undefined;
+    this.#invalidatePremises();
+  }
+
+  /** Subscribe to confirmation invalidation; listener failures cannot prevent it. */
+  subscribeInvalidation(listener: () => void): () => void {
+    this.#invalidationListeners.add(listener);
+    return () => {
+      this.#invalidationListeners.delete(listener);
+    };
+  }
+
+  #notifyInvalidation(): void {
+    for (const listener of [...this.#invalidationListeners]) {
+      try {
+        listener();
+      } catch {
+        /* A listener cannot preserve stale authority. */
+      }
+    }
+  }
 
   constructor(id: string, inputs: PlanningInputs) {
     if (!id.trim()) throw new Error("Plan id must not be empty");
@@ -129,7 +168,10 @@ export class PlanningSession {
 
   #invalidatePremises(): void {
     this.#generation++;
+    this.#disclosureIdentity = undefined;
+    this.#disclosureModel = undefined;
     if (this.#plan) this.#status = "invalidated";
+    this.#notifyInvalidation();
   }
 
   /** Replacing premises never changes a plan; it invalidates any existing decision. */
@@ -166,16 +208,29 @@ export class PlanningSession {
   async generate(options: GeneratePlanOptions): Promise<PlanningResult<PlanReview>> {
     const generation = ++this.#generation;
     if (this.#plan) this.#status = "invalidated";
+    this.#notifyInvalidation();
+    if (generation !== this.#generation)
+      return stateError("Planning inputs or session state changed during invalidation");
+    if (
+      !this.#disclosureIdentity ||
+      options.disclosureIdentity !== this.#disclosureIdentity ||
+      options.model !== this.#disclosureModel
+    )
+      return stateError("Current planning source disclosure is not authorized");
     if (options.signal.aborted) return stateError("Planning request was aborted");
     const revision = (this.#plan?.revision ?? 0) + 1;
     const inputs = structuredClone(this.#inputs);
     const previous = this.#plan ? structuredClone(this.#plan) : null;
     let response: ModelResponse;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    const unsubscribe = this.subscribeInvalidation(abort);
+    options.signal.addEventListener("abort", abort, { once: true });
     try {
       response = await options.model.generate({
         runId: options.runId,
         stepIndex: revision - 1,
-        signal: options.signal,
+        signal: controller.signal,
         tools: [],
         ...(options.config === undefined ? {} : { config: options.config }),
         messages: [
@@ -199,6 +254,9 @@ export class PlanningSession {
       });
     } catch (error) {
       return { ok: false, error: { kind: "model", error } };
+    } finally {
+      unsubscribe();
+      options.signal.removeEventListener("abort", abort);
     }
     if (generation !== this.#generation)
       return stateError("Planning inputs or session state changed during generation");
@@ -270,6 +328,7 @@ export class PlanningSession {
       return stateError("No current confirmation to revoke");
     this.#generation++;
     this.#status = "revoked";
+    this.#notifyInvalidation();
     return { ok: true, value: this.review() as PlanReview };
   }
 
@@ -277,6 +336,7 @@ export class PlanningSession {
     if (!this.#plan) return stateError("No plan to invalidate");
     this.#generation++;
     this.#status = "invalidated";
+    this.#notifyInvalidation();
     return { ok: true, value: this.review() as PlanReview };
   }
 
@@ -302,3 +362,7 @@ export class PlanningSession {
     );
   }
 }
+
+export * from "./evidence-review.js";
+export * from "./execution.js";
+export * from "./workspace.js";

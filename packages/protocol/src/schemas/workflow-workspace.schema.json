@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:workflow-workspace:v1",
+  "title": "WorkflowWorkspace",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "sourceIdentity", "gitIdentity", "rootIdentity", "files"],
+  "properties": {
+    "schema": { "const": "workflow-workspace/v1" },
+    "sourceIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "gitIdentity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "rootIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dev", "ino"],
+      "properties": {
+        "dev": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$" },
+        "ino": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$" }
+      }
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "source",
+          "excluded",
+          "exclusionReason",
+          "status",
+          "contentIdentity",
+          "mode"
+        ],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "source": { "enum": ["committed", "modified", "untracked", "unknown"] },
+          "excluded": { "type": "boolean" },
+          "exclusionReason": { "type": ["string", "null"], "minLength": 1 },
+          "status": { "enum": ["present", "deleted", "unknown"] },
+          "contentIdentity": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+          "mode": { "type": ["integer", "null"], "minimum": 0, "maximum": 511 }
+        }
+      }
+    }
+  }
+}

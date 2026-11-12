@@ -66,6 +66,7 @@ function generate(session: PlanningSession, model = modelFor(), instructions?: s
   return session.generate({
     model,
     runId: "run",
+    disclosureIdentity: session.grantModelDisclosure(model),
     signal,
     ...(instructions === undefined ? {} : { instructions }),
   });
@@ -373,8 +374,87 @@ describe("planning session", () => {
       });
       return plan;
     });
-    const result = await session.generate({ model, runId: "run", signal: controller.signal });
+    const result = await session.generate({
+      model,
+      runId: "run",
+      signal: controller.signal,
+      disclosureIdentity: session.grantModelDisclosure(model),
+    });
     expect(result.ok).toBe(false);
     expect(session.review()).toBeNull();
+  });
+  test("invalidation notifies synchronously, isolates failures, and supports unsubscribe", async () => {
+    const session = new PlanningSession("plan1", inputs);
+    const first = await generate(session);
+    if (!first.ok) throw new Error("expected proposal");
+    session.confirm(first.value.identity, first.value.revision);
+    const seen: boolean[] = [];
+    session.subscribeInvalidation(() => {
+      throw new Error("listener failure");
+    });
+    const unsubscribe = session.subscribeInvalidation(() => {
+      seen.push(session.isEligible(first.value.identity, first.value.revision));
+    });
+    expect(session.revoke().ok).toBe(true);
+    expect(seen).toEqual([false]);
+    unsubscribe();
+    expect(session.invalidate().ok).toBe(true);
+    expect(seen).toEqual([false]);
+  });
+
+  test("reentrant invalidation cannot start a stale model request", async () => {
+    const session = new PlanningSession("plan1", inputs);
+    const delegate = modelFor();
+    let calls = 0;
+    const model: ModelPort = {
+      async generate(request) {
+        calls++;
+        return delegate.generate(request);
+      },
+    };
+    const first = await generate(session, model);
+    if (!first.ok) throw new Error("expected proposal");
+    session.confirm(first.value.identity, first.value.revision);
+    calls = 0;
+    const unsubscribe = session.subscribeInvalidation(() => {
+      unsubscribe();
+      session.updateInputs({ task, sources: [{ ...sources[0]!, version: "changed" }] });
+    });
+    const result = await generate(session, model);
+    expect(result.ok).toBe(false);
+    expect(calls).toBe(0);
+    expect(session.isEligible(first.value.identity, first.value.revision)).toBe(false);
+  });
+  test("planning disclosure is explicitly granted to the current model and premises", async () => {
+    const session = new PlanningSession("plan1", inputs);
+    const model = modelFor();
+    let calls = 0;
+    const other: ModelPort = {
+      async generate() {
+        calls++;
+        throw new Error("must not run");
+      },
+    };
+    const disclosureIdentity = session.grantModelDisclosure(model);
+    const denied = await session.generate({
+      model: other,
+      runId: "run",
+      signal,
+      disclosureIdentity,
+    });
+    expect(denied.ok).toBe(false);
+    expect(calls).toBe(0);
+    session.updateInputs({ task, sources: [{ ...sources[0]!, version: "changed" }] });
+    const stale = await session.generate({ model, runId: "run", signal, disclosureIdentity });
+    expect(stale.ok).toBe(false);
+    const current = session.grantModelDisclosure(model);
+    session.revokeModelDisclosure();
+    const revoked = await session.generate({
+      model,
+      runId: "run",
+      signal,
+      disclosureIdentity: current,
+    });
+    expect(revoked.ok).toBe(false);
   });
 });

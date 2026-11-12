@@ -1,0 +1,25 @@
+{
+  "name": "@lorelum/runtime-bubblewrap",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Linux bubblewrap sandbox adapter for Lorelum Judge.",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@lorelum/judge-runtime": "workspace:*"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:workflow-report:v1",
+  "title": "WorkflowReport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "executionIdentity",
+    "evidenceIdentity",
+    "planIdentity",
+    "candidateIdentity",
+    "reviewIdentity",
+    "gateIdentity",
+    "diff",
+    "quality",
+    "checks",
+    "enforcement",
+    "unknowns"
+  ],
+  "properties": {
+    "schema": { "const": "workflow-report/v1" },
+    "executionIdentity": { "$ref": "#/definitions/identity" },
+    "evidenceIdentity": { "$ref": "#/definitions/identity" },
+    "planIdentity": { "$ref": "#/definitions/identity" },
+    "candidateIdentity": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+    "reviewIdentity": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+    "gateIdentity": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+    "diff": { "type": "string" },
+    "quality": { "enum": ["passed", "failed", "unknown"] },
+    "checks": { "enum": ["complete", "incomplete"] },
+    "enforcement": { "enum": ["eligible", "ineligible", "unknown"] },
+    "unknowns": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+  },
+  "definitions": { "identity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } }
+}

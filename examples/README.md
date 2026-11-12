@@ -34,6 +34,9 @@ or experimental module flags.
   确定性替身不证明真实模型的建议质量。
 - `workflow-planning.js`: 使用确定性模型生成、调整并明确确认计划；通过
   公开工作流入口核对旧版本失效以及计划确认不授权实际操作。
+- `workflow-execution.js`: Linux 上通过公开入口处理临时 Git 项目的已修改和未跟踪
+  文件，真实隔离修改与独立检查，并用公开 judge 处理实际证据；非 Linux 返回
+  `unsupported`，不声称已经完成执行验证。不访问外部模型或服务。
 
 The policy in these examples is illustrative. It is not a calibration artifact
 and proves nothing about model quality; synthetic calibration remains a

@@ -7,6 +7,12 @@ It depends on `@lorelum/judge-protocol` and must not import an Agent framework,
 provider SDK, rubric, verdict, calibration, or gate implementation. Its first
 runtime contract is defined by #4.
 
+`SandboxPort` is the execution boundary for an injected sandbox adapter. Its
+request names a private host copy, explicitly authorized command-readable paths
+and writable relative directories, argv, working directory, output and time
+limits, and an abort signal. An adapter must reject read scopes it cannot enforce.
+Runtime itself does not provide isolation or authorize execution.
+
 ## Model configuration and metadata
 
 `ModelRequest` may carry a provider-neutral `config` (`model`, `temperature`,
