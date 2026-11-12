@@ -11,7 +11,9 @@ import measurementRunSchema from "./schemas/measurement-run.schema.json" with { 
 import runV2Schema from "./schemas/measurement-run-v2.schema.json" with { type: "json" };
 import executionV1Schema from "./schemas/review-execution.schema.json" with { type: "json" };
 import codeExecutionSchema from "./schemas/review-execution-v2.schema.json" with { type: "json" };
+import taskContractSchema from "./schemas/task-contract.schema.json" with { type: "json" };
 import verdictSchema from "./schemas/verdict.schema.json" with { type: "json" };
+import workflowSourceSchema from "./schemas/workflow-source.schema.json" with { type: "json" };
 
 export type IssueCode =
   | "schema"
@@ -291,6 +293,8 @@ ajv.addSchema([
   executionV1Schema,
   codeEvaluationSchema,
   codeExecutionSchema,
+  taskContractSchema,
+  workflowSourceSchema,
 ]);
 
 /** Compiles a schema against the shared validator. */

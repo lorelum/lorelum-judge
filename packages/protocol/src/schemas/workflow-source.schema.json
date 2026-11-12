@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:workflow-source:v1",
+  "title": "WorkflowSource",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "kind", "locator", "version", "content", "status"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "kind": { "enum": ["user", "authority", "reference"] },
+    "locator": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "minLength": 1 },
+    "content": { "type": "string" },
+    "status": { "enum": ["available", "unavailable", "truncated"] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "available" } } },
+      "then": { "properties": { "content": { "type": "string", "minLength": 1 } } }
+    }
+  ]
+}
