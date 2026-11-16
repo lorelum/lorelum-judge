@@ -333,7 +333,9 @@ export class SessionRouter {
       candidateIdentity:
         typeof source.candidateIdentity === "string" ? source.candidateIdentity : null,
       quality: typeof source.quality === "string" ? source.quality : "unknown",
-      checks: typeof source.completeness === "string" ? source.completeness : "incomplete",
+      checks:
+        result.evidence?.completeness ??
+        (typeof source.checks === "string" ? source.checks : "incomplete"),
       enforcement: typeof source.enforcement === "string" ? source.enforcement : "unknown",
       diff: null,
       diffUnavailable:

@@ -306,6 +306,55 @@ linux("real workspace authorization", () => {
       expect(terminalSnapshot?.execution.status).toBe("completed");
       if (final.execution.result.workspaceRoot)
         await rm(final.execution.result.workspaceRoot, { recursive: true, force: true });
+      const refreshed = await call(session, "workspace.discover", {
+        root,
+        exclusions: [{ path: "secret.txt", reason: "private" }],
+      });
+      expect(refreshed.ok).toBe(true);
+      const refreshedWorkspace = (session.snapshot() as { workspace: { identity: string } })
+        .workspace;
+      const refreshedPlan = await createPlan(session);
+      if (!refreshedPlan.plan) throw new Error("missing refreshed plan");
+      await call(session, "planning.confirm", {
+        identity: refreshedPlan.plan.identity,
+        revision: refreshedPlan.plan.revision,
+      });
+      const stoppedProposal = await call(session, "execution.propose", {
+        ...proposalInput,
+        permission: {
+          ...proposalInput.permission,
+          planIdentity: refreshedPlan.plan.identity,
+          planRevision: refreshedPlan.plan.revision,
+          workspaceIdentity: refreshedWorkspace.identity,
+          expiresAt: Date.now() + 30000,
+        },
+      });
+      const stopIdentity = stoppedProposal.state.execution.proposal as { identity: string };
+      expect(
+        (
+          await call(session, "execution.authorize", {
+            identity: stopIdentity.identity,
+            decisionRef: "stop-after-check",
+          })
+        ).ok,
+      ).toBe(true);
+      const unsubscribe = session.subscribe((event) => {
+        if (
+          event &&
+          typeof event === "object" &&
+          "stage" in event &&
+          "status" in event &&
+          event.stage === "check" &&
+          event.status === "passed"
+        )
+          void call(session, "execution.cancel", {});
+      });
+      const stopped = (await call(session, "execution.run", {})).state as unknown as CompletedState;
+      unsubscribe();
+      expect(stopped.execution.status).toBe("cancelled");
+      expect(stopped.execution.result.report.checks).toBe("complete");
+      if (stopped.execution.result.workspaceRoot)
+        await rm(stopped.execution.result.workspaceRoot, { recursive: true, force: true });
       expect(await readFile(join(root, "note.txt"), "utf8")).toBe("dirty");
       expect(await readFile(join(root, "secret.txt"), "utf8")).toBe("private");
     } finally {
