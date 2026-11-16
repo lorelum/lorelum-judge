@@ -462,6 +462,12 @@ describe("local workspace session router", () => {
       ],
     });
     expect(nestedMessage.ok).toBe(false);
+    const unicodeMessage = await call(escaped, "chat.preview", {
+      messages: [
+        { role: "user", content: JSON.stringify({ observation: '{"token":"ab\\u005ccd"}' }) },
+      ],
+    });
+    expect(unicodeMessage.ok).toBe(false);
     const keyName = new SessionRouter();
     const rejected = await call(keyName, "model.configure", {
       endpoint: "http://localhost/v1",

@@ -192,14 +192,30 @@ function secretForms(secret: string, limit: number): string[] {
   }
   return forms.reverse();
 }
+function decodesToSecret(value: string, secret: string): boolean {
+  for (;;) {
+    if (value.includes(secret)) return true;
+    const decoded = value
+      .replace(/\\u([0-9a-f]{4})/gi, (_, hex: string) =>
+        String.fromCharCode(Number.parseInt(hex, 16)),
+      )
+      .replace(/\\\\/g, "\\");
+    if (decoded === value) return false;
+    value = decoded;
+  }
+}
 function maskSecret(value: string, secret: string): string {
   for (const form of secretForms(secret, value.length))
     value = value.split(form).join("[redacted]");
+  if (decodesToSecret(value, secret)) return "[redacted]";
   return value;
 }
 function containsSecret(value: unknown, secret: string): boolean {
   if (typeof value === "string")
-    return secretForms(secret, value.length).some((form) => value.includes(form));
+    return (
+      secretForms(secret, value.length).some((form) => value.includes(form)) ||
+      decodesToSecret(value, secret)
+    );
   if (Array.isArray(value)) return value.some((item) => containsSecret(item, secret));
   if (value && typeof value === "object")
     return Object.values(value).some((item) => containsSecret(item, secret));
