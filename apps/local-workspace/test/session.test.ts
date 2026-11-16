@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { release, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  type CodeEvaluationReport,
+  type CodeSuggestionReport,
   validateWorkflowSessionEvent,
   validateWorkflowSessionEvents,
 } from "@lorelum/judge-protocol";
@@ -27,6 +29,23 @@ type State = {
     authorized: boolean;
   } | null;
   chat: { messages: { role: string; content: string }[]; status: string };
+  executionDisclosure: {
+    identity: string;
+    recipient: string;
+    request: { messages: unknown[]; config: { model: string } };
+  } | null;
+  evaluation: {
+    status: string;
+    report: CodeEvaluationReport | null;
+    text: string | null;
+    issues: unknown;
+  };
+  suggestions: {
+    status: string;
+    report: CodeSuggestionReport | null;
+    text: string | null;
+    issues: unknown;
+  };
   execution: { status: string; proposal: unknown };
 };
 type Response = { ok: boolean; state: State; error?: { message: string } };
@@ -713,6 +732,254 @@ describe("local workspace session router", () => {
       responseReleased.resolve();
       server.stop(true);
     }
+  });
+
+  test("evaluation gates each request, and suggestions consume its real report", async () => {
+    const requests: unknown[] = [];
+    let evaluationReport: CodeEvaluationReport | null = null;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const body = (await request.json()) as { messages: { role: string; content: string }[] };
+        requests.push(body);
+        const user = body.messages.find((message) => message.role === "user")?.content ?? "";
+        let response: unknown;
+        if (body.messages[0]?.content.includes("You prepare")) {
+          response = {
+            task: "inspect",
+            focus: [],
+            standards: ["behavior"],
+            requirements: [],
+            excluded: ["boundaries", "security", "concurrency", "performance", "maintenance"].map(
+              (id) => ({
+                id,
+                reason: "This test examines only visible behavior.",
+              }),
+            ),
+            reads: [],
+          };
+        } else if (!evaluationReport) {
+          const marker = "Untrusted review context:\n";
+          const context = JSON.parse(user.slice(user.lastIndexOf(marker) + marker.length)) as {
+            sources: { id: string; role: string; startLine: number }[];
+          };
+          const item = context.sources.find((entry) => entry.role === "target");
+          if (!item) throw new Error("Missing target evidence");
+          const criteria = [...user.matchAll(/^Criterion ([^ ]+) \((quality|contract),/gm)];
+          const criterion = criteria[0]?.[1];
+          response = {
+            schema: "lorelum.judge.review-result/v2",
+            verdicts: criteria.map((entry) => ({
+              schema: "lorelum.judge.verdict/v1",
+              criterionId: entry[1],
+              verdict: "weak",
+              evidenceIds: [item.id],
+              rationale: "The visible function returns its input.",
+            })),
+            summary: [
+              {
+                text: "The function returns all items.",
+                criterionIds: [criterion],
+                problemIds: ["limit"],
+                evidenceIds: [item.id],
+              },
+            ],
+            problems: [
+              {
+                id: "limit",
+                criterionId: criterion,
+                title: "Unbounded result",
+                severity: "medium",
+                condition: "Large input",
+                impact: "Large output",
+                rationale: "The array is returned directly.",
+                evidenceIds: [item.id],
+                locations: [
+                  { itemId: item.id, startLine: item.startLine, endLine: item.startLine },
+                ],
+                attribution: "not_applicable",
+              },
+            ],
+            pending: [],
+            followUps: [],
+          };
+        } else {
+          const problem = evaluationReport.result?.problems[0];
+          if (!problem) throw new Error("Missing evaluated problem");
+          response = {
+            schema: "lorelum.judge.code-suggestion-result/v1",
+            suggestions: [
+              {
+                id: "suggestion-1",
+                problemId: problem.id,
+                evidenceIds: problem.evidenceIds,
+                location: problem.locations[0],
+                category: "required",
+                problem: "Unbounded result",
+                priorityRationale: "Large output",
+                direction: "Consider a limit",
+                impact: "Less output",
+                checks: ["Check large input"],
+                uncertainPremises: [],
+                alternatives: [],
+              },
+            ],
+            omissions: [],
+          };
+        }
+        return Response.json({ choices: [{ message: { content: JSON.stringify(response) } }] });
+      },
+    });
+    const session = new SessionRouter({
+      configuredModel: {
+        endpoint: `http://127.0.0.1:${server.port}/v1`,
+        apiKey: "review-test-private-key",
+        config: { model: "review-model" },
+      },
+    });
+    const next = (predicate: (state: State) => boolean): Promise<State> => {
+      const current = session.snapshot() as State;
+      if (predicate(current)) return Promise.resolve(current);
+      const { promise, resolve } = Promise.withResolvers<State>();
+      const unsubscribe = session.subscribe(() => {
+        const state = session.snapshot() as State;
+        if (predicate(state)) {
+          unsubscribe();
+          resolve(state);
+        }
+      });
+      return promise;
+    };
+    try {
+      await call(session, "model.configured", {});
+      expect((await call(session, "suggestions.start", {})).ok).toBe(false);
+      expect(
+        (
+          await call(session, "evaluation.start", {
+            target: { kind: "snippet", text: "function list(items) { return items; }" },
+          })
+        ).ok,
+      ).toBe(true);
+      let state = await next((value) => value.executionDisclosure !== null);
+      const first = state.executionDisclosure!;
+      expect(first.recipient).toContain("127.0.0.1");
+      expect(first.request.config.model).toBe("review-model");
+      expect(JSON.stringify(first.request.messages)).toContain("function list");
+      expect(requests).toHaveLength(0);
+      expect((await call(session, "execution.disclosure.allow", { identity: "wrong" })).ok).toBe(
+        false,
+      );
+      await call(session, "execution.disclosure.allow", { identity: first.identity });
+      state = await next(
+        (value) =>
+          value.executionDisclosure !== null &&
+          value.executionDisclosure.identity !== first.identity,
+      );
+      expect(requests).toHaveLength(1);
+      expect(
+        (await call(session, "execution.disclosure.allow", { identity: first.identity })).ok,
+      ).toBe(false);
+      await call(session, "execution.disclosure.allow", {
+        identity: state.executionDisclosure!.identity,
+      });
+      state = await next((value) => value.evaluation.status !== "running");
+      expect(["completed", "partial"]).toContain(state.evaluation.status);
+      expect(state.evaluation.report?.result?.problems).toHaveLength(1);
+      evaluationReport = state.evaluation.report;
+      expect(state.evaluation.text).toBeTruthy();
+      await call(session, "suggestions.start", {});
+      state = await next((value) => value.executionDisclosure !== null);
+      expect(requests).toHaveLength(2);
+      expect(JSON.stringify(state.executionDisclosure!.request.messages)).toContain("limit");
+      await call(session, "execution.disclosure.allow", {
+        identity: state.executionDisclosure!.identity,
+      });
+      state = await next((value) => value.suggestions.status !== "running");
+      expect(["completed", "partial"]).toContain(state.suggestions.status);
+      expect(state.suggestions.report?.evaluationIdentity).toBeTruthy();
+      expect(requests).toHaveLength(3);
+      expect(JSON.stringify(state)).not.toContain("review-test-private-key");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("review cancellation revokes the pending request and stale approvals", async () => {
+    const session = new SessionRouter({
+      configuredModel: {
+        endpoint: "http://127.0.0.1:1/v1",
+        config: { model: "review-model" },
+      },
+    });
+    await call(session, "model.configured", {});
+    const pending = Promise.withResolvers<void>();
+    const unsubscribe = session.subscribe(() => {
+      if ((session.snapshot() as State).executionDisclosure) pending.resolve();
+    });
+    await call(session, "evaluation.start", { target: { kind: "snippet", text: "const x = 1;" } });
+    await pending.promise;
+    const identity = (session.snapshot() as State).executionDisclosure!.identity;
+    expect((await call(session, "evaluation.cancel", {})).state.evaluation.status).toBe(
+      "cancelled",
+    );
+    expect((await call(session, "execution.disclosure.allow", { identity })).ok).toBe(false);
+    expect((session.snapshot() as State).executionDisclosure).toBeNull();
+    unsubscribe();
+  });
+  test("denying review disclosure produces a real failed report without sending", async () => {
+    let requests = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        requests++;
+        return new Response("must not be sent");
+      },
+    });
+    try {
+      const session = new SessionRouter({
+        configuredModel: {
+          endpoint: `http://127.0.0.1:${server.port}/v1`,
+          config: { model: "review-model" },
+        },
+      });
+      await call(session, "model.configured", {});
+      const proposed = Promise.withResolvers<void>();
+      const finished = Promise.withResolvers<void>();
+      const unsubscribe = session.subscribe(() => {
+        const state = session.snapshot() as State;
+        if (state.executionDisclosure) proposed.resolve();
+        if (state.evaluation.status === "failed") finished.resolve();
+      });
+      await call(session, "evaluation.start", {
+        target: { kind: "snippet", text: "const x = 1;" },
+      });
+      await proposed.promise;
+      const state = session.snapshot() as State;
+      await call(session, "execution.disclosure.deny", {
+        identity: state.executionDisclosure!.identity,
+      });
+      await finished.promise;
+      const result = session.snapshot() as State;
+      expect(result.evaluation.report?.status).toBe("failed");
+      expect(requests).toBe(0);
+      unsubscribe();
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("Windows drive paths are rejected clearly outside WSL", async () => {
+    if (process.platform === "linux" && /microsoft/i.test(release())) return;
+    const session = new SessionRouter();
+    const result = await call(session, "workspace.discover", {
+      root: "C:\\project",
+      exclusions: [],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error?.message).toBe("Windows paths require WSL and wslpath");
+    expect((session.snapshot() as { workspace: unknown }).workspace).toBeNull();
   });
 
   test("returns safe discovery diagnostics without creating a fake workspace", async () => {

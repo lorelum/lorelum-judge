@@ -33,6 +33,12 @@ type Plan = {
   };
 };
 type ChatMessage = { role: "user" | "assistant"; content: string };
+type AnalysisResult = {
+  status: "idle" | "running" | "completed" | "partial" | "failed" | "cancelled";
+  report: unknown | null;
+  text: string | null;
+  issues: unknown | null;
+};
 type WorkspaceState = {
   sessionId: string;
   sequence: number;
@@ -44,6 +50,8 @@ type WorkspaceState = {
   } | null;
   diagnostics: unknown;
   model: { mode: string; recipient: string; config: unknown } | null;
+  evaluation: AnalysisResult;
+  suggestions: AnalysisResult;
   plan: Plan | null;
   disclosure: {
     identity: string;
@@ -67,7 +75,20 @@ type WorkspaceState = {
   chat: { messages: ChatMessage[]; status: string } | null;
   execution: {
     status: string;
-    proposal: { identity: string; permission: unknown } | null;
+    proposal: {
+      identity: string;
+      permission: {
+        readPaths: string[];
+        commandReadPaths: string[];
+        writePaths: string[];
+        writablePaths: string[];
+        commands: { executable: string; args: string[]; cwd: string }[];
+        disclosures: string[];
+        modelRecipient: string;
+        limits: unknown;
+        expiresAt: number;
+      };
+    } | null;
     verification: unknown;
     result: {
       status: string;
@@ -147,6 +168,11 @@ function App() {
   const [root, setRoot] = useState("");
   const [excluded, setExcluded] = useState("");
   const [task, setTask] = useState("");
+  const [feature, setFeature] = useState<"evaluation" | "suggestions" | "planning">("evaluation");
+  const [evaluationKind, setEvaluationKind] = useState<"snippet" | "pr">("snippet");
+  const [evaluationTarget, setEvaluationTarget] = useState("");
+  const [evaluationRequest, setEvaluationRequest] = useState("");
+  const [analysisBusy, setAnalysisBusy] = useState<"evaluation" | "suggestions" | null>(null);
   const [chatInput, setChatInput] = useState("");
   const [endpoint, setEndpoint] = useState("");
   const [modelName, setModelName] = useState("");
@@ -155,6 +181,7 @@ function App() {
   const [chatBusy, setChatBusy] = useState(false);
   const [chatGenerating, setChatGenerating] = useState(false);
   const [planningBusy, setPlanningBusy] = useState(false);
+  const [planDirty, setPlanDirty] = useState(false);
   const [materials, setMaterials] = useState("");
   const [instructions, setInstructions] = useState("");
   const [target, setTarget] = useState("");
@@ -401,18 +428,15 @@ function App() {
   }
   async function startPlanning(text: string) {
     if (!text.trim()) {
-      setError("请先在对话框中描述要完成的任务。");
+      setError("请先填写修改意见。");
       return;
     }
-    if (!state?.workspace) {
-      setError("请先在右侧选择 Git 工作区，并在发现前排除敏感路径。");
-      return;
-    }
-    if (state.model?.mode !== "configured") {
-      setError("请先在右侧配置真实模型；配置本身不会发送消息。");
+    if (state?.model?.mode !== "configured") {
+      setError("请先配置真实模型；配置本身不会发送消息。");
       return;
     }
     setTask(text);
+    setPlanDirty(false);
     const id = crypto.randomUUID();
     const created = await action("planning.create", {
       id,
@@ -432,6 +456,18 @@ function App() {
             content: text,
             status: "available",
           },
+          ...(materials.trim()
+            ? [
+                {
+                  id: "material",
+                  kind: "reference",
+                  locator: "local-user-material",
+                  version: "1",
+                  content: materials,
+                  status: "available",
+                },
+              ]
+            : []),
           ...(selectedPaths.length
             ? [
                 {
@@ -455,7 +491,7 @@ function App() {
 
   async function consentAndGeneratePlan() {
     const pending = state?.disclosure;
-    if (!pending) return;
+    if (!pending || planDirty) return;
     const request = JSON.stringify(pending.request);
     setPlanningBusy(true);
     try {
@@ -534,13 +570,29 @@ function App() {
   const previewMatches =
     !!chatDisclosure &&
     JSON.stringify(chatDisclosure.request.messages) === JSON.stringify(pendingMessages);
+  const analysisRunning =
+    !!analysisBusy ||
+    state?.evaluation?.status === "running" ||
+    state?.suggestions?.status === "running";
 
-  async function previewChat() {
-    setChatBusy(true);
+  async function startAnalysis(kind: "evaluation" | "suggestions") {
+    setAnalysisBusy(kind);
     try {
-      await action("chat.preview", { messages: pendingMessages });
+      await action(
+        `${kind}.start`,
+        kind === "evaluation"
+          ? {
+              target:
+                evaluationKind === "snippet"
+                  ? { kind: "snippet", text: evaluationTarget }
+                  : evaluationTarget.trim(),
+              ...(evaluationRequest.trim() ? { request: evaluationRequest } : {}),
+            }
+          : {},
+        true,
+      );
     } finally {
-      setChatBusy(false);
+      setAnalysisBusy(null);
     }
   }
 
@@ -579,8 +631,8 @@ function App() {
         <header className="hero">
           <div>
             <div className="eyebrow">Lorelum Judge · Local workspace</div>
-            <h1>工作区对话</h1>
-            <p className="muted">先对话，再审阅计划与权限；修改仅在独立候选副本中执行。</p>
+            <h1>代码评价与受控修改</h1>
+            <p className="muted">选择功能，审阅每次模型请求；实际修改仅在独立候选副本中执行。</p>
           </div>
           <span className="state">{state ? `会话 ${state.execution.status}` : "正在连接"}</span>
         </header>
@@ -591,102 +643,200 @@ function App() {
         )}
         <div className="chat-layout">
           <Card className="section conversation">
-            <div className="conversation-heading">
-              <div>
-                <h2>对话</h2>
-                <p className="muted">
-                  模型不会自动读取项目或收到消息。每次发送前请检查完整披露并授权。
-                </p>
-              </div>
-              <span className="state">{state?.chat?.status ?? "等待消息"}</span>
-            </div>
-            <div className="messages" aria-live="polite">
-              {chatMessages.length === 0 && (
-                <p className="empty-chat">
-                  输入你的问题或指令，预览并授权后与宿主配置的真实模型对话。
-                </p>
-              )}
-              {chatMessages.map((message, index) => (
-                // biome-ignore lint/suspicious/noArrayIndexKey: Messages can repeat and rows have no local state.
-                <article className={`message ${message.role}`} key={index}>
-                  <div className="message-label">{message.role === "user" ? "你" : "模型"}</div>
-                  <div className="message-content">{message.content}</div>
-                  {message.role === "user" && (
-                    <button
-                      className="text-action"
-                      type="button"
-                      onClick={() => void startPlanning(message.content)}
-                    >
-                      用于工作流任务
-                    </button>
-                  )}
-                </article>
+            <h2>选择功能</h2>
+            <p className="muted">评价和规划无需项目；每次发送前都须审核完整请求并单独同意。</p>
+            <div className="row feature-choices">
+              {(
+                [
+                  ["evaluation", "代码 / PR 评价"],
+                  ["suggestions", "修改建议"],
+                  ["planning", "修改计划与执行"],
+                ] as const
+              ).map(([key, label]) => (
+                <Button
+                  key={key}
+                  aria-pressed={feature === key}
+                  variant={feature === key ? "solid" : "flat"}
+                  onClick={() => setFeature(key)}
+                >
+                  {label}
+                </Button>
               ))}
-              {(chatDisclosure || chatRunning) && chatInput.trim() && (
-                <article className="message user">
-                  <div className="message-label">{chatRunning ? "你" : "你 · 待发送"}</div>
-                  <div className="message-content">{chatInput}</div>
-                </article>
-              )}
-              {state?.chat?.status === "failed" && (
-                <p className="notice error" role="alert">
-                  模型请求失败，未生成回复。可检查配置后重新预览并授权。
-                </p>
-              )}
-              {(chatBusy || chatRunning) && (
-                <p className="muted" role="status">
-                  正在处理，请稍候…
-                </p>
-              )}
             </div>
             {state?.model?.mode !== "configured" && (
-              <p className="notice">要与真实模型对话或规划，请先在右侧填写并保存模型设置。</p>
+              <p className="notice">请先填写并保存真实模型设置。</p>
             )}
-            {!state?.workspace && (
-              <p className="muted">
-                需要修改项目？先在右侧排除敏感路径并发现 Git 工作区，然后输入任务并选择“制定计划”。
-              </p>
+            {feature === "evaluation" && (
+              <section>
+                <h3>代码 / PR 评价</h3>
+                <div className="row">
+                  <Button
+                    aria-pressed={evaluationKind === "snippet"}
+                    variant={evaluationKind === "snippet" ? "solid" : "flat"}
+                    disabled={analysisRunning}
+                    onClick={() => setEvaluationKind("snippet")}
+                  >
+                    粘贴代码
+                  </Button>
+                  <Button
+                    aria-pressed={evaluationKind === "pr"}
+                    variant={evaluationKind === "pr" ? "solid" : "flat"}
+                    disabled={analysisRunning}
+                    onClick={() => setEvaluationKind("pr")}
+                  >
+                    PR URL
+                  </Button>
+                </div>
+                <label className="field">
+                  {evaluationKind === "snippet" ? "待评价代码" : "PR URL"}
+                  <Textarea
+                    value={evaluationTarget}
+                    disabled={analysisRunning}
+                    onChange={(event) => setEvaluationTarget(event.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  评价要求（可选）
+                  <Textarea
+                    value={evaluationRequest}
+                    disabled={analysisRunning}
+                    onChange={(event) => setEvaluationRequest(event.target.value)}
+                  />
+                </label>
+                <div className="row">
+                  <Button
+                    disabled={
+                      !token ||
+                      busy ||
+                      analysisRunning ||
+                      planningBusy ||
+                      !evaluationTarget.trim() ||
+                      state?.model?.mode !== "configured"
+                    }
+                    onClick={() => void startAnalysis("evaluation")}
+                  >
+                    开始评价
+                  </Button>
+                  {(analysisBusy === "evaluation" || state?.evaluation?.status === "running") && (
+                    <Button
+                      variant="flat"
+                      color="danger"
+                      onClick={() => void action("evaluation.cancel", {})}
+                    >
+                      取消评价
+                    </Button>
+                  )}
+                </div>
+              </section>
             )}
-            <label className="field">
-              输入消息
-              <Textarea
-                value={chatInput}
-                onChange={(event) => setChatInput(event.target.value)}
-                placeholder="描述你的问题或想要完成的任务"
-                disabled={chatBusy || chatRunning}
-              />
-            </label>
-            <div className="row">
-              <Button
-                onClick={() => void previewChat()}
-                disabled={
-                  !token ||
-                  busy ||
-                  chatBusy ||
-                  chatRunning ||
-                  !chatInput.trim() ||
-                  state?.model?.mode !== "configured"
-                }
-              >
-                发送
-              </Button>
-              <Button
-                variant="flat"
-                disabled={!chatInput.trim() || chatBusy || chatRunning}
-                onClick={() => void startPlanning(chatInput)}
-              >
-                为这条指令制定计划
-              </Button>
-              {chatRunning && (
+            {feature === "suggestions" && (
+              <section>
+                <h3>基于当前评价生成修改建议</h3>
+                <p className="muted">使用当前评价结果，不会修改代码。</p>
+                <div className="row">
+                  <Button
+                    disabled={
+                      !token ||
+                      busy ||
+                      analysisRunning ||
+                      planningBusy ||
+                      state?.model?.mode !== "configured" ||
+                      !state?.evaluation?.report ||
+                      !["completed", "partial"].includes(state.evaluation.status)
+                    }
+                    onClick={() => void startAnalysis("suggestions")}
+                  >
+                    生成修改建议
+                  </Button>
+                  {(analysisBusy === "suggestions" || state?.suggestions?.status === "running") && (
+                    <Button
+                      variant="flat"
+                      color="danger"
+                      onClick={() => void action("suggestions.cancel", {})}
+                    >
+                      取消生成
+                    </Button>
+                  )}
+                </div>
+              </section>
+            )}
+            {feature === "planning" && (
+              <section>
+                <h3>修改计划与执行</h3>
+                <p className="muted">
+                  粘贴代码并填写修改意见即可规划；仅实际执行需要 Git 项目和独立权限。
+                </p>
+                <label className="field">
+                  代码
+                  <Textarea
+                    value={materials}
+                    disabled={busy || planningBusy}
+                    onChange={(event) => {
+                      setMaterials(event.target.value);
+                      if (!planDirty && (state?.plan || state?.disclosure)) {
+                        setPlanDirty(true);
+                        void action("planning.revokeDisclosure", {});
+                      }
+                    }}
+                  />
+                </label>
+                <label className="field">
+                  修改意见
+                  <Textarea
+                    disabled={busy || planningBusy}
+                    value={task}
+                    onChange={(event) => {
+                      setTask(event.target.value);
+                      if (!planDirty && (state?.plan || state?.disclosure)) {
+                        setPlanDirty(true);
+                        void action("planning.revokeDisclosure", {});
+                      }
+                    }}
+                  />
+                </label>
                 <Button
-                  variant="flat"
-                  color="danger"
-                  onClick={() => void action("chat.cancel", {})}
+                  disabled={
+                    !token ||
+                    busy ||
+                    planningBusy ||
+                    analysisRunning ||
+                    !materials.trim() ||
+                    !task.trim() ||
+                    state?.model?.mode !== "configured"
+                  }
+                  onClick={() => void startPlanning(task)}
                 >
-                  取消模型请求
+                  预览规划请求
                 </Button>
-              )}
-            </div>
+                {planDirty && (
+                  <p className="notice">代码、意见或所选路径已变化，请重新预览并确认计划。</p>
+                )}
+              </section>
+            )}
+            {(["evaluation", "suggestions"] as const).map((kind) => {
+              const result = state?.[kind];
+              if (feature !== kind || !result || result.status === "idle") return null;
+              return (
+                <section className="result-panel" key={kind} aria-live="polite">
+                  <h3>
+                    {kind === "evaluation" ? "评价结果" : "修改建议"} · {result.status}
+                  </h3>
+                  {result.text && <p className="result-text">{result.text}</p>}
+                  {result.report !== null && (
+                    <details>
+                      <summary>查看结构化报告</summary>
+                      <DisclosureView value={result.report} />
+                    </details>
+                  )}
+                  {result.issues !== null && (
+                    <>
+                      <h4>问题与限制</h4>
+                      <DisclosureView value={result.issues} />
+                    </>
+                  )}
+                </section>
+              );
+            })}
             {chatDisclosure && previewMatches && (
               <div className="chat-disclosure">
                 <h3>本次发送披露</h3>
@@ -709,13 +859,7 @@ function App() {
             {chatDisclosure && !previewMatches && (
               <p className="notice">消息已变化，请重新预览并授权后发送。</p>
             )}
-            {task && (
-              <article className="message user">
-                <div className="message-label">你的工作流任务</div>
-                <div className="message-content">{task}</div>
-              </article>
-            )}
-            {(state?.disclosure || state?.plan || planningBusy) && (
+            {feature === "planning" && (state?.disclosure || state?.plan || planningBusy) && (
               <Card className="section workflow-card">
                 <h2>03 · 计划和披露</h2>
                 <p className="muted">
@@ -727,13 +871,22 @@ function App() {
                       要求调整的意见
                       <Textarea
                         value={instructions}
-                        onChange={(event) => setInstructions(event.target.value)}
+                        disabled={busy || planningBusy}
+                        onChange={(event) => {
+                          setInstructions(event.target.value);
+                          if (state.disclosure) {
+                            void action("planning.revokeDisclosure", {});
+                          }
+                        }}
                       />
                     </label>
                     <Button
                       variant="flat"
-                      disabled={busy || planningBusy || !instructions.trim()}
-                      onClick={() => void action("planning.preview", { instructions })}
+                      disabled={busy || planningBusy || planDirty || !instructions.trim()}
+                      onClick={() => {
+                        setPlanDirty(false);
+                        void action("planning.preview", { instructions });
+                      }}
                     >
                       预览调整请求
                     </Button>
@@ -756,7 +909,7 @@ function App() {
                       <pre className="data">{pretty(state.disclosure.request)}</pre>
                     </details>
                     <Button
-                      disabled={busy || planningBusy}
+                      disabled={busy || planningBusy || planDirty}
                       onClick={() => void consentAndGeneratePlan()}
                     >
                       同意本次发送并生成计划
@@ -829,7 +982,7 @@ function App() {
                             revision: state.plan?.revision,
                           })
                         }
-                        disabled={busy || state.plan.eligible}
+                        disabled={busy || planDirty || state.plan.status !== "draft"}
                       >
                         确认此版本计划
                       </Button>
@@ -846,7 +999,7 @@ function App() {
                 )}
               </Card>
             )}
-            {state?.plan?.eligible && (
+            {feature === "planning" && !planDirty && state?.plan?.eligible && (
               <Card className="section workflow-card">
                 <h2>04 · 审核执行权限</h2>
                 <p className="muted">
@@ -1028,12 +1181,32 @@ function App() {
                       <p className="notice">权限或命令已变化，请重新生成提案并审核。</p>
                     )}
                     <h3>当前提案与独立检查</h3>
-                    <DisclosureView
-                      value={{
-                        permission: proposal.permission,
-                        verification: state?.execution.verification,
-                      }}
-                    />
+                    <p>
+                      模型可读取：{proposal.permission.readPaths.join("、") || "无"}；可修改：
+                      {proposal.permission.writePaths.join("、") || "无"}。
+                    </p>
+                    <p>
+                      命令可读取：{proposal.permission.commandReadPaths.join("、") || "无"}
+                      ；可写目录：{proposal.permission.writablePaths.join("、") || "无"}。
+                    </p>
+                    <p>
+                      接收方：{proposal.permission.modelRecipient}；允许披露：
+                      {proposal.permission.disclosures.join("、") || "无"}。
+                    </p>
+                    <p>独立检查命令：</p>
+                    <ul>
+                      {proposal.permission.commands.map((command) => (
+                        <li key={JSON.stringify(command)}>
+                          {JSON.stringify([command.executable, ...command.args])}（工作目录：
+                          {command.cwd}）
+                        </li>
+                      ))}
+                    </ul>
+                    <p>
+                      授权有效至：{new Date(proposal.permission.expiresAt).toLocaleString()}
+                      ；资源上限：
+                    </p>
+                    <DisclosureView value={proposal.permission.limits} />
                     <details>
                       <summary>查看原始提案</summary>
                       <pre className="data">
@@ -1093,19 +1266,22 @@ function App() {
                 )}
               </Card>
             )}
-            {(proposal || state?.executionDisclosure || state?.execution.result) && (
+            {(state?.executionDisclosure ||
+              (feature === "planning" && (proposal || state?.execution.result))) && (
               <Card className="section workflow-card">
-                <h2>实时执行 · {stream}</h2>
-                <p className="muted">
-                  状态：{state?.execution.status ?? "未知"}
-                  。断线期间事件不回放；下方仅展示本次连接观察到的事件。
-                </p>
+                <h2>{state?.executionDisclosure ? "审核本次模型请求" : `实时执行 · ${stream}`}</h2>
+                {feature === "planning" && (
+                  <p className="muted">
+                    状态：{state?.execution.status ?? "未知"}
+                    。断线期间事件不回放；下方仅展示本次连接观察到的事件。
+                  </p>
+                )}
                 {state?.executionDisclosure && (
                   <div className="chat-disclosure">
-                    <h3>执行已暂停：请审核本次模型请求</h3>
+                    <h3>请审核本次模型请求</h3>
                     <p className="muted">
                       接收方：{state.executionDisclosure.recipient}
-                      。以下是本次请求的完整消息与配置；执行权限不代表同意本次发送。
+                      。以下是本次请求的完整消息与配置；每次发送均须单独同意。
                     </p>
                     <DisclosureView value={state.executionDisclosure.request} />
                     <details>
@@ -1219,8 +1395,7 @@ function App() {
           </Card>
           <aside className="stack">
             <Card className="section">
-              <h2>项目与模型</h2>
-              <p className="muted">项目：{state?.workspace?.root ?? "尚未选择"}</p>
+              <h2>真实模型设置</h2>
               <p className="muted">
                 模型：{state?.model ? `${state.model.recipient} · ${state.model.mode}` : "尚未选择"}
               </p>
@@ -1274,73 +1449,100 @@ function App() {
                   }).finally(() => setChatBusy(false));
                 }}
               >
-                预览连接检查（替换当前输入）
+                预览连接检查
               </Button>
               <p className="muted">
-                检查会把“连接检查：请回复‘连接成功’。”以及现有聊天记录发送给所选接收方；须先在对话中查看完整披露并同意。
+                检查会发送“连接检查：请回复‘连接成功’。”及现有聊天记录；须先查看完整披露并同意。
               </p>
-            </Card>
-            <Card className="section">
-              <h2>Git 工作区</h2>
-              <p className="notice">
-                发现会列出 Git
-                已跟踪、未跟踪和忽略文件的路径。请先排除凭据、密钥及其他敏感文件；发现不会发送内容给模型。
-              </p>
-              <label className="field">
-                工作区绝对路径
-                <Input
-                  value={root}
-                  onChange={(event) => setRoot(event.target.value)}
-                  placeholder="/home/user/project"
-                />
-              </label>
-              <label className="field">
-                排除相对路径（每行一个）
-                <Textarea
-                  value={excluded}
-                  onChange={(event) => setExcluded(event.target.value)}
-                  placeholder=".env"
-                />
-              </label>
-              <Button disabled={!token || busy || !root.trim()} onClick={() => void discover()}>
-                发现工作区
-              </Button>
-              {state?.workspace && (
-                <>
-                  <p className="muted">
-                    已选择：{state.workspace.root}
-                    。勾选允许用于规划的路径；只发送名称，不发送文件内容。
-                  </p>
-                  <div className="path-list">
-                    {state.workspace.candidates
-                      .filter((candidate) => !candidate.exclusionReason)
-                      .map((candidate) => (
-                        <label className="check" key={candidate.path}>
-                          <input
-                            type="checkbox"
-                            checked={selectedPaths.includes(candidate.path)}
-                            onChange={(event) =>
-                              setSelectedPaths((current) =>
-                                event.target.checked
-                                  ? [...current, candidate.path]
-                                  : current.filter((path) => path !== candidate.path),
-                              )
-                            }
-                          />
-                          {candidate.path} ({candidate.status})
-                        </label>
-                      ))}
-                  </div>
-                </>
+              {chatRunning && (
+                <Button
+                  variant="flat"
+                  color="danger"
+                  onClick={() => void action("chat.cancel", {})}
+                >
+                  取消连接检查
+                </Button>
+              )}
+              {state?.chat?.status === "failed" && (
+                <p className="notice error">连接检查失败，请检查配置后重新预览。</p>
+              )}
+              {state?.chat?.status === "completed" && chatMessages.length > 0 && (
+                <div className="result-panel">
+                  <h3>连接检查结果</h3>
+                  <p className="result-text">{chatMessages[chatMessages.length - 1]?.content}</p>
+                </div>
               )}
             </Card>
+            {feature === "planning" && (
+              <Card className="section">
+                <h2>项目文件夹</h2>
+                <p className="muted">只有实际执行时需要选择项目。选择后请重新生成并确认计划。</p>
+                <p className="notice">
+                  发现会列出 Git
+                  已跟踪、未跟踪和忽略文件的路径。请先排除凭据、密钥及其他敏感文件；发现不会发送内容给模型。
+                </p>
+                <label className="field">
+                  项目路径（支持 WSL 路径及 Windows 盘符路径）
+                  <Input
+                    value={root}
+                    onChange={(event) => setRoot(event.target.value)}
+                    placeholder="例如 E:\project 或 /home/user/project"
+                  />
+                </label>
+                <details>
+                  <summary>排除敏感文件（选择项目前设置）</summary>
+                  <label className="field">
+                    排除相对路径（每行一个）
+                    <Textarea
+                      value={excluded}
+                      onChange={(event) => setExcluded(event.target.value)}
+                      placeholder=".env"
+                    />
+                  </label>
+                </details>
+                <Button disabled={!token || busy || !root.trim()} onClick={() => void discover()}>
+                  选择项目
+                </Button>
+                {state?.workspace && (
+                  <>
+                    <p className="muted">
+                      已选择：{state.workspace.root}
+                      。勾选允许用于规划的路径；只发送名称，不发送文件内容。
+                    </p>
+                    <div className="path-list">
+                      {state.workspace.candidates
+                        .filter((candidate) => !candidate.exclusionReason)
+                        .map((candidate) => (
+                          <label className="check" key={candidate.path}>
+                            <input
+                              type="checkbox"
+                              checked={selectedPaths.includes(candidate.path)}
+                              onChange={(event) => {
+                                const checked = event.target.checked;
+                                setSelectedPaths((current) =>
+                                  checked
+                                    ? [...current, candidate.path]
+                                    : current.filter((path) => path !== candidate.path),
+                                );
+                                if (!planDirty && (state.plan || state.disclosure)) {
+                                  setPlanDirty(true);
+                                  void action("planning.revokeDisclosure", {});
+                                }
+                              }}
+                            />
+                            {candidate.path} ({candidate.status})
+                          </label>
+                        ))}
+                    </div>
+                  </>
+                )}
+              </Card>
+            )}
           </aside>
         </div>
         <details className="advanced" ref={advancedRef}>
           <summary>高级工作流 · 项目、计划、执行与报告</summary>
-          <p className="muted">
-            将对话中的指令用于任务后，在此创建任务、预览并确认计划；执行仍需独立授权。
-          </p>
+          <p className="muted">其他工作区诊断及离线演示选项；执行仍需独立授权。</p>
           <div className="layout">
             <main className="stack">
               <Card className="section">

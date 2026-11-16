@@ -39,9 +39,27 @@ body {
 }
 .chat-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
+  grid-template-columns: 320px minmax(0, 1fr);
   gap: 20px;
   align-items: start;
+}
+.chat-layout > aside {
+  grid-column: 1;
+  grid-row: 1;
+}
+.chat-layout > .conversation {
+  grid-column: 2;
+  grid-row: 1;
+}
+.result-panel {
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+.result-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .conversation {
   min-width: 0;
@@ -240,6 +258,14 @@ body {
 @media (max-width: 900px) {
   .chat-layout {
     grid-template-columns: 1fr;
+  }
+  .chat-layout > aside,
+  .chat-layout > .conversation {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  .chat-layout > aside {
+    order: -1;
   }
   .layout {
     grid-template-columns: 1fr;

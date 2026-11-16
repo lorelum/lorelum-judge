@@ -1,6 +1,9 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
-import type { ProgramChecker } from "@lorelum/judge";
+import { release } from "node:os";
+import { evaluateCode, generateCodeSuggestions, type ProgramChecker } from "@lorelum/judge";
+import type { CodeEvaluationReport } from "@lorelum/judge-protocol";
 import {
   type Identity,
   identityOf,
@@ -72,7 +75,16 @@ type ExecutionDisclosure = {
   readonly recipient: string;
   readonly request: { readonly messages: unknown; readonly config: ModelGenerationConfig };
   readonly decide: (allowed: boolean) => void;
+  readonly owner: "execution" | "review";
+  readonly expiresAt?: number;
 };
+type ReviewState = {
+  status: "idle" | "running" | "completed" | "partial" | "failed" | "cancelled";
+  report: unknown | null;
+  text: string | null;
+  issues: unknown | null;
+};
+const emptyReview = (): ReviewState => ({ status: "idle", report: null, text: null, issues: null });
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -96,6 +108,9 @@ const PROTOCOL_FIELDS = [
   "chatDisclosure",
   "execution",
   "executionDisclosure",
+  "evaluation",
+  "suggestions",
+  "issues",
   "status",
   "recipient",
   "config",
@@ -274,6 +289,10 @@ export class SessionRouter {
   #disclosure: PendingDisclosure | undefined;
   #chatDisclosure: ChatDisclosure | undefined;
   #executionDisclosure: ExecutionDisclosure | undefined;
+  #evaluation: ReviewState = emptyReview();
+  #suggestions: ReviewState = emptyReview();
+  #reviewController: AbortController | undefined;
+  #reviewKind: "evaluation" | "suggestions" | undefined;
   #chatModel: ModelSelection | undefined;
   #chatMessages: readonly ChatMessage[] = [];
   #chatStatus: "idle" | "running" | "completed" | "failed" = "idle";
@@ -433,6 +452,8 @@ export class SessionRouter {
             }
           : null,
         chat: { messages: this.#chatMessages, status: this.#chatStatus },
+        evaluation: this.#evaluation,
+        suggestions: this.#suggestions,
         execution: {
           status: this.#executionStatus,
           proposal: this.#proposal ?? null,
@@ -450,7 +471,7 @@ export class SessionRouter {
     );
   }
   #clearExecution(): void {
-    this.#executionDisclosure?.decide(false);
+    if (this.#executionDisclosure?.owner === "execution") this.#executionDisclosure.decide(false);
     if (this.#executionStatus === "running") this.#workspace = undefined;
     this.#controller?.abort();
     this.#execution?.revoke();
@@ -475,6 +496,7 @@ export class SessionRouter {
   }
   #invalidate(): void {
     this.#generation++;
+    this.#cancelReview();
     this.#invalidateChat();
     this.#controller?.abort();
     this.#clearExecution();
@@ -543,9 +565,11 @@ export class SessionRouter {
               Math.min(2_147_483_647, Math.max(0, permission.expiresAt - Date.now())),
             );
             const pending: ExecutionDisclosure = {
+              owner: "execution",
+              expiresAt: permission.expiresAt,
               identity: randomUUID(),
               recipient: selected.recipient,
-              request: { messages, config: structuredClone(selected.config) },
+              request: { messages, config: structuredClone(request.config ?? selected.config) },
               decide: finish,
             };
             this.#executionDisclosure = pending;
@@ -572,6 +596,158 @@ export class SessionRouter {
     this.#chatMessages = [];
     this.#chatStatus = "idle";
     this.#model = { mode: "configured", ...selected, model };
+  }
+  #cancelReview(): void {
+    const kind = this.#reviewKind;
+    if (!kind) return;
+    this.#reviewKind = undefined;
+    this.#reviewController?.abort();
+    this.#reviewController = undefined;
+    if (this.#executionDisclosure?.owner === "review") this.#executionDisclosure.decide(false);
+    const state = kind === "evaluation" ? this.#evaluation : this.#suggestions;
+    state.status = "cancelled";
+    this.#emit("model", "result", "cancelled");
+  }
+  #startReview(
+    kind: "evaluation" | "suggestions",
+    target?: string | { kind: "snippet"; text: string },
+    request?: string,
+  ): void {
+    const selected = this.#requireModel();
+    if (selected.mode !== "configured" || !selected.config || !this.#hostModel)
+      throw new Error("Configured model is required for review");
+    if (this.#reviewKind || this.#executionStatus === "running" || this.#controller)
+      throw new Error("Another background operation is running");
+    const evaluation = this.#evaluation.report as CodeEvaluationReport | null;
+    if (
+      kind === "suggestions" &&
+      (!evaluation || !["completed", "partial"].includes(this.#evaluation.status))
+    )
+      throw new Error("A completed evaluation is required");
+    const config = selected.config;
+    const { model: modelName, ...decoding } = config;
+    const method = {
+      kind: "llm" as const,
+      provider: {
+        protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+        adapterVersion: PROVIDER_ADAPTER_VERSION,
+      },
+      endpointIdentity: describeEndpoint(this.#hostModel.endpoint).identity,
+      model: { provider: PROVIDER_LABEL, name: modelName },
+      ...(Object.keys(decoding).length ? { decoding } : {}),
+    };
+    const controller = new AbortController();
+    this.#reviewController = controller;
+    this.#reviewKind = kind;
+    if (kind === "evaluation") {
+      this.#evaluation = { ...emptyReview(), status: "running" };
+      this.#suggestions = emptyReview();
+    } else this.#suggestions = { ...emptyReview(), status: "running" };
+    let queue = Promise.resolve();
+    const model: ModelPort = {
+      generate: (modelRequest) => {
+        const run = async () => {
+          if (
+            controller.signal.aborted ||
+            modelRequest.signal.aborted ||
+            this.#reviewController !== controller
+          )
+            throw new Error("Review cancelled");
+          if ([...this.#secrets].some((key) => containsSecret(modelRequest.messages, key)))
+            throw new Error("Credential disclosure refused");
+          if (this.#executionDisclosure) throw new Error("Disclosure unavailable");
+          const messages = structuredClone(modelRequest.messages);
+          const { promise, resolve } = Promise.withResolvers<boolean>();
+          let settled = false;
+          const finish = (allowed: boolean) => {
+            if (settled) return;
+            settled = true;
+            controller.signal.removeEventListener("abort", abort);
+            modelRequest.signal.removeEventListener("abort", abort);
+            if (this.#executionDisclosure === pending) this.#executionDisclosure = undefined;
+            resolve(allowed);
+          };
+          const abort = () => finish(false);
+          const pending: ExecutionDisclosure = {
+            owner: "review",
+            identity: randomUUID(),
+            recipient: selected.recipient,
+            request: { messages, config: structuredClone(modelRequest.config ?? config) },
+            decide: finish,
+          };
+          this.#executionDisclosure = pending;
+          controller.signal.addEventListener("abort", abort, { once: true });
+          modelRequest.signal.addEventListener("abort", abort, { once: true });
+          if (controller.signal.aborted || modelRequest.signal.aborted) abort();
+          else this.#emit("model", "proposed", "proposed", pending.identity);
+          const approved = await promise;
+          if (
+            !approved ||
+            controller.signal.aborted ||
+            modelRequest.signal.aborted ||
+            this.#reviewController !== controller
+          )
+            throw new Error("Review disclosure denied or cancelled");
+          return selected.model.generate({ ...modelRequest, messages });
+        };
+        const result = queue.then(run);
+        queue = result.then(
+          () => undefined,
+          () => undefined,
+        );
+        return result;
+      },
+    };
+    const ports = { model, method, signal: controller.signal, allowModelDisclosure: true };
+    this.#emit("model", "started", "started");
+    const repository =
+      typeof target === "string"
+        ? new URL(target).pathname.split("/").slice(1, 3).join("/")
+        : undefined;
+    const work =
+      kind === "evaluation"
+        ? evaluateCode(
+            { target: target!, ...(request === undefined ? {} : { request }) },
+            {
+              ...ports,
+              ...(repository ? { sources: { github: { repositories: [repository] } } } : {}),
+            },
+          )
+        : generateCodeSuggestions({ evaluation: evaluation! }, ports);
+    void work
+      .then((result) => {
+        if (this.#reviewController !== controller) return;
+        const state: ReviewState = result.ok
+          ? { status: result.value.status, report: result.value, text: result.text, issues: null }
+          : { status: "failed", report: null, text: null, issues: result.issues };
+        if (kind === "evaluation") this.#evaluation = state;
+        else this.#suggestions = state;
+        this.#reviewController = undefined;
+        this.#reviewKind = undefined;
+        this.#emit(
+          "model",
+          "result",
+          state.status === "cancelled"
+            ? "cancelled"
+            : state.status === "failed"
+              ? "failed"
+              : "completed",
+        );
+      })
+      .catch(() => {
+        if (this.#reviewController !== controller) return;
+        const state: ReviewState = {
+          status: "failed",
+          report: null,
+          text: null,
+          issues: [{ code: "review_failed", message: "Review failed" }],
+        };
+        if (kind === "evaluation") this.#evaluation = state;
+        else this.#suggestions = state;
+        this.#reviewController = undefined;
+        this.#reviewKind = undefined;
+        this.#emit("model", "result", "failed");
+      });
   }
   #requirePlan(): PlanningSession {
     if (!this.#plan) throw new Error("Create a planning session first");
@@ -700,9 +876,64 @@ export class SessionRouter {
         candidateSecret = payload.apiKey;
       json(payload);
       const data = object(payload);
+      if (action === "evaluation.start") {
+        const target = data.target;
+        if (typeof target === "string") {
+          if (
+            !/^https:\/\/github\.com\/(?!\.{1,2}\/)[\w.-]+\/(?!\.{1,2}\/)[\w.-]+\/pull\/[1-9]\d*\/?$/i.test(
+              target,
+            )
+          )
+            throw new Error("Target must be a GitHub pull request URL or code snippet");
+        } else {
+          const snippet = object(target);
+          if (
+            snippet.kind !== "snippet" ||
+            typeof snippet.text !== "string" ||
+            !snippet.text.trim() ||
+            Object.keys(snippet).some((key) => key !== "kind" && key !== "text")
+          )
+            throw new Error("Target must be a GitHub pull request URL or code snippet");
+        }
+        if (
+          data.request !== undefined &&
+          (typeof data.request !== "string" || !data.request.trim())
+        )
+          throw new Error("Request must be nonempty text");
+        this.#startReview(
+          "evaluation",
+          target as string | { kind: "snippet"; text: string },
+          data.request as string | undefined,
+        );
+        return { ok: true, state: this.snapshot() };
+      }
+      if (action === "suggestions.start") {
+        this.#startReview("suggestions");
+        return { ok: true, state: this.snapshot() };
+      }
+      if (action === "evaluation.cancel" || action === "suggestions.cancel") {
+        if (this.#reviewKind !== (action === "evaluation.cancel" ? "evaluation" : "suggestions"))
+          throw new Error("No matching review to cancel");
+        this.#cancelReview();
+        return { ok: true, state: this.snapshot() };
+      }
       switch (action) {
         case "workspace.discover": {
-          const root = text(data.root, "root");
+          let root = text(data.root, "root");
+          if (/^[A-Za-z]:[\\/]/.test(root)) {
+            if (process.platform !== "linux" || !/microsoft/i.test(release()))
+              throw new Error("Windows paths require WSL and wslpath");
+            try {
+              root = execFileSync("wslpath", ["-u", root], {
+                encoding: "utf8",
+                timeout: 5000,
+                maxBuffer: 65536,
+              }).replace(/\r?\n$/, "");
+              if (!root.startsWith("/")) throw new Error("invalid path");
+            } catch {
+              throw new Error("Windows path could not be converted by wslpath");
+            }
+          }
           if (!Array.isArray(data.exclusions)) throw new Error("exclusions must be an array");
           this.#invalidate();
           const generation = this.#generation;
@@ -1208,6 +1439,7 @@ export class SessionRouter {
           break;
         }
         case "execution.run": {
+          if (this.#reviewKind) throw new Error("Another background operation is running");
           if (!this.#execution || !this.#proposal || this.#executionStatus !== "authorized")
             throw new Error("Execution has not been authorized");
           const execution = this.#execution;
@@ -1297,9 +1529,14 @@ export class SessionRouter {
         case "execution.disclosure.allow":
         case "execution.disclosure.deny": {
           const pending = this.#executionDisclosure;
-          if (!pending || pending.identity !== data.identity || this.#executionStatus !== "running")
+          if (
+            !pending ||
+            pending.identity !== data.identity ||
+            (pending.owner === "execution" && this.#executionStatus !== "running") ||
+            (pending.owner === "review" && !this.#reviewKind)
+          )
             throw new Error("Disclosure preview does not match");
-          if (!this.#proposal || Date.now() >= this.#proposal.permission.expiresAt) {
+          if (pending.expiresAt !== undefined && Date.now() >= pending.expiresAt) {
             pending.decide(false);
             this.#emit("model", "authorization", "denied", pending.identity);
             throw new Error("Disclosure preview does not match");
@@ -1312,7 +1549,8 @@ export class SessionRouter {
         case "execution.cancel": {
           if (!this.#execution || this.#executionStatus === "idle")
             throw new Error("No execution to cancel");
-          this.#executionDisclosure?.decide(false);
+          if (this.#executionDisclosure?.owner === "execution")
+            this.#executionDisclosure.decide(false);
           this.#controller?.abort();
           this.#execution.revoke();
           if (this.#executionStatus !== "running") this.#executionStatus = "cancelled";
@@ -1344,6 +1582,14 @@ export class SessionRouter {
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       const safe = [
+        "Windows paths require WSL and wslpath",
+        "Windows path could not be converted by wslpath",
+        "Target must be a GitHub pull request URL or code snippet",
+        "Request must be nonempty text",
+        "Configured model is required for review",
+        "Another background operation is running",
+        "A completed evaluation is required",
+        "No matching review to cancel",
         "Configured model request failed",
         "API key conflicts with the session protocol",
         "Secure source reading requires Linux openat2",
