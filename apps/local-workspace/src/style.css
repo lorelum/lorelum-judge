@@ -110,6 +110,43 @@ body {
   font-size: 15px;
   font-weight: 700;
 }
+.workflow-card {
+  margin-top: 20px;
+  border: 1px solid #e2e8f0;
+}
+.path-list {
+  max-height: 240px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.permission-path {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid #e2e8f0;
+}
+.permission-path > span {
+  flex: 1 1 160px;
+}
+.data-view {
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+.data-view > div {
+  border-left: 2px solid #cbd5e1;
+  padding: 3px 0 3px 10px;
+}
+.data-view dt {
+  font-weight: 600;
+  color: #475569;
+}
+.data-view dd {
+  margin: 0;
+}
+.data-value {
+  white-space: pre-wrap;
+}
 .advanced {
   margin-top: 24px;
 }

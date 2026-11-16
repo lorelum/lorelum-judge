@@ -21,7 +21,14 @@ type Plan = {
   status: string;
   eligible: boolean;
   acceptanceProposed: boolean;
-  plan: { checks: { id: string; description: string }[] };
+  plan: {
+    goal: string;
+    scope: string[];
+    steps: { id: string; description: string }[];
+    checks: { id: string; description: string }[];
+    nonGoals: string[];
+    missing: string[];
+  };
 };
 type ChatMessage = { role: "user" | "assistant"; content: string };
 type WorkspaceState = {
@@ -50,6 +57,11 @@ type WorkspaceState = {
     request: { messages: ChatMessage[]; config: unknown };
     authorized: boolean;
   } | null;
+  executionDisclosure: {
+    identity: string;
+    recipient: string;
+    request: { messages: unknown; config: unknown };
+  } | null;
   chat: { messages: ChatMessage[]; status: string } | null;
   execution: {
     status: string;
@@ -61,8 +73,9 @@ type WorkspaceState = {
       workspaceRoot: string | null;
       evidence: {
         candidateIdentity: string;
-        checks: unknown[];
+        checks: { id: string; status: string }[];
         review: unknown;
+        reviewStatus: string;
         stopReason: string | null;
         completeness: string;
       } | null;
@@ -89,6 +102,39 @@ const lines = (value: string): string[] =>
     .filter(Boolean);
 const pretty = (value: unknown): string => JSON.stringify(value, null, 2) ?? "未知";
 
+function DisclosureView({ value }: { value: unknown }) {
+  if (value === null || value === undefined) return <span>无</span>;
+  if (Array.isArray(value)) {
+    return value.length ? (
+      <ul>
+        {value.map((item, index) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: Values have no local state.
+          <li key={index}>
+            <DisclosureView value={item} />
+          </li>
+        ))}
+      </ul>
+    ) : (
+      <span>无</span>
+    );
+  }
+  if (typeof value === "object") {
+    return (
+      <dl className="data-view">
+        {Object.entries(value).map(([key, item]) => (
+          <div key={key}>
+            <dt>{key}</dt>
+            <dd>
+              <DisclosureView value={item} />
+            </dd>
+          </div>
+        ))}
+      </dl>
+    );
+  }
+  return <span className="data-value">{String(value)}</span>;
+}
+
 function App() {
   const [state, setState] = useState<WorkspaceState | null>(null);
   const [token, setToken] = useState("");
@@ -100,8 +146,13 @@ function App() {
   const [excluded, setExcluded] = useState("");
   const [task, setTask] = useState("");
   const [chatInput, setChatInput] = useState("");
+  const [endpoint, setEndpoint] = useState("");
+  const [modelName, setModelName] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [chatBusy, setChatBusy] = useState(false);
   const [chatGenerating, setChatGenerating] = useState(false);
+  const [planningBusy, setPlanningBusy] = useState(false);
   const [materials, setMaterials] = useState("");
   const [instructions, setInstructions] = useState("");
   const [target, setTarget] = useState("");
@@ -110,8 +161,8 @@ function App() {
   const [readPaths, setReadPaths] = useState("");
   const [writePaths, setWritePaths] = useState("");
   const [writablePaths, setWritablePaths] = useState("");
-  const [executable, setExecutable] = useState("/usr/bin/cat");
-  const [args, setArgs] = useState("[]");
+  const [executable, setExecutable] = useState("");
+  const [args, setArgs] = useState("");
   const [cwd, setCwd] = useState(".");
   const [seconds, setSeconds] = useState("120");
   const [commandSeconds, setCommandSeconds] = useState("60");
@@ -131,6 +182,7 @@ function App() {
     disclosure: false,
     limits: false,
   });
+  const [proposalInputs, setProposalInputs] = useState<string | null>(null);
   const tokenRef = useRef("");
   const advancedRef = useRef<HTMLDetailsElement>(null);
   const submittedChat = useRef<{ messages: string; input: string } | null>(null);
@@ -254,12 +306,46 @@ function App() {
     },
     [],
   );
+  const executionInputs = JSON.stringify({
+    readPaths,
+    writePaths,
+    writablePaths,
+    executable,
+    args,
+    cwd,
+    seconds,
+    commandSeconds,
+    maxCalls,
+    maxActions,
+    maxCommands,
+    maxOutput,
+    disclosures,
+  });
+  const proposalChanged = proposalInputs === null || proposalInputs !== executionInputs;
+  useEffect(() => {
+    if (
+      proposalInputs === null ||
+      proposalInputs === executionInputs ||
+      !state?.execution.proposal ||
+      !["proposed", "authorized", "running"].includes(state.execution.status)
+    )
+      return;
+    setProposalInputs(null);
+    setApprovals({ files: false, commands: false, disclosure: false, limits: false });
+    void action("execution.cancel", {});
+  }, [action, executionInputs, proposalInputs, state?.execution.proposal, state?.execution.status]);
 
   async function discover() {
-    await action("workspace.discover", {
+    const result = await action("workspace.discover", {
       root,
       exclusions: lines(excluded).map((path) => ({ path, reason: "用户排除" })),
     });
+    if (result) {
+      setSelectedPaths([]);
+      setReadPaths("");
+      setWritePaths("");
+      setWritablePaths("");
+    }
   }
   async function offline() {
     const result = await action("model.offline", {
@@ -270,7 +356,7 @@ function App() {
     if (result) {
       setReadPaths(target);
       setWritePaths(target);
-      setArgs(JSON.stringify([target]));
+      setArgs(target);
     }
   }
   async function createPlan() {
@@ -310,15 +396,90 @@ function App() {
       },
     });
   }
+  async function startPlanning(text: string) {
+    if (!text.trim()) {
+      setError("请先在对话框中描述要完成的任务。");
+      return;
+    }
+    if (!state?.workspace) {
+      setError("请先在右侧选择 Git 工作区，并在发现前排除敏感路径。");
+      return;
+    }
+    if (state.model?.mode !== "configured") {
+      setError("请先在右侧配置真实模型；配置本身不会发送消息。");
+      return;
+    }
+    setTask(text);
+    const id = crypto.randomUUID();
+    const created = await action("planning.create", {
+      id,
+      inputs: {
+        task: {
+          schema: "lorelum.judge.task-contract/v1",
+          id: `task-${id}`,
+          taskClass: "code",
+          text,
+        },
+        sources: [
+          {
+            id: "request",
+            kind: "user",
+            locator: "local-user",
+            version: "1",
+            content: text,
+            status: "available",
+          },
+          ...(selectedPaths.length
+            ? [
+                {
+                  id: "project-paths",
+                  kind: "reference",
+                  locator: "user-selected-project-paths",
+                  version: "1",
+                  content: `用户选择的项目相对路径（仅路径，不含文件内容）：\n${selectedPaths.join("\n")}`,
+                  status: "available",
+                },
+              ]
+            : []),
+        ],
+      },
+    });
+    if (created) {
+      setInstructions("");
+      await action("planning.preview", { instructions: "" });
+    }
+  }
+
+  async function consentAndGeneratePlan() {
+    const pending = state?.disclosure;
+    if (!pending) return;
+    const request = JSON.stringify(pending.request);
+    setPlanningBusy(true);
+    try {
+      const authorized = await action("planning.authorize", { identity: pending.identity });
+      if (!authorized) return;
+      if (
+        !authorized.disclosure?.authorized ||
+        authorized.disclosure.identity !== pending.identity ||
+        JSON.stringify(authorized.disclosure.request) !== request
+      ) {
+        setError("披露已变化，请重新预览并授权。");
+        return;
+      }
+      await action("planning.generate", { identity: pending.identity }, true);
+    } finally {
+      setPlanningBusy(false);
+    }
+  }
+
   async function propose() {
     if (!state?.plan || !state.workspace || !state.model) {
       setError("先选择工作区、模型并确认计划");
       return;
     }
     try {
-      const parsed: unknown = JSON.parse(args);
-      if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string"))
-        throw new Error("命令参数必须是 JSON 字符串数组");
+      const parsed = lines(args);
+      if (!executable.trim()) throw new Error("请填写实际要运行的检查程序绝对路径。");
       const totalTimeMs = Number(seconds) * 1000;
       const commandTimeMs = Number(commandSeconds) * 1000;
       const command = { executable, args: parsed, cwd };
@@ -355,7 +516,8 @@ function App() {
         timeoutMs: commandTimeMs,
         maxOutputBytes: Math.min(8192, Number(maxOutput)),
       }));
-      await action("execution.propose", { permission, verification: { checks } });
+      const proposed = await action("execution.propose", { permission, verification: { checks } });
+      if (proposed) setProposalInputs(executionInputs);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "无法创建提案");
     }
@@ -450,11 +612,7 @@ function App() {
                     <button
                       className="text-action"
                       type="button"
-                      onClick={() => {
-                        setTask(message.content);
-                        if (advancedRef.current) advancedRef.current.open = true;
-                        advancedRef.current?.scrollIntoView({ behavior: "smooth" });
-                      }}
+                      onClick={() => void startPlanning(message.content)}
                     >
                       用于工作流任务
                     </button>
@@ -478,6 +636,14 @@ function App() {
                 </p>
               )}
             </div>
+            {state?.model?.mode !== "configured" && (
+              <p className="notice">要与真实模型对话或规划，请先在右侧填写并保存模型设置。</p>
+            )}
+            {!state?.workspace && (
+              <p className="muted">
+                需要修改项目？先在右侧排除敏感路径并发现 Git 工作区，然后输入任务并选择“制定计划”。
+              </p>
+            )}
             <label className="field">
               输入消息
               <Textarea
@@ -504,13 +670,9 @@ function App() {
               <Button
                 variant="flat"
                 disabled={!chatInput.trim() || chatBusy || chatRunning}
-                onClick={() => {
-                  setTask(chatInput);
-                  if (advancedRef.current) advancedRef.current.open = true;
-                  advancedRef.current?.scrollIntoView({ behavior: "smooth" });
-                }}
+                onClick={() => void startPlanning(chatInput)}
               >
-                将输入用于工作流任务
+                为这条指令制定计划
               </Button>
               {chatRunning && (
                 <Button
@@ -529,7 +691,11 @@ function App() {
                   接收方：{chatDisclosure.recipient} · 模式：{chatDisclosure.mode}
                 </p>
                 <p className="muted">以下为完整消息和有效配置；请确认不含不愿发送的敏感内容。</p>
-                <pre className="data">{pretty(chatDisclosure.request)}</pre>
+                <DisclosureView value={chatDisclosure.request} />
+                <details>
+                  <summary>查看原始请求</summary>
+                  <pre className="data">{pretty(chatDisclosure.request)}</pre>
+                </details>
                 <div className="row">
                   <Button onClick={() => void consentAndSendChat()} disabled={busy || chatBusy}>
                     同意并发送
@@ -540,6 +706,485 @@ function App() {
             {chatDisclosure && !previewMatches && (
               <p className="notice">消息已变化，请重新预览并授权后发送。</p>
             )}
+            {task && (
+              <article className="message user">
+                <div className="message-label">你的工作流任务</div>
+                <div className="message-content">{task}</div>
+              </article>
+            )}
+            {(state?.disclosure || state?.plan || planningBusy) && (
+              <Card className="section workflow-card">
+                <h2>03 · 计划和披露</h2>
+                <p className="muted">
+                  先查看本次接收方、任务、资料、旧计划和修改意见，再单独授权请求。新版本使旧确认失效；模型提出的标准仅为提议。
+                </p>
+                {state?.plan && (
+                  <>
+                    <label className="field">
+                      要求调整的意见
+                      <Textarea
+                        value={instructions}
+                        onChange={(event) => setInstructions(event.target.value)}
+                      />
+                    </label>
+                    <Button
+                      variant="flat"
+                      disabled={busy || planningBusy || !instructions.trim()}
+                      onClick={() => void action("planning.preview", { instructions })}
+                    >
+                      预览调整请求
+                    </Button>
+                  </>
+                )}
+                {planningBusy && (
+                  <p role="status" className="muted">
+                    正在生成计划，请稍候…
+                  </p>
+                )}
+                {state?.disclosure && (
+                  <>
+                    <p className="muted">
+                      接收方：{state.disclosure.recipient} ·{" "}
+                      {state.disclosure.authorized ? "已授权该次请求" : "尚未授权"}
+                    </p>
+                    <DisclosureView value={state.disclosure.request} />
+                    <details>
+                      <summary>查看原始请求</summary>
+                      <pre className="data">{pretty(state.disclosure.request)}</pre>
+                    </details>
+                    <Button
+                      disabled={busy || planningBusy}
+                      onClick={() => void consentAndGeneratePlan()}
+                    >
+                      同意本次发送并生成计划
+                    </Button>
+                  </>
+                )}
+                {state?.plan && (
+                  <>
+                    <p className="muted">
+                      版本 {state.plan.revision} · {state.plan.status} ·{" "}
+                      {state.plan.acceptanceProposed ? "完成标准为模型提议" : "完成标准来自任务"}
+                    </p>
+                    <h3>目标</h3>
+                    <p>{state.plan.plan.goal}</p>
+                    <h3>范围</h3>
+                    <ul>
+                      {state.plan.plan.scope.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                    <h3>步骤</h3>
+                    <ul>
+                      {state.plan.plan.steps.map((item) => (
+                        <li key={item.id}>{item.description}</li>
+                      ))}
+                    </ul>
+                    <h3>检查</h3>
+                    <ul>
+                      {state.plan.plan.checks.map((item) => (
+                        <li key={item.id}>{item.description}</li>
+                      ))}
+                    </ul>
+                    <h3>不包含 / 待澄清</h3>
+                    <p>
+                      {[...state.plan.plan.nonGoals, ...state.plan.plan.missing].join("；") || "无"}
+                    </p>
+                    <div className="row">
+                      <Button
+                        onClick={() =>
+                          void action("planning.confirm", {
+                            identity: state.plan?.identity,
+                            revision: state.plan?.revision,
+                          })
+                        }
+                        disabled={busy || state.plan.eligible}
+                      >
+                        确认此版本计划
+                      </Button>
+                      <Button
+                        variant="flat"
+                        color="danger"
+                        onClick={() => void action("planning.reject", {})}
+                        disabled={busy}
+                      >
+                        拒绝 / 撤销计划
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </Card>
+            )}
+            {state?.plan?.eligible && (
+              <Card className="section workflow-card">
+                <h2>04 · 审核执行权限</h2>
+                <p className="muted">
+                  计划确认不授权执行。填写具体文件和命令；命令在隔离副本中执行，读取整个副本。配置改变后须重新生成提案并审核。
+                </p>
+                <p className="muted">
+                  分别勾选模型在候选副本中可读取、可修改的具体文件，初始不授予任何文件权限。检查命令可读取整个候选副本。
+                </p>
+                <div className="path-list">
+                  {state.workspace?.candidates
+                    .filter((candidate) => !candidate.exclusionReason)
+                    .map((candidate) => (
+                      <div className="permission-path" key={candidate.path}>
+                        <span>{candidate.path}</span>
+                        {(
+                          [
+                            ["读取", readPaths, setReadPaths],
+                            ["写入", writePaths, setWritePaths],
+                          ] as const
+                        ).map(([label, value, setter]) => (
+                          <label className="check" key={label}>
+                            <input
+                              type="checkbox"
+                              checked={lines(value).includes(candidate.path)}
+                              onChange={(event) => {
+                                const paths = lines(value).filter(
+                                  (path) => path !== candidate.path,
+                                );
+                                if (event.target.checked) paths.push(candidate.path);
+                                setter(paths.join("\n"));
+                              }}
+                            />
+                            {label}
+                          </label>
+                        ))}
+                      </div>
+                    ))}
+                </div>
+                <details>
+                  <summary>手动指定其他相对路径及命令可写子目录</summary>
+                  <label className="field">
+                    可读取文件（每行一个）
+                    <Textarea
+                      value={readPaths}
+                      onChange={(event) => setReadPaths(event.target.value)}
+                    />
+                  </label>
+                  <label className="field">
+                    可写文件（每行一个）
+                    <Textarea
+                      value={writePaths}
+                      onChange={(event) => setWritePaths(event.target.value)}
+                    />
+                  </label>
+                  <label className="field">
+                    命令可写子目录（每行一个，可留空）
+                    <Textarea
+                      value={writablePaths}
+                      onChange={(event) => setWritablePaths(event.target.value)}
+                    />
+                  </label>
+                </details>
+                <p className="muted">
+                  请选择真实的检查程序和参数；同一命令将用于计划中的每项独立检查。运行后才会显示实际结果，不代表模型已经执行过检查。
+                </p>
+                <div className="grid2">
+                  <label className="field">
+                    检查程序绝对路径
+                    <Input
+                      value={executable}
+                      onChange={(event) => setExecutable(event.target.value)}
+                    />
+                  </label>
+                  <label className="field">
+                    工作目录
+                    <Input value={cwd} onChange={(event) => setCwd(event.target.value)} />
+                  </label>
+                </div>
+                <label className="field">
+                  命令参数（每行一个参数；不经过 shell）
+                  <Textarea value={args} onChange={(event) => setArgs(event.target.value)} />
+                </label>
+                <p className="muted">
+                  资源限制：总计 {seconds} 秒、单命令 {commandSeconds} 秒；最多模型调用 {maxCalls}{" "}
+                  次、动作 {maxActions} 次、命令 {maxCommands} 次，输出 {maxOutput} 字节。
+                </p>
+                <details>
+                  <summary>调整资源限制</summary>
+                  <div className="grid2">
+                    <label className="field">
+                      总时间 / 秒
+                      <Input
+                        type="number"
+                        value={seconds}
+                        onChange={(event) => setSeconds(event.target.value)}
+                      />
+                    </label>
+                    <label className="field">
+                      单命令时间 / 秒
+                      <Input
+                        type="number"
+                        value={commandSeconds}
+                        onChange={(event) => setCommandSeconds(event.target.value)}
+                      />
+                    </label>
+                    <label className="field">
+                      模型调用次数
+                      <Input
+                        type="number"
+                        value={maxCalls}
+                        onChange={(event) => setMaxCalls(event.target.value)}
+                      />
+                    </label>
+                    <label className="field">
+                      动作次数
+                      <Input
+                        type="number"
+                        value={maxActions}
+                        onChange={(event) => setMaxActions(event.target.value)}
+                      />
+                    </label>
+                    <label className="field">
+                      命令次数
+                      <Input
+                        type="number"
+                        value={maxCommands}
+                        onChange={(event) => setMaxCommands(event.target.value)}
+                      />
+                    </label>
+                    <label className="field">
+                      输出预算 / 字节
+                      <Input
+                        type="number"
+                        value={maxOutput}
+                        onChange={(event) => setMaxOutput(event.target.value)}
+                      />
+                    </label>
+                  </div>
+                </details>
+                <p className="muted">
+                  数据披露项：真实模型可能产生费用；此处不能保证硬费用、内存或文件读写字节上限。不支持联网安装。
+                </p>
+                {Object.entries({
+                  plan: "计划",
+                  "file-content": "文件内容",
+                  "command-output": "命令输出",
+                  review: "评审资料",
+                }).map(([key, label]) => (
+                  <label className="check" key={key}>
+                    <input
+                      type="checkbox"
+                      checked={disclosures[key as keyof typeof disclosures]}
+                      onChange={(event) =>
+                        setDisclosures({ ...disclosures, [key]: event.target.checked })
+                      }
+                    />
+                    允许向选定模型披露{label}
+                  </label>
+                ))}
+                <div className="row">
+                  <Button
+                    variant="flat"
+                    onClick={() => void propose()}
+                    disabled={
+                      busy ||
+                      !state?.plan?.eligible ||
+                      !state.workspace ||
+                      (!!proposal &&
+                        proposalChanged &&
+                        ["proposed", "authorized", "running"].includes(state.execution.status))
+                    }
+                  >
+                    生成待审核提案
+                  </Button>
+                </div>
+                {proposal && (
+                  <>
+                    {proposalChanged && (
+                      <p className="notice">权限或命令已变化，请重新生成提案并审核。</p>
+                    )}
+                    <h3>当前提案与独立检查</h3>
+                    <DisclosureView
+                      value={{
+                        permission: proposal.permission,
+                        verification: state?.execution.verification,
+                      }}
+                    />
+                    <details>
+                      <summary>查看原始提案</summary>
+                      <pre className="data">
+                        {pretty({
+                          permission: proposal.permission,
+                          verification: state?.execution.verification,
+                        })}
+                      </pre>
+                    </details>
+                    {Object.entries({
+                      files: "已审核文件读写范围",
+                      commands: "已审核具体命令与全副本读取",
+                      disclosure: "已审核接收方和分别列出的资料披露",
+                      limits: "已审核可实施资源上限、期限及费用风险",
+                    }).map(([key, label]) => (
+                      <label className="check" key={key}>
+                        <input
+                          type="checkbox"
+                          checked={approvals[key as keyof typeof approvals]}
+                          onChange={(event) =>
+                            setApprovals({ ...approvals, [key]: event.target.checked })
+                          }
+                        />
+                        {label}
+                      </label>
+                    ))}
+                    <div className="row">
+                      <Button
+                        onClick={() =>
+                          void action("execution.authorize", {
+                            identity: proposal.identity,
+                            decisionRef: `local-user-${crypto.randomUUID()}`,
+                          })
+                        }
+                        disabled={busy || !ready || proposalChanged}
+                      >
+                        分别授权此提案
+                      </Button>
+                      <Button
+                        onClick={() => void action("execution.run", {}, true)}
+                        disabled={state?.execution.status !== "authorized" || proposalChanged}
+                      >
+                        开始受控执行
+                      </Button>
+                      <Button
+                        variant="flat"
+                        color="danger"
+                        onClick={() => void action("execution.cancel", {})}
+                        disabled={
+                          !state || !["authorized", "running"].includes(state.execution.status)
+                        }
+                      >
+                        撤销 / 停止
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </Card>
+            )}
+            {(proposal || state?.executionDisclosure || state?.execution.result) && (
+              <Card className="section workflow-card">
+                <h2>实时执行 · {stream}</h2>
+                <p className="muted">
+                  状态：{state?.execution.status ?? "未知"}
+                  。断线期间事件不回放；下方仅展示本次连接观察到的事件。
+                </p>
+                {state?.executionDisclosure && (
+                  <div className="chat-disclosure">
+                    <h3>执行已暂停：请审核本次模型请求</h3>
+                    <p className="muted">
+                      接收方：{state.executionDisclosure.recipient}
+                      。以下是本次请求的完整消息与配置；执行权限不代表同意本次发送。
+                    </p>
+                    <DisclosureView value={state.executionDisclosure.request} />
+                    <details>
+                      <summary>查看原始请求</summary>
+                      <pre className="data">{pretty(state.executionDisclosure.request)}</pre>
+                    </details>
+                    <div className="row">
+                      <Button
+                        disabled={busy}
+                        onClick={() =>
+                          void action("execution.disclosure.allow", {
+                            identity: state.executionDisclosure?.identity,
+                          })
+                        }
+                      >
+                        同意本次发送
+                      </Button>
+                      <Button
+                        variant="flat"
+                        color="danger"
+                        disabled={busy}
+                        onClick={() =>
+                          void action("execution.disclosure.deny", {
+                            identity: state.executionDisclosure?.identity,
+                          })
+                        }
+                      >
+                        拒绝本次发送
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                {events.length > 0 && (
+                  <p className="muted">
+                    最近事件：{events[events.length - 1]?.stage} ·{" "}
+                    {events[events.length - 1]?.status} {events[events.length - 1]?.reason ?? ""}
+                  </p>
+                )}
+                <details>
+                  <summary>查看实时事件及动作详情</summary>
+                  <pre className="data">
+                    {pretty({ events, actions: state?.execution.actions ?? [] })}
+                  </pre>
+                </details>
+              </Card>
+            )}
+            {state?.execution.result && (
+              <Card className="section workflow-card">
+                <h2>独立检查与评审报告</h2>
+                <p className="muted">
+                  候选副本：{state?.execution.result?.workspaceRoot ?? "尚未创建或不可用"}
+                </p>
+                <p className="muted">
+                  候选内容身份：
+                  {state?.execution.result?.evidence?.candidateIdentity ?? "未知或尚未冻结"}
+                </p>
+                <p className="muted">
+                  停止状态：{state?.execution.result?.status ?? "未执行"} · 原因：
+                  {state?.execution.result?.reason ?? "无或未知"}
+                </p>
+                <h3>独立检查</h3>
+                {state.execution.result.evidence?.checks.length ? (
+                  <ul>
+                    {state.execution.result.evidence.checks.map((check) => (
+                      <li key={check.id}>
+                        {check.id}：
+                        {check.status === "passed"
+                          ? "通过"
+                          : check.status === "failed"
+                            ? "失败"
+                            : check.status}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>未执行或不可用</p>
+                )}
+                <h3>评审结果</h3>
+                <p>
+                  评审：
+                  {state.execution.result.evidence?.reviewStatus === "completed"
+                    ? "已完成"
+                    : "未完成或不可用"}
+                  ；质量结论：
+                  {state.execution.result.report?.quality === "unknown"
+                    ? "未知（不能据此强制通过）"
+                    : (state.execution.result.report?.quality ?? "未知")}
+                </p>
+                <details>
+                  <summary>查看原始结果</summary>
+                  <pre className="data">{pretty(state.execution.result)}</pre>
+                </details>
+                <h3>原始现场与候选差异</h3>
+                <p className="muted">
+                  {state?.execution.result?.report?.diff !== null &&
+                  state?.execution.result?.report?.diff !== undefined
+                    ? "已获准在本地显示差异；未因此扩大模型披露。"
+                    : (state?.execution.result?.report?.diffUnavailable ?? "差异尚不可用")}
+                </p>
+                {state?.execution.diffAvailable && !state.execution.diffRevealed && (
+                  <Button
+                    variant="flat"
+                    onClick={() => void action("report.reveal", { allowFullCandidateDiff: true })}
+                  >
+                    允许本地显示完整差异
+                  </Button>
+                )}
+                <pre className="data">{state?.execution.result?.report?.diff ?? "未显示"}</pre>
+              </Card>
+            )}
           </Card>
           <aside className="stack">
             <Card className="section">
@@ -548,23 +1193,115 @@ function App() {
               <p className="muted">
                 模型：{state?.model ? `${state.model.recipient} · ${state.model.mode}` : "尚未选择"}
               </p>
-              {state?.model?.mode !== "configured" && (
-                <p className="notice">
-                  聊天需要宿主配置的真实模型。启动宿主前设置 LORELUM_MODEL_ENDPOINT 和
-                  LORELUM_MODEL_NAME，必要时设置
-                  LORELUM_MODEL_API_KEY，然后重启并选择真实模型。请勿在页面输入密钥。离线演示不能聊天。
-                </p>
-              )}
+              <label className="field">
+                OpenAI-compatible endpoint
+                <Input
+                  value={endpoint}
+                  onChange={(event) => setEndpoint(event.target.value)}
+                  placeholder="https://api.example.com/v1"
+                />
+              </label>
+              <label className="field">
+                模型名称
+                <Input value={modelName} onChange={(event) => setModelName(event.target.value)} />
+              </label>
+              <label className="field">
+                API 密钥（可留空，仅保存在宿主内存）
+                <Input
+                  type="password"
+                  autoComplete="off"
+                  value={apiKey}
+                  onChange={(event) => setApiKey(event.target.value)}
+                />
+              </label>
+              <Button
+                disabled={!token || busy || chatBusy || !endpoint.trim() || !modelName.trim()}
+                onClick={() => {
+                  const credential = apiKey;
+                  setApiKey("");
+                  void action("model.configure", {
+                    endpoint: endpoint.trim(),
+                    model: modelName.trim(),
+                    apiKey: credential,
+                  });
+                }}
+              >
+                保存并选择模型
+              </Button>
+              <p className="muted">保存不会发送模型请求，更换模型会使相关授权失效。</p>
               <Button
                 variant="flat"
-                onClick={() => void action("model.configured", {})}
-                disabled={!token || busy || chatBusy}
+                disabled={
+                  !token || busy || chatBusy || chatRunning || state?.model?.mode !== "configured"
+                }
+                onClick={() => {
+                  const content = "连接检查：请回复“连接成功”。";
+                  setChatInput(content);
+                  setChatBusy(true);
+                  void action("chat.preview", {
+                    messages: [...chatMessages, { role: "user", content }],
+                  }).finally(() => setChatBusy(false));
+                }}
               >
-                选择宿主配置的真实模型
+                预览连接检查（替换当前输入）
               </Button>
               <p className="muted">
-                项目发现、离线演示和其他设置在下方高级工作流中。选择模型不会发送消息。
+                检查会把“连接检查：请回复‘连接成功’。”以及现有聊天记录发送给所选接收方；须先在对话中查看完整披露并同意。
               </p>
+            </Card>
+            <Card className="section">
+              <h2>Git 工作区</h2>
+              <p className="notice">
+                发现会列出 Git
+                已跟踪、未跟踪和忽略文件的路径。请先排除凭据、密钥及其他敏感文件；发现不会发送内容给模型。
+              </p>
+              <label className="field">
+                工作区绝对路径
+                <Input
+                  value={root}
+                  onChange={(event) => setRoot(event.target.value)}
+                  placeholder="/home/user/project"
+                />
+              </label>
+              <label className="field">
+                排除相对路径（每行一个）
+                <Textarea
+                  value={excluded}
+                  onChange={(event) => setExcluded(event.target.value)}
+                  placeholder=".env"
+                />
+              </label>
+              <Button disabled={!token || busy || !root.trim()} onClick={() => void discover()}>
+                发现工作区
+              </Button>
+              {state?.workspace && (
+                <>
+                  <p className="muted">
+                    已选择：{state.workspace.root}
+                    。勾选允许用于规划的路径；只发送名称，不发送文件内容。
+                  </p>
+                  <div className="path-list">
+                    {state.workspace.candidates
+                      .filter((candidate) => !candidate.exclusionReason)
+                      .map((candidate) => (
+                        <label className="check" key={candidate.path}>
+                          <input
+                            type="checkbox"
+                            checked={selectedPaths.includes(candidate.path)}
+                            onChange={(event) =>
+                              setSelectedPaths((current) =>
+                                event.target.checked
+                                  ? [...current, candidate.path]
+                                  : current.filter((path) => path !== candidate.path),
+                              )
+                            }
+                          />
+                          {candidate.path} ({candidate.status})
+                        </label>
+                      ))}
+                  </div>
+                </>
+              )}
             </Card>
           </aside>
         </div>
@@ -623,7 +1360,7 @@ function App() {
               <Card className="section">
                 <h2>02 · 模型与任务</h2>
                 <p className="muted">
-                  真实模型只使用宿主配置；选择不发送请求。离线演示是确定性的单文件替换，不代表真实模型效果。
+                  可在右侧配置真实模型，选择不会发送请求。离线演示是确定性的单文件替换，不代表真实模型效果。
                 </p>
                 <label className="field">
                   自然语言修改意见
@@ -690,326 +1427,8 @@ function App() {
                   </p>
                 )}
               </Card>
-              <Card className="section">
-                <h2>03 · 计划和披露</h2>
-                <p className="muted">
-                  先查看本次接收方、任务、资料、旧计划和修改意见，再单独授权请求。新版本使旧确认失效；模型提出的标准仅为提议。
-                </p>
-                <label className="field">
-                  本次修改意见（首次可留空）
-                  <Textarea
-                    value={instructions}
-                    onChange={(event) => setInstructions(event.target.value)}
-                  />
-                </label>
-                <div className="row">
-                  <Button
-                    variant="flat"
-                    onClick={() => void action("planning.preview", { instructions })}
-                    disabled={busy || !state?.model}
-                  >
-                    预览披露
-                  </Button>
-                  <Button
-                    variant="flat"
-                    onClick={() =>
-                      void action("planning.authorize", { identity: state?.disclosure?.identity })
-                    }
-                    disabled={busy || !state?.disclosure || state.disclosure.authorized}
-                  >
-                    明确授权本次披露
-                  </Button>
-                  <Button
-                    onClick={() =>
-                      void action(
-                        "planning.generate",
-                        { identity: state?.disclosure?.identity },
-                        true,
-                      )
-                    }
-                    disabled={!state?.disclosure?.authorized}
-                  >
-                    生成计划
-                  </Button>
-                </div>
-                {state?.disclosure && (
-                  <>
-                    <p className="muted">
-                      接收方：{state.disclosure.recipient} ·{" "}
-                      {state.disclosure.authorized ? "已授权该次请求" : "尚未授权"}
-                    </p>
-                    <pre className="data">{pretty(state.disclosure.request)}</pre>
-                  </>
-                )}
-                {state?.plan && (
-                  <>
-                    <p className="muted">
-                      版本 {state.plan.revision} · {state.plan.status} ·{" "}
-                      {state.plan.acceptanceProposed ? "完成标准为模型提议" : "完成标准来自任务"}
-                    </p>
-                    <pre className="data">{pretty(state.plan.plan)}</pre>
-                    <div className="row">
-                      <Button
-                        onClick={() =>
-                          void action("planning.confirm", {
-                            identity: state.plan?.identity,
-                            revision: state.plan?.revision,
-                          })
-                        }
-                        disabled={busy || state.plan.eligible}
-                      >
-                        确认此版本计划
-                      </Button>
-                      <Button
-                        variant="flat"
-                        color="danger"
-                        onClick={() => void action("planning.reject", {})}
-                        disabled={busy}
-                      >
-                        拒绝 / 撤销计划
-                      </Button>
-                    </div>
-                  </>
-                )}
-              </Card>
-              <Card className="section">
-                <h2>04 · 审核执行权限</h2>
-                <p className="muted">
-                  计划确认不授权执行。填写具体文件和命令；命令在隔离副本中执行，读取整个副本。配置改变后须重新生成提案并审核。
-                </p>
-                <div className="grid2">
-                  <label className="field">
-                    可读取文件（每行一个）
-                    <Textarea
-                      value={readPaths}
-                      onChange={(event) => setReadPaths(event.target.value)}
-                    />
-                  </label>
-                  <label className="field">
-                    可写文件（每行一个）
-                    <Textarea
-                      value={writePaths}
-                      onChange={(event) => setWritePaths(event.target.value)}
-                    />
-                  </label>
-                </div>
-                <label className="field">
-                  命令可写子目录（每行一个，可留空）
-                  <Textarea
-                    value={writablePaths}
-                    onChange={(event) => setWritablePaths(event.target.value)}
-                  />
-                </label>
-                <div className="grid2">
-                  <label className="field">
-                    检查程序绝对路径
-                    <Input
-                      value={executable}
-                      onChange={(event) => setExecutable(event.target.value)}
-                    />
-                  </label>
-                  <label className="field">
-                    工作目录
-                    <Input value={cwd} onChange={(event) => setCwd(event.target.value)} />
-                  </label>
-                </div>
-                <label className="field">
-                  命令参数（JSON 字符串数组）
-                  <Textarea value={args} onChange={(event) => setArgs(event.target.value)} />
-                </label>
-                <div className="grid2">
-                  <label className="field">
-                    总时间 / 秒
-                    <Input
-                      type="number"
-                      value={seconds}
-                      onChange={(event) => setSeconds(event.target.value)}
-                    />
-                  </label>
-                  <label className="field">
-                    单命令时间 / 秒
-                    <Input
-                      type="number"
-                      value={commandSeconds}
-                      onChange={(event) => setCommandSeconds(event.target.value)}
-                    />
-                  </label>
-                  <label className="field">
-                    模型调用次数
-                    <Input
-                      type="number"
-                      value={maxCalls}
-                      onChange={(event) => setMaxCalls(event.target.value)}
-                    />
-                  </label>
-                  <label className="field">
-                    动作次数
-                    <Input
-                      type="number"
-                      value={maxActions}
-                      onChange={(event) => setMaxActions(event.target.value)}
-                    />
-                  </label>
-                  <label className="field">
-                    命令次数
-                    <Input
-                      type="number"
-                      value={maxCommands}
-                      onChange={(event) => setMaxCommands(event.target.value)}
-                    />
-                  </label>
-                  <label className="field">
-                    输出预算 / 字节
-                    <Input
-                      type="number"
-                      value={maxOutput}
-                      onChange={(event) => setMaxOutput(event.target.value)}
-                    />
-                  </label>
-                </div>
-                <p className="muted">
-                  数据披露项：真实模型可能产生费用；此处不能保证硬费用、内存或文件读写字节上限。不支持联网安装。
-                </p>
-                {Object.entries({
-                  plan: "计划",
-                  "file-content": "文件内容",
-                  "command-output": "命令输出",
-                  review: "评审资料",
-                }).map(([key, label]) => (
-                  <label className="check" key={key}>
-                    <input
-                      type="checkbox"
-                      checked={disclosures[key as keyof typeof disclosures]}
-                      onChange={(event) =>
-                        setDisclosures({ ...disclosures, [key]: event.target.checked })
-                      }
-                    />
-                    允许向选定模型披露{label}
-                  </label>
-                ))}
-                <div className="row">
-                  <Button
-                    variant="flat"
-                    onClick={() => void propose()}
-                    disabled={busy || !state?.plan?.eligible || !state.workspace}
-                  >
-                    生成待审核提案
-                  </Button>
-                </div>
-                {proposal && (
-                  <>
-                    <h3>当前提案与独立检查</h3>
-                    <pre className="data">
-                      {pretty({
-                        permission: proposal.permission,
-                        verification: state?.execution.verification,
-                      })}
-                    </pre>
-                    {Object.entries({
-                      files: "已审核文件读写范围",
-                      commands: "已审核具体命令与全副本读取",
-                      disclosure: "已审核接收方和分别列出的资料披露",
-                      limits: "已审核可实施资源上限、期限及费用风险",
-                    }).map(([key, label]) => (
-                      <label className="check" key={key}>
-                        <input
-                          type="checkbox"
-                          checked={approvals[key as keyof typeof approvals]}
-                          onChange={(event) =>
-                            setApprovals({ ...approvals, [key]: event.target.checked })
-                          }
-                        />
-                        {label}
-                      </label>
-                    ))}
-                    <div className="row">
-                      <Button
-                        onClick={() =>
-                          void action("execution.authorize", {
-                            identity: proposal.identity,
-                            decisionRef: `local-user-${crypto.randomUUID()}`,
-                          })
-                        }
-                        disabled={busy || !ready}
-                      >
-                        分别授权此提案
-                      </Button>
-                      <Button
-                        onClick={() => void action("execution.run", {}, true)}
-                        disabled={state?.execution.status !== "authorized"}
-                      >
-                        开始受控执行
-                      </Button>
-                      <Button
-                        variant="flat"
-                        color="danger"
-                        onClick={() => void action("execution.cancel", {})}
-                        disabled={
-                          !state || !["authorized", "running"].includes(state.execution.status)
-                        }
-                      >
-                        撤销 / 停止
-                      </Button>
-                    </div>
-                  </>
-                )}
-              </Card>
             </main>
-            <aside className="stack">
-              <Card className="section">
-                <h2>实时执行 · {stream}</h2>
-                <p className="muted">
-                  状态：{state?.execution.status ?? "未知"}
-                  。断线期间事件不回放；下方仅展示本次连接观察到的事件。
-                </p>
-                <pre className="data">{events.length ? pretty(events) : "暂无实时事件"}</pre>
-                <h3>已观察动作</h3>
-                <pre className="data">{pretty(state?.execution.actions ?? [])}</pre>
-              </Card>
-              <Card className="section">
-                <h2>独立检查与评审报告</h2>
-                <p className="muted">
-                  候选副本：{state?.execution.result?.workspaceRoot ?? "尚未创建或不可用"}
-                </p>
-                <p className="muted">
-                  候选内容身份：
-                  {state?.execution.result?.evidence?.candidateIdentity ?? "未知或尚未冻结"}
-                </p>
-                <p className="muted">
-                  停止状态：{state?.execution.result?.status ?? "未执行"} · 原因：
-                  {state?.execution.result?.reason ?? "无或未知"}
-                </p>
-                <h3>检查命令、状态与输出</h3>
-                <pre className="data">
-                  {pretty(state?.execution.result?.evidence?.checks ?? "未执行或不可用")}
-                </pre>
-                <h3>公开 judge 报告</h3>
-                <pre className="data">
-                  {pretty({
-                    quality: state?.execution.result?.report?.quality ?? "unknown",
-                    review: state?.execution.result?.evidence?.review ?? null,
-                    completeness: state?.execution.result?.evidence?.completeness ?? "unknown",
-                    stopReason: state?.execution.result?.evidence?.stopReason ?? null,
-                  })}
-                </pre>
-                <h3>原始现场与候选差异</h3>
-                <p className="muted">
-                  {state?.execution.result?.report?.diff !== null &&
-                  state?.execution.result?.report?.diff !== undefined
-                    ? "已获准在本地显示差异；未因此扩大模型披露。"
-                    : (state?.execution.result?.report?.diffUnavailable ?? "差异尚不可用")}
-                </p>
-                {state?.execution.diffAvailable && !state.execution.diffRevealed && (
-                  <Button
-                    variant="flat"
-                    onClick={() => void action("report.reveal", { allowFullCandidateDiff: true })}
-                  >
-                    允许本地显示完整差异
-                  </Button>
-                )}
-                <pre className="data">{state?.execution.result?.report?.diff ?? "未显示"}</pre>
-              </Card>
-            </aside>
+            <aside className="stack"></aside>
           </div>
         </details>
       </div>

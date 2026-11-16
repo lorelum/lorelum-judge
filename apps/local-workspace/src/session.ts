@@ -66,6 +66,12 @@ type ChatDisclosure = {
   };
   authorized: boolean;
 };
+type ExecutionDisclosure = {
+  readonly identity: string;
+  readonly recipient: string;
+  readonly request: { readonly messages: unknown; readonly config: ModelGenerationConfig };
+  readonly decide: (allowed: boolean) => void;
+};
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -83,6 +89,16 @@ function containsSecret(value: unknown, secret: string): boolean {
   if (value && typeof value === "object")
     return Object.values(value).some((item) => containsSecret(item, secret));
   return false;
+}
+function redact(value: unknown, secret: string): unknown {
+  if (!secret) return value;
+  if (typeof value === "string") return value.split(secret).join("[redacted]");
+  if (Array.isArray(value)) return value.map((item) => redact(item, secret));
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, redact(item, secret)]),
+    );
+  return value;
 }
 function json(value: unknown): void {
   const visit = (item: unknown): void => {
@@ -104,7 +120,8 @@ function json(value: unknown): void {
 /** In-memory composition root. JSON proposals never become capabilities without a separate decision. */
 export class SessionRouter {
   readonly #id = randomUUID();
-  readonly #hostModel: HostModel | undefined;
+  #hostModel: HostModel | undefined;
+  readonly #secrets = new Set<string>();
   readonly #listeners = new Set<(event: unknown) => void>();
   #sequence = 0;
   #generation = 0;
@@ -114,6 +131,7 @@ export class SessionRouter {
   #plan: PlanningSession | undefined;
   #disclosure: PendingDisclosure | undefined;
   #chatDisclosure: ChatDisclosure | undefined;
+  #executionDisclosure: ExecutionDisclosure | undefined;
   #chatModel: ModelSelection | undefined;
   #chatMessages: readonly ChatMessage[] = [];
   #chatStatus: "idle" | "running" | "completed" | "failed" = "idle";
@@ -145,11 +163,15 @@ export class SessionRouter {
     this.#hostModel = options.configuredModel
       ? structuredClone(options.configuredModel)
       : undefined;
+    if (this.#hostModel?.apiKey) this.#secrets.add(this.#hostModel.apiKey);
   }
 
   #safe(value: unknown): unknown {
-    const secret = this.#hostModel?.apiKey;
-    if (typeof value === "string") return secret ? value.split(secret).join("[redacted]") : value;
+    if (typeof value === "string") {
+      let sanitized = value;
+      for (const secret of this.#secrets) sanitized = sanitized.split(secret).join("[redacted]");
+      return sanitized;
+    }
     if (Array.isArray(value)) return value.map((item) => this.#safe(item));
     if (value && typeof value === "object")
       return Object.fromEntries(
@@ -256,6 +278,13 @@ export class SessionRouter {
         plan: this.#plan?.review() ?? null,
         disclosure: this.#disclosure ?? null,
         chatDisclosure: this.#chatDisclosure ?? null,
+        executionDisclosure: this.#executionDisclosure
+          ? {
+              identity: this.#executionDisclosure.identity,
+              recipient: this.#executionDisclosure.recipient,
+              request: this.#executionDisclosure.request,
+            }
+          : null,
         chat: { messages: this.#chatMessages, status: this.#chatStatus },
         execution: {
           status: this.#executionStatus,
@@ -274,6 +303,7 @@ export class SessionRouter {
     );
   }
   #clearExecution(): void {
+    this.#executionDisclosure?.decide(false);
     if (this.#executionStatus === "running") this.#workspace = undefined;
     this.#controller?.abort();
     this.#execution?.revoke();
@@ -303,6 +333,79 @@ export class SessionRouter {
     this.#clearExecution();
     this.#disclosure = undefined;
     this.#plan?.revokeModelDisclosure();
+  }
+  #selectConfigured(hostModel: HostModel): void {
+    const selected = createConfiguredModel(hostModel);
+    if (hostModel.apiKey) new Headers({ authorization: `Bearer ${hostModel.apiKey}` });
+    const secret = hostModel.apiKey;
+    if (secret && (selected.recipient.includes(secret) || containsSecret(selected.config, secret)))
+      throw new Error("Model recipient or configuration cannot be safely displayed");
+    const model: ModelPort = {
+      generate: async (request) => {
+        if ([...this.#secrets].some((key) => containsSecret(request.messages, key)))
+          throw new Error("Credential disclosure refused");
+        if (
+          this.#executionStatus === "running" &&
+          request.signal !== this.#chatController?.signal
+        ) {
+          const permission = this.#proposal?.permission;
+          if (
+            !permission ||
+            this.#executionDisclosure ||
+            request.signal.aborted ||
+            Date.now() >= permission.expiresAt
+          )
+            throw new Error("Execution disclosure unavailable");
+          const messages = structuredClone(request.messages);
+          const generation = this.#generation;
+          const approved = await new Promise<boolean>((resolve) => {
+            let settled = false;
+            const finish = (allowed: boolean) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              request.signal.removeEventListener("abort", abort);
+              if (this.#executionDisclosure === pending) this.#executionDisclosure = undefined;
+              resolve(allowed);
+            };
+            const abort = () => {
+              finish(false);
+              this.#emit("model", "result", "cancelled", pending.identity);
+            };
+            const timer = setTimeout(
+              abort,
+              Math.min(2_147_483_647, Math.max(0, permission.expiresAt - Date.now())),
+            );
+            const pending: ExecutionDisclosure = {
+              identity: randomUUID(),
+              recipient: selected.recipient,
+              request: { messages, config: structuredClone(selected.config) },
+              decide: finish,
+            };
+            this.#executionDisclosure = pending;
+            request.signal.addEventListener("abort", abort, { once: true });
+            if (request.signal.aborted) abort();
+            else this.#emit("model", "proposed", "proposed", pending.identity);
+          });
+          if (
+            !approved ||
+            request.signal.aborted ||
+            generation !== this.#generation ||
+            this.#executionStatus !== "running" ||
+            Date.now() >= permission.expiresAt
+          )
+            throw new Error("Execution disclosure denied or expired");
+          return selected.model.generate({ ...request, messages });
+        }
+        return selected.model.generate(request);
+      },
+    };
+    this.#invalidate();
+    if (secret) this.#secrets.add(secret);
+    this.#hostModel = hostModel;
+    this.#chatMessages = [];
+    this.#chatStatus = "idle";
+    this.#model = { mode: "configured", ...selected, model };
   }
   #requirePlan(): PlanningSession {
     if (!this.#plan) throw new Error("Create a planning session first");
@@ -419,7 +522,16 @@ export class SessionRouter {
     });
   }
   async dispatch(action: string, payload: unknown): Promise<unknown> {
+    let candidateSecret = "";
     try {
+      if (
+        action === "model.configure" &&
+        payload &&
+        typeof payload === "object" &&
+        "apiKey" in payload &&
+        typeof payload.apiKey === "string"
+      )
+        candidateSecret = payload.apiKey;
       json(payload);
       const data = object(payload);
       switch (action) {
@@ -471,24 +583,21 @@ export class SessionRouter {
           this.#emit("model", "result", "completed");
           break;
         }
+        case "model.configure": {
+          const endpoint = text(data.endpoint, "endpoint");
+          const model = text(data.model, "model");
+          if (typeof data.apiKey !== "string") throw new Error("apiKey must be a string");
+          this.#selectConfigured({
+            endpoint,
+            ...(data.apiKey ? { apiKey: data.apiKey } : {}),
+            config: { model },
+          });
+          this.#emit("model", "result", "completed");
+          break;
+        }
         case "model.configured": {
           if (!this.#hostModel) throw new Error("No configured model is available from the host");
-          const selected = createConfiguredModel(this.#hostModel);
-          const secret = this.#hostModel.apiKey;
-          if (
-            secret &&
-            (selected.recipient.includes(secret) || containsSecret(selected.config, secret))
-          )
-            throw new Error("Model recipient or configuration cannot be safely displayed");
-          const model: ModelPort = {
-            generate(request) {
-              if (secret && containsSecret(request.messages, secret))
-                throw new Error("Credential disclosure refused");
-              return selected.model.generate(request);
-            },
-          };
-          this.#invalidate();
-          this.#model = { mode: "configured", ...selected, model };
+          this.#selectConfigured(this.#hostModel);
           this.#emit("model", "result", "completed");
           break;
         }
@@ -511,7 +620,7 @@ export class SessionRouter {
           });
           if (messages[messages.length - 1]?.role !== "user")
             throw new Error("Chat must end with a user message");
-          if (this.#hostModel?.apiKey && containsSecret(messages, this.#hostModel.apiKey))
+          if ([...this.#secrets].some((key) => containsSecret(messages, key)))
             throw new Error("Credential disclosure refused");
           this.#invalidateChat();
           this.#chatDisclosure = {
@@ -1006,9 +1115,25 @@ export class SessionRouter {
           }
           break;
         }
+        case "execution.disclosure.allow":
+        case "execution.disclosure.deny": {
+          const pending = this.#executionDisclosure;
+          if (!pending || pending.identity !== data.identity || this.#executionStatus !== "running")
+            throw new Error("Disclosure preview does not match");
+          if (!this.#proposal || Date.now() >= this.#proposal.permission.expiresAt) {
+            pending.decide(false);
+            this.#emit("model", "authorization", "denied", pending.identity);
+            throw new Error("Disclosure preview does not match");
+          }
+          const allowed = action === "execution.disclosure.allow";
+          pending.decide(allowed);
+          this.#emit("model", "authorization", allowed ? "allowed" : "denied", pending.identity);
+          break;
+        }
         case "execution.cancel": {
           if (!this.#execution || this.#executionStatus === "idle")
             throw new Error("No execution to cancel");
+          this.#executionDisclosure?.decide(false);
           this.#controller?.abort();
           this.#execution.revoke();
           if (this.#executionStatus !== "running") this.#executionStatus = "cancelled";
@@ -1089,16 +1214,19 @@ export class SessionRouter {
         "A real user decision reference is required",
         "Model recipient does not match selected model",
       ];
-      return {
-        ok: false,
-        error: {
-          kind: "rejected",
-          message: safe.includes(message)
-            ? message
-            : "Action rejected: invalid input, unavailable prerequisite, or authorization mismatch",
+      return redact(
+        {
+          ok: false,
+          error: {
+            kind: "rejected",
+            message: safe.includes(message)
+              ? message
+              : "Action rejected: invalid input, unavailable prerequisite, or authorization mismatch",
+          },
+          state: this.snapshot(),
         },
-        state: this.snapshot(),
-      };
+        candidateSecret,
+      );
     }
   }
 }

@@ -144,6 +144,179 @@ describe("local workspace session router", () => {
     expect((await call(session, "execution.run", {})).ok).toBe(false);
   });
 
+  test("page configuration selects a real provider only after disclosure authorization", async () => {
+    const requests: { authorization: string | null; body: unknown }[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        requests.push({
+          authorization: request.headers.get("authorization"),
+          body: await request.json(),
+        });
+        return Response.json({ choices: [{ message: { content: "Provider response" } }] });
+      },
+    });
+    try {
+      const session = new SessionRouter();
+      const events: unknown[] = [];
+      session.subscribe((event) => events.push(event));
+      const endpoint = `http://127.0.0.1:${server.port}/v1`;
+      const secret = "page-config-private-key";
+      const selected = await call(session, "model.configure", {
+        endpoint,
+        model: "first",
+        apiKey: secret,
+      });
+      expect(selected.ok).toBe(true);
+      expect(selected.state.model?.mode).toBe("configured");
+      expect(requests).toHaveLength(0);
+      const messages = [{ role: "user", content: "Connection test" }];
+      const preview = await call(session, "chat.preview", { messages });
+      expect(preview.state.chatDisclosure?.recipient).toContain("127.0.0.1");
+      const identity = preview.state.chatDisclosure!.identity;
+      expect((await call(session, "chat.generate", { identity })).ok).toBe(false);
+      expect(requests).toHaveLength(0);
+      await call(session, "chat.authorize", { identity });
+      const reply = await call(session, "chat.generate", { identity });
+      expect(reply.state.chat.messages.at(-1)?.content).toBe("Provider response");
+      expect(requests).toEqual([
+        {
+          authorization: `Bearer ${secret}`,
+          body: { model: "first", messages, stream: false },
+        },
+      ]);
+      expect(JSON.stringify([selected, preview, reply, events])).not.toContain(secret);
+
+      expect(
+        (await call(session, "model.configure", { endpoint, model: "second", apiKey: "" })).ok,
+      ).toBe(true);
+      const next = await call(session, "chat.preview", { messages });
+      await call(session, "chat.authorize", { identity: next.state.chatDisclosure!.identity });
+      const noKey = await call(session, "chat.generate", {
+        identity: next.state.chatDisclosure!.identity,
+      });
+      expect(noKey.ok).toBe(true);
+      expect(requests[1]?.authorization).toBeNull();
+      expect(requests[1]?.body).toEqual({ model: "second", messages, stream: false });
+      expect((await call(session, "model.configured", {})).state.model?.mode).toBe("configured");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("invalid page configuration preserves the selected model and pending authority without exposing keys", async () => {
+    const session = new SessionRouter();
+    const endpoint = "http://127.0.0.1:1234/v1";
+    const secret = "old-configuration-secret";
+    expect(
+      (await call(session, "model.configure", { endpoint, model: "valid", apiKey: secret })).ok,
+    ).toBe(true);
+    const preview = await call(session, "chat.preview", {
+      messages: [{ role: "user", content: "hello" }],
+    });
+    const identity = preview.state.chatDisclosure!.identity;
+    await call(session, "chat.authorize", { identity });
+    for (const invalid of [
+      { endpoint: "not a URL", model: "valid", apiKey: "new-invalid-secret" },
+      { endpoint, model: "valid", apiKey: "bad\nheader" },
+      { endpoint, model: "", apiKey: "new-invalid-secret" },
+      { endpoint, model: "valid", apiKey: 42 },
+      { endpoint, model: "new-invalid-secret", apiKey: "new-invalid-secret" },
+    ]) {
+      const result = await call(session, "model.configure", invalid);
+      expect(result.ok).toBe(false);
+      expect(result.state.chatDisclosure?.identity).toBe(identity);
+      expect(result.state.chatDisclosure?.authorized).toBe(true);
+      expect(JSON.stringify(result)).not.toContain(secret);
+      expect(JSON.stringify(result)).not.toContain("new-invalid-secret");
+    }
+  });
+
+  test("reconfiguration revokes chat and plan authority and redacts prior credentials", async () => {
+    const oldKey = "previous-private-credential";
+    const newKey = "replacement-private-credential";
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        return Response.json({ choices: [{ message: { content: `response with ${oldKey}` } }] });
+      },
+    });
+    try {
+      const endpoint = `http://127.0.0.1:${server.port}/v1`;
+      const session = new SessionRouter();
+      await call(session, "model.configure", { endpoint, model: "first", apiKey: oldKey });
+      const preview = await call(session, "chat.preview", {
+        messages: [{ role: "user", content: "hello" }],
+      });
+      await call(session, "chat.authorize", { identity: preview.state.chatDisclosure!.identity });
+      const reply = await call(session, "chat.generate", {
+        identity: preview.state.chatDisclosure!.identity,
+      });
+      expect(JSON.stringify(reply)).not.toContain(oldKey);
+      await createPlan(session);
+      const plan = (await call(session, "planning.preview", { instructions: "approve me" })).state;
+      await call(session, "planning.authorize", { identity: plan.disclosure!.identity });
+      const changed = await call(session, "model.configure", {
+        endpoint,
+        model: "second",
+        apiKey: newKey,
+      });
+      expect(changed.ok).toBe(true);
+      expect(changed.state.plan?.eligible).toBe(false);
+      expect(changed.state.disclosure).toBeNull();
+      expect(changed.state.chat.messages).toEqual([]);
+      expect(JSON.stringify(changed)).not.toContain(oldKey);
+      expect(JSON.stringify(changed)).not.toContain(newKey);
+      expect(
+        (await call(session, "planning.generate", { identity: plan.disclosure!.identity })).ok,
+      ).toBe(false);
+      expect(
+        (await call(session, "chat.generate", { identity: preview.state.chatDisclosure!.identity }))
+          .ok,
+      ).toBe(false);
+      const leaked = await call(session, "chat.preview", {
+        messages: [{ role: "user", content: oldKey }],
+      });
+      expect(leaked.ok).toBe(false);
+      expect(JSON.stringify(leaked)).not.toContain(oldKey);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("reconfiguration aborts a running chat before its provider request", async () => {
+    const session = new SessionRouter();
+    const endpoint = "http://127.0.0.1:1234/v1";
+    await call(session, "model.configure", {
+      endpoint,
+      model: "first",
+      apiKey: "first-private-key",
+    });
+    const preview = await call(session, "chat.preview", {
+      messages: [{ role: "user", content: "hello" }],
+    });
+    const identity = preview.state.chatDisclosure!.identity;
+    await call(session, "chat.authorize", { identity });
+    let replacement: Promise<Response> | undefined;
+    const unsubscribe = session.subscribe((event) => {
+      if (event && typeof event === "object" && "stage" in event && event.stage === "started")
+        replacement = call(session, "model.configure", {
+          endpoint,
+          model: "second",
+          apiKey: "second-private-key",
+        });
+    });
+    const interrupted = await call(session, "chat.generate", { identity });
+    unsubscribe();
+    expect((await replacement)?.ok).toBe(true);
+    expect(interrupted.ok).toBe(false);
+    expect(interrupted.state.chat.status).toBe("idle");
+    expect(interrupted.state.chat.messages).toEqual([]);
+    expect((await call(session, "chat.generate", { identity })).ok).toBe(false);
+  });
+
   test("configured provider is not called without disclosure and reports a transport failure", async () => {
     let calls = 0;
     const server = Bun.serve({
@@ -458,6 +631,190 @@ describe("local workspace session router", () => {
 
 const linux = process.platform === "linux" ? describe : describe.skip;
 linux("real workspace authorization", () => {
+  test("configured execution requires a fresh decision for each provider request", async () => {
+    let providerCalls = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        providerCalls++;
+        const body = await request.json();
+        if (body.messages.length === 2 && body.messages[0].role === "system") {
+          const input = JSON.parse(body.messages[1].content);
+          const acceptance = [
+            {
+              id: "replace",
+              text: "Update the note",
+              source: { origin: "user", ref: "request" },
+            },
+          ];
+          const plan = {
+            schema: "workflow-plan/v1",
+            id: input.id,
+            revision: input.revision,
+            task: { ...input.task, acceptance },
+            sources: input.sources,
+            goal: "Update the note",
+            scope: ["note.txt"],
+            steps: [{ id: "replace", description: "Update the note", acceptanceIds: ["replace"] }],
+            checks: [{ id: "check", description: "Run the check", acceptanceIds: ["replace"] }],
+            nonGoals: ["Publish changes"],
+            missing: [],
+            conflicts: [],
+          };
+          return Response.json({ choices: [{ message: { content: JSON.stringify(plan) } }] });
+        }
+        return Response.json({
+          choices: [{ message: { content: JSON.stringify({ type: "read", path: "note.txt" }) } }],
+        });
+      },
+    });
+    try {
+      for (const decision of ["deny", "cancel", "expire", "allow"] as const) {
+        const root = await mkdtemp(join(tmpdir(), "execution-disclosure-"));
+        const session = new SessionRouter();
+        try {
+          const git = (...args: string[]) =>
+            execFileSync("git", args, { cwd: root, stdio: "ignore" });
+          git("init");
+          git("config", "user.email", "test@example.invalid");
+          git("config", "user.name", "Test");
+          await writeFile(join(root, "note.txt"), "base");
+          git("add", "note.txt");
+          git("commit", "-m", "base");
+          expect((await call(session, "workspace.discover", { root, exclusions: [] })).ok).toBe(
+            true,
+          );
+          const workspace = session.snapshot() as { workspace: { identity: string } };
+          const endpoint = `http://127.0.0.1:${server.port}/v1`;
+          const configured = await call(session, "model.configure", {
+            endpoint,
+            model: "local-model",
+            apiKey: "execution-secret",
+          });
+          expect(configured.ok).toBe(true);
+          await call(session, "planning.create", { id: "plan", inputs: { task, sources } });
+          const preview = await call(session, "planning.preview", {});
+          const planDisclosure = preview.state.disclosure!.identity;
+          await call(session, "planning.authorize", { identity: planDisclosure });
+          const generated = await call(session, "planning.generate", { identity: planDisclosure });
+          expect(generated.ok).toBe(true);
+          await call(session, "planning.confirm", {
+            identity: generated.state.plan!.identity,
+            revision: generated.state.plan!.revision,
+          });
+          const command = { executable: "/usr/bin/true", args: [], cwd: "." };
+          const proposed = await call(session, "execution.propose", {
+            permission: {
+              planIdentity: generated.state.plan!.identity,
+              planRevision: generated.state.plan!.revision,
+              workspaceIdentity: workspace.workspace.identity,
+              readPaths: ["note.txt"],
+              commandReadPaths: ["."],
+              writePaths: ["note.txt"],
+              writablePaths: [],
+              commands: [command],
+              disclosures: ["plan", "file-content", "command-output", "review"],
+              modelRecipient: configured.state.model!.recipient,
+              limits: {
+                totalTimeMs: 30000,
+                commandTimeMs: 15000,
+                modelCalls: 4,
+                actions: 4,
+                commands: 1,
+                outputBytes: 10000,
+              },
+              expiresAt: Date.now() + (decision === "expire" ? 1000 : 30000),
+              isolation: "bubblewrap-no-network",
+            },
+            verification: {
+              checks: [
+                {
+                  id: "check",
+                  version: "1",
+                  environmentIdentity: null,
+                  ...command,
+                  readPaths: ["."],
+                  timeoutMs: 15000,
+                  maxOutputBytes: 1000,
+                },
+              ],
+            },
+          });
+          expect(proposed.ok).toBe(true);
+          const proposal = proposed.state.execution.proposal as { identity: string };
+          expect(
+            (
+              await call(session, "execution.authorize", {
+                identity: proposal.identity,
+                decisionRef: "user-approved",
+              })
+            ).ok,
+          ).toBe(true);
+          const baseline = providerCalls;
+          const seen: string[] = [];
+          const observations: {
+            recipient: string;
+            messages: unknown[];
+            model: string;
+            calls: number;
+            raw: string;
+          }[] = [];
+          const unsubscribe = session.subscribe((event) => {
+            if (
+              !event ||
+              typeof event !== "object" ||
+              !("stage" in event) ||
+              event.stage !== "proposed"
+            )
+              return;
+            const state = session.snapshot() as {
+              executionDisclosure: {
+                identity: string;
+                recipient: string;
+                request: { messages: unknown[]; config: { model: string } };
+              } | null;
+            };
+            const disclosure = state.executionDisclosure;
+            if (!disclosure) return;
+            observations.push({
+              recipient: disclosure.recipient,
+              messages: disclosure.request.messages,
+              model: disclosure.request.config.model,
+              calls: providerCalls,
+              raw: JSON.stringify(disclosure),
+            });
+            seen.push(disclosure.identity);
+            if (decision === "cancel") void call(session, "execution.cancel", {});
+            else if (decision === "deny" || (decision === "allow" && seen.length > 1))
+              void call(session, "execution.disclosure.deny", { identity: disclosure.identity });
+            else if (decision === "allow")
+              void call(session, "execution.disclosure.allow", { identity: disclosure.identity });
+          });
+          await call(session, "execution.run", {});
+          unsubscribe();
+          expect(seen.length).toBeGreaterThan(0);
+          if (decision === "allow") expect(seen).toHaveLength(2);
+          for (const [index, observed] of observations.entries()) {
+            expect(observed.recipient).toContain("127.0.0.1");
+            expect(observed.messages.length).toBeGreaterThan(0);
+            expect(observed.model).toBe("local-model");
+            expect(observed.raw).not.toContain("execution-secret");
+            expect(observed.calls).toBe(baseline + (decision === "allow" ? index : 0));
+          }
+          expect(providerCalls - baseline).toBe(decision === "allow" ? 1 : 0);
+          expect(
+            (await call(session, "execution.disclosure.allow", { identity: seen[0] })).ok,
+          ).toBe(false);
+        } finally {
+          await rm(root, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      server.stop(true);
+    }
+  }, 60000);
+
   test("discovers dirty/untracked files, excludes before review, and revokes a separate execution decision", async () => {
     const root = await mkdtemp(join(tmpdir(), "local-session-"));
     const session = new SessionRouter();
@@ -545,6 +902,33 @@ linux("real workspace authorization", () => {
           })
         ).state.execution.status,
       ).toBe("authorized");
+      const reconfigured = await call(session, "model.configure", {
+        endpoint: "http://127.0.0.1:1234/v1",
+        model: "new-model",
+        apiKey: "execution-replacement-key",
+      });
+      expect(reconfigured.ok).toBe(true);
+      expect(reconfigured.state.execution.status).toBe("idle");
+      expect(reconfigured.state.execution.proposal).toBeNull();
+      expect(reconfigured.state.plan?.eligible).toBe(false);
+      expect((await call(session, "execution.run", {})).ok).toBe(false);
+      const restored = await createPlan(session);
+      await call(session, "planning.confirm", {
+        identity: restored.plan!.identity,
+        revision: restored.plan!.revision,
+      });
+      proposalInput.permission.planIdentity = restored.plan!.identity;
+      proposalInput.permission.planRevision = restored.plan!.revision;
+      const restoredProposal = await call(session, "execution.propose", proposalInput);
+      const restoredIdentity = restoredProposal.state.execution.proposal as { identity: string };
+      expect(
+        (
+          await call(session, "execution.authorize", {
+            identity: restoredIdentity.identity,
+            decisionRef: "restored-approval",
+          })
+        ).ok,
+      ).toBe(true);
       expect((await call(session, "execution.cancel", {})).state.execution.status).toBe(
         "cancelled",
       );
