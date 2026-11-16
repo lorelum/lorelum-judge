@@ -1107,22 +1107,24 @@ describe("local workspace session router", () => {
         ).ok,
       ).toBe(true);
       await call(session, "model.offline", offline);
+      const workspace = session.snapshot() as {
+        workspace: { identity: string; candidates: { path: string; contentIdentity: string }[] };
+      };
       const invalid = await call(session, "planning.create", {
         id: "invalid",
         inputs: { task, sources },
         paths: ["secret.txt"],
+        workspaceIdentity: workspace.workspace.identity,
       });
       expect(invalid.ok).toBe(false);
       expect(invalid.error?.message).toBe("Invalid selected project paths");
-      const workspace = session.snapshot() as {
-        workspace: { identity: string; candidates: { path: string; contentIdentity: string }[] };
-      };
       expect(
         (
           await call(session, "planning.create", {
             id: "valid",
             inputs: { task, sources },
             paths: ["note.txt"],
+            workspaceIdentity: workspace.workspace.identity,
           })
         ).ok,
       ).toBe(true);
@@ -1138,6 +1140,34 @@ describe("local workspace session router", () => {
             .contentIdentity,
         },
       ]);
+      const wrongWorkspace = await call(session, "planning.create", {
+        id: "wrong-workspace",
+        inputs: { task, sources },
+        paths: ["note.txt"],
+        workspaceIdentity: "stale",
+      });
+      expect(wrongWorkspace.ok).toBe(false);
+      await writeFile(join(root, "note.txt"), "changed");
+      const rediscovered = await call(session, "workspace.discover", {
+        root,
+        exclusions: [{ path: "secret.txt", reason: "private" }],
+      });
+      expect(rediscovered.ok).toBe(true);
+      expect(rediscovered.state.plan).toBeNull();
+      expect(
+        (
+          await call(session, "planning.authorize", {
+            identity: preview.state.disclosure!.identity,
+          })
+        ).ok,
+      ).toBe(false);
+      const staleSelection = await call(session, "planning.create", {
+        id: "stale",
+        inputs: { task, sources },
+        paths: ["note.txt"],
+        workspaceIdentity: workspace.workspace.identity,
+      });
+      expect(staleSelection.ok).toBe(false);
     } finally {
       await call(session, "workspace.discover", { root: "relative", exclusions: [] });
       await rm(root, { recursive: true, force: true });

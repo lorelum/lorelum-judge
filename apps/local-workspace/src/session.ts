@@ -504,7 +504,7 @@ export class SessionRouter {
     this.#disclosure = undefined;
     this.#plan?.revokeModelDisclosure();
   }
-  #selectedPathsSource(value: unknown) {
+  #selectedPathsSource(value: unknown, expectedWorkspace: unknown) {
     if (value === undefined) return undefined;
     if (!Array.isArray(value) || value.some((path) => typeof path !== "string"))
       throw new Error("Invalid selected project paths");
@@ -512,6 +512,7 @@ export class SessionRouter {
     if (!value.length) return undefined;
     if (
       !workspace ||
+      expectedWorkspace !== workspace.identity ||
       value.some(
         (path) =>
           !workspace.candidates.some(
@@ -1002,6 +1003,7 @@ export class SessionRouter {
           }
           if (!Array.isArray(data.exclusions)) throw new Error("exclusions must be an array");
           this.#invalidate();
+          this.#plan = undefined;
           const generation = this.#generation;
           this.#sandboxAvailable = null;
           const old = this.#workspace;
@@ -1176,7 +1178,7 @@ export class SessionRouter {
             advice.evaluationIdentity === evaluationIdentity.identity
               ? advice
               : null;
-          const projectSource = this.#selectedPathsSource(data.paths);
+          const projectSource = this.#selectedPathsSource(data.paths, data.workspaceIdentity);
           const conversation =
             data.conversation === undefined ? "" : text(data.conversation, "conversation");
           const materials = data.materials === undefined ? "" : text(data.materials, "materials");
@@ -1267,7 +1269,7 @@ export class SessionRouter {
         case "planning.create": {
           const id = text(data.id, "id");
           const inputs = data.inputs as PlanningInputs;
-          const projectSource = this.#selectedPathsSource(data.paths);
+          const projectSource = this.#selectedPathsSource(data.paths, data.workspaceIdentity);
           const plan = new PlanningSession(
             id,
             projectSource ? { ...inputs, sources: [...inputs.sources, projectSource] } : inputs,

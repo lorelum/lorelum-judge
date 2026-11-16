@@ -184,6 +184,7 @@ function App() {
   const [modelName, setModelName] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  const [selectedWorkspaceIdentity, setSelectedWorkspaceIdentity] = useState<string | null>(null);
   const [chatBusy, setChatBusy] = useState(false);
   const [chatGenerating, setChatGenerating] = useState(false);
   const [planningBusy, setPlanningBusy] = useState(false);
@@ -390,6 +391,7 @@ function App() {
     });
     if (result) {
       setSelectedPaths([]);
+      setSelectedWorkspaceIdentity(null);
       setReadPaths("");
       setWritePaths("");
       setWritablePaths("");
@@ -468,12 +470,14 @@ function App() {
           id,
           text,
           paths: selectedPaths,
+          workspaceIdentity: selectedWorkspaceIdentity,
           ...(conversationContext ? { conversation: conversationContext } : {}),
           ...(materials.trim() ? { materials } : {}),
         })
       : await action("planning.create", {
           id,
           paths: selectedPaths,
+          workspaceIdentity: selectedWorkspaceIdentity,
           inputs: {
             task: {
               schema: "lorelum.judge.task-contract/v1",
@@ -1652,7 +1656,7 @@ function App() {
                   <>
                     <p className="muted">
                       已选择：{state.workspace.root}
-                      。无当前评价时，勾选的路径名可作为规划参考，不发送文件内容；基于评价规划时请在消息中说明所需路径。
+                      。勾选的路径及其身份作为规划参考，不发送文件内容；重新选择项目后须重新规划。
                     </p>
                     <div className="path-list">
                       {state.workspace.candidates
@@ -1661,14 +1665,22 @@ function App() {
                           <label className="check" key={candidate.path}>
                             <input
                               type="checkbox"
-                              checked={selectedPaths.includes(candidate.path)}
+                              checked={
+                                selectedWorkspaceIdentity === state.workspace?.identity &&
+                                selectedPaths.includes(candidate.path)
+                              }
                               onChange={(event) => {
                                 const checked = event.target.checked;
-                                setSelectedPaths((current) =>
-                                  checked
-                                    ? [...current, candidate.path]
-                                    : current.filter((path) => path !== candidate.path),
-                                );
+                                const workspaceIdentity = state.workspace?.identity;
+                                if (!workspaceIdentity) return;
+                                setSelectedPaths((current) => {
+                                  const selected =
+                                    selectedWorkspaceIdentity === workspaceIdentity ? current : [];
+                                  return checked
+                                    ? [...selected, candidate.path]
+                                    : selected.filter((path) => path !== candidate.path);
+                                });
+                                setSelectedWorkspaceIdentity(workspaceIdentity);
                                 if (!planDirty && (state.plan || state.disclosure)) {
                                   setPlanDirty(true);
                                   void action("planning.revokeDisclosure", {});
