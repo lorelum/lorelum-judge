@@ -21,6 +21,7 @@ import {
   type ImplementationResult,
   type PlanningInputs,
   PlanningSession,
+  planningModelMessages,
   type VerificationConfiguration,
   verificationIdentity,
   type WorkspaceCandidateReview,
@@ -90,13 +91,24 @@ function containsSecret(value: unknown, secret: string): boolean {
     return Object.values(value).some((item) => containsSecret(item, secret));
   return false;
 }
+function containsSecretKey(value: unknown, secret: string): boolean {
+  if (Array.isArray(value)) return value.some((item) => containsSecretKey(item, secret));
+  if (value && typeof value === "object")
+    return Object.entries(value).some(
+      ([key, item]) => key.includes(secret) || containsSecretKey(item, secret),
+    );
+  return false;
+}
 function redact(value: unknown, secret: string): unknown {
   if (!secret) return value;
   if (typeof value === "string") return value.split(secret).join("[redacted]");
   if (Array.isArray(value)) return value.map((item) => redact(item, secret));
   if (value && typeof value === "object")
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, redact(item, secret)]),
+      Object.entries(value).map(([key, item]) => [
+        key.split(secret).join("[redacted]"),
+        redact(item, secret),
+      ]),
     );
   return value;
 }
@@ -175,7 +187,10 @@ export class SessionRouter {
     if (Array.isArray(value)) return value.map((item) => this.#safe(item));
     if (value && typeof value === "object")
       return Object.fromEntries(
-        Object.entries(value).map(([key, item]) => [key, this.#safe(item)]),
+        Object.entries(value).map(([key, item]) => {
+          for (const secret of this.#secrets) key = key.split(secret).join("[redacted]");
+          return [key, this.#safe(item)];
+        }),
       );
     return value;
   }
@@ -338,7 +353,12 @@ export class SessionRouter {
     const selected = createConfiguredModel(hostModel);
     if (hostModel.apiKey) new Headers({ authorization: `Bearer ${hostModel.apiKey}` });
     const secret = hostModel.apiKey;
-    if (secret && (selected.recipient.includes(secret) || containsSecret(selected.config, secret)))
+    const protectedKeys = secret ? [...this.#secrets, secret] : [...this.#secrets];
+    if (
+      protectedKeys.some(
+        (key) => selected.recipient.includes(key) || containsSecret(selected.config, key),
+      )
+    )
       throw new Error("Model recipient or configuration cannot be safely displayed");
     const model: ModelPort = {
       generate: async (request) => {
@@ -708,8 +728,21 @@ export class SessionRouter {
             throw new Error("instructions must be a string");
           const instructions = (data.instructions as string | undefined) ?? "";
           const preview = plan.previewModelDisclosure(model.model, instructions, model.config);
+          const messages = planningModelMessages(preview.request);
+          if (
+            [...this.#secrets].some(
+              (key) =>
+                containsSecret(preview.request, key) ||
+                containsSecret(messages, key) ||
+                containsSecretKey(preview.request.task, key) ||
+                containsSecretKey(preview.request.sources, key) ||
+                containsSecretKey(preview.request.previousPlan, key),
+            )
+          )
+            throw new Error("Credential disclosure refused");
           this.#disclosure = {
             ...preview,
+            request: { ...preview.request, messages },
             instructions,
             recipient: model.recipient,
             mode: model.mode,

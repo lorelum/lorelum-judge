@@ -24,10 +24,12 @@ type Plan = {
   plan: {
     goal: string;
     scope: string[];
-    steps: { id: string; description: string }[];
-    checks: { id: string; description: string }[];
+    task: { acceptance: { id: string; text: string; source: { origin: string; ref: string } }[] };
+    steps: { id: string; description: string; acceptanceIds: string[] }[];
+    checks: { id: string; description: string; acceptanceIds: string[] }[];
     nonGoals: string[];
     missing: string[];
+    conflicts: { description: string; sourceIds: string[] }[];
   };
 };
 type ChatMessage = { role: "user" | "assistant"; content: string };
@@ -383,7 +385,7 @@ function App() {
           ]
         : []),
     ];
-    await action("planning.create", {
+    const created = await action("planning.create", {
       id,
       inputs: {
         task: {
@@ -395,6 +397,7 @@ function App() {
         sources,
       },
     });
+    if (created) await action("planning.preview", { instructions: "" });
   }
   async function startPlanning(text: string) {
     if (!text.trim()) {
@@ -768,6 +771,14 @@ function App() {
                     </p>
                     <h3>目标</h3>
                     <p>{state.plan.plan.goal}</p>
+                    <h3>完成标准</h3>
+                    <ul>
+                      {state.plan.plan.task.acceptance.map((item) => (
+                        <li key={item.id}>
+                          {item.id}：{item.text}（来源：{item.source.origin} / {item.source.ref}）
+                        </li>
+                      ))}
+                    </ul>
                     <h3>范围</h3>
                     <ul>
                       {state.plan.plan.scope.map((item) => (
@@ -777,19 +788,39 @@ function App() {
                     <h3>步骤</h3>
                     <ul>
                       {state.plan.plan.steps.map((item) => (
-                        <li key={item.id}>{item.description}</li>
+                        <li key={item.id}>
+                          {item.description}（对应：{item.acceptanceIds.join("、")}）
+                        </li>
                       ))}
                     </ul>
                     <h3>检查</h3>
                     <ul>
                       {state.plan.plan.checks.map((item) => (
-                        <li key={item.id}>{item.description}</li>
+                        <li key={item.id}>
+                          {item.description}（对应：{item.acceptanceIds.join("、")}）
+                        </li>
                       ))}
                     </ul>
                     <h3>不包含 / 待澄清</h3>
                     <p>
                       {[...state.plan.plan.nonGoals, ...state.plan.plan.missing].join("；") || "无"}
                     </p>
+                    {state.plan.plan.conflicts.length > 0 && (
+                      <>
+                        <h3>待解决冲突</h3>
+                        <ul>
+                          {state.plan.plan.conflicts.map((item) => (
+                            <li key={`${item.description}:${item.sourceIds.join(",")}`}>
+                              {item.description}（来源：{item.sourceIds.join("、")}）
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                    <details>
+                      <summary>查看完整计划</summary>
+                      <pre className="data">{pretty(state.plan.plan)}</pre>
+                    </details>
                     <div className="row">
                       <Button
                         onClick={() =>

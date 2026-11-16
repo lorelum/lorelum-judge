@@ -14,7 +14,11 @@ type State = {
   sequence: number;
   model: { mode: string; recipient: string } | null;
   plan: { identity: string; revision: number; status: string; eligible: boolean } | null;
-  disclosure: { identity: string; request: { instructions: string }; authorized: boolean } | null;
+  disclosure: {
+    identity: string;
+    request: { instructions: string; messages: { role: string; content: string }[] };
+    authorized: boolean;
+  } | null;
   chatDisclosure: {
     identity: string;
     recipient: string;
@@ -231,6 +235,32 @@ describe("local workspace session router", () => {
       expect(JSON.stringify(result)).not.toContain(secret);
       expect(JSON.stringify(result)).not.toContain("new-invalid-secret");
     }
+  });
+
+  test("rejects historical keys in a new recipient and secret source keys before disclosure", async () => {
+    const session = new SessionRouter();
+    const endpoint = "http://127.0.0.1:1234/v1";
+    const secret = "previous-secret-credential";
+    expect(
+      (await call(session, "model.configure", { endpoint, model: "one", apiKey: secret })).ok,
+    ).toBe(true);
+    for (const config of [
+      { endpoint, model: `prefix-${secret}`, apiKey: "new-secret" },
+      { endpoint: `${endpoint}/${secret}`, model: "two", apiKey: "new-secret" },
+    ]) {
+      const result = await call(session, "model.configure", config);
+      expect(result.ok).toBe(false);
+      expect(JSON.stringify(result)).not.toContain(secret);
+    }
+    const created = await call(session, "planning.create", {
+      id: "plan",
+      inputs: { task, sources: [{ ...sources[0], [secret]: "hidden in a property name" }] },
+    });
+    expect(created.ok).toBe(true);
+    const preview = await call(session, "planning.preview", {});
+    expect(preview.ok).toBe(false);
+    expect(preview.error?.message).toBe("Credential disclosure refused");
+    expect(JSON.stringify([created, preview])).not.toContain(secret);
   });
 
   test("reconfiguration revokes chat and plan authority and redacts prior credentials", async () => {
@@ -633,6 +663,7 @@ const linux = process.platform === "linux" ? describe : describe.skip;
 linux("real workspace authorization", () => {
   test("configured execution requires a fresh decision for each provider request", async () => {
     let providerCalls = 0;
+    let planningMessages: unknown;
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -640,6 +671,7 @@ linux("real workspace authorization", () => {
         providerCalls++;
         const body = await request.json();
         if (body.messages.length === 2 && body.messages[0].role === "system") {
+          planningMessages = body.messages;
           const input = JSON.parse(body.messages[1].content);
           const acceptance = [
             {
@@ -699,6 +731,7 @@ linux("real workspace authorization", () => {
           await call(session, "planning.authorize", { identity: planDisclosure });
           const generated = await call(session, "planning.generate", { identity: planDisclosure });
           expect(generated.ok).toBe(true);
+          expect(planningMessages).toEqual(preview.state.disclosure!.request.messages);
           await call(session, "planning.confirm", {
             identity: generated.state.plan!.identity,
             revision: generated.state.plan!.revision,
