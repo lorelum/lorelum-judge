@@ -55,6 +55,18 @@ type ModelSelection = {
   readonly config?: ModelGenerationConfig;
   readonly offline?: { readonly targetPath: string; readonly replacement: string };
 };
+type ChatMessage = { readonly role: "user" | "assistant"; readonly content: string };
+type ChatDisclosure = {
+  readonly identity: string;
+  readonly recipient: string;
+  readonly mode: "configured";
+  readonly request: {
+    readonly messages: readonly ChatMessage[];
+    readonly config: ModelGenerationConfig;
+  };
+  authorized: boolean;
+};
+
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("Expected a JSON object");
@@ -94,6 +106,12 @@ export class SessionRouter {
   #model: ModelSelection | undefined;
   #plan: PlanningSession | undefined;
   #disclosure: PendingDisclosure | undefined;
+  #chatDisclosure: ChatDisclosure | undefined;
+  #chatModel: ModelSelection | undefined;
+  #chatMessages: readonly ChatMessage[] = [];
+  #chatStatus: "idle" | "running" | "completed" | "failed" = "idle";
+  #chatGeneration = 0;
+  #chatController: AbortController | undefined;
   #execution: ControlledExecutionSession | undefined;
   #proposal: ExecutionProposal | undefined;
   #executionStatus:
@@ -230,6 +248,8 @@ export class SessionRouter {
           : null,
         plan: this.#plan?.review() ?? null,
         disclosure: this.#disclosure ?? null,
+        chatDisclosure: this.#chatDisclosure ?? null,
+        chat: { messages: this.#chatMessages, status: this.#chatStatus },
         execution: {
           status: this.#executionStatus,
           proposal: this.#proposal ?? null,
@@ -261,8 +281,17 @@ export class SessionRouter {
     this.#executionStatus = "idle";
     this.#result = null;
   }
+  #invalidateChat(): void {
+    this.#chatGeneration++;
+    this.#chatController?.abort();
+    this.#chatController = undefined;
+    this.#chatDisclosure = undefined;
+    this.#chatModel = undefined;
+    if (this.#chatStatus === "running") this.#chatStatus = "idle";
+  }
   #invalidate(): void {
     this.#generation++;
+    this.#invalidateChat();
     this.#controller?.abort();
     this.#clearExecution();
     this.#disclosure = undefined;
@@ -451,6 +480,98 @@ export class SessionRouter {
           this.#emit("model", "result", "completed");
           break;
         }
+        case "chat.preview": {
+          const model = this.#requireModel();
+          if (model.mode !== "configured" || !model.config)
+            throw new Error("Offline model does not support chat");
+          if (!Array.isArray(data.messages) || data.messages.length === 0)
+            throw new Error("Chat messages must be a nonempty array");
+          const messages: ChatMessage[] = data.messages.map((entry: unknown) => {
+            const message = object(entry);
+            if (
+              (message.role !== "user" && message.role !== "assistant") ||
+              typeof message.content !== "string" ||
+              !message.content.trim() ||
+              Object.keys(message).some((key) => key !== "role" && key !== "content")
+            )
+              throw new Error("Invalid chat message");
+            return { role: message.role, content: message.content };
+          });
+          if (messages[messages.length - 1]?.role !== "user")
+            throw new Error("Chat must end with a user message");
+          if (this.#hostModel?.apiKey && JSON.stringify(messages).includes(this.#hostModel.apiKey))
+            throw new Error("Credential disclosure refused");
+          this.#invalidateChat();
+          this.#chatDisclosure = {
+            identity: randomUUID(),
+            recipient: model.recipient,
+            mode: "configured",
+            request: { messages, config: structuredClone(model.config) },
+            authorized: false,
+          };
+          this.#chatModel = model;
+          this.#emit("model", "proposed", "proposed", this.#chatDisclosure.identity);
+          break;
+        }
+        case "chat.authorize": {
+          const pending = this.#chatDisclosure;
+          if (!pending || pending.identity !== data.identity || this.#chatModel !== this.#model)
+            throw new Error("Disclosure preview does not match");
+          pending.authorized = true;
+          this.#emit("model", "authorization", "allowed", pending.identity);
+          break;
+        }
+        case "chat.generate": {
+          const pending = this.#chatDisclosure;
+          const model = this.#chatModel;
+          if (
+            !pending?.authorized ||
+            pending.identity !== data.identity ||
+            !model ||
+            model !== this.#model
+          )
+            throw new Error("Explicit authorization of this disclosure is required");
+          this.#chatDisclosure = undefined;
+          this.#chatModel = undefined;
+          const generation = ++this.#chatGeneration;
+          const controller = new AbortController();
+          this.#chatController = controller;
+          this.#chatStatus = "running";
+          this.#emit("model", "started", "started", pending.identity);
+          try {
+            if (generation !== this.#chatGeneration || controller.signal.aborted)
+              throw new Error("Chat was superseded");
+            const response = await model.model.generate({
+              runId: randomUUID(),
+              stepIndex: 0,
+              messages: pending.request.messages,
+              tools: [],
+              config: pending.request.config,
+              signal: controller.signal,
+            });
+            if (generation !== this.#chatGeneration) throw new Error("Chat was superseded");
+            if (response.kind !== "message") throw new Error("Configured model request failed");
+            this.#chatMessages = [
+              ...pending.request.messages,
+              { role: "assistant", content: response.content },
+            ];
+            this.#chatStatus = "completed";
+            this.#emit("model", "result", "completed", pending.identity);
+          } catch {
+            if (generation !== this.#chatGeneration) throw new Error("Chat was superseded");
+            this.#chatStatus = "failed";
+            this.#emit("model", "result", "failed", pending.identity, "error");
+            throw new Error("Configured model request failed");
+          } finally {
+            if (generation === this.#chatGeneration) this.#chatController = undefined;
+          }
+          break;
+        }
+        case "chat.cancel": {
+          this.#invalidateChat();
+          this.#emit("model", "result", "cancelled");
+          break;
+        }
         case "planning.create": {
           const id = text(data.id, "id");
           const plan = new PlanningSession(id, data.inputs as PlanningInputs);
@@ -492,6 +613,7 @@ export class SessionRouter {
           const plan = this.#requirePlan();
           if (!pending?.authorized || pending.identity !== data.identity)
             throw new Error("Explicit authorization of this disclosure is required");
+          this.#invalidateChat();
           this.#clearExecution();
           const generation = ++this.#generation;
           const controller = new AbortController();
@@ -509,6 +631,7 @@ export class SessionRouter {
           if (generation !== this.#generation) throw new Error("Planning was superseded");
           this.#controller = undefined;
           this.#unwrap(result);
+          this.#invalidateChat();
           this.#emit("planning", "result", "completed");
           break;
         }
@@ -520,6 +643,7 @@ export class SessionRouter {
               data.revision as number,
             ),
           );
+          this.#invalidateChat();
           this.#emit("planning", "authorization", "allowed");
           break;
         }
@@ -529,6 +653,7 @@ export class SessionRouter {
           if (!review) throw new Error("No plan to reject");
           this.#clearExecution();
           this.#unwrap(review.status === "confirmed" ? plan.revoke() : plan.invalidate());
+          this.#invalidateChat();
           this.#disclosure = undefined;
           this.#emit("planning", "authorization", "denied");
           break;
@@ -926,6 +1051,12 @@ export class SessionRouter {
         "Unknown action",
         "Workspace discovery was superseded",
         "Planning was superseded",
+        "Offline model does not support chat",
+        "Chat messages must be a nonempty array",
+        "Invalid chat message",
+        "Chat must end with a user message",
+        "Credential disclosure refused",
+        "Chat was superseded",
         "Only JSON values are accepted",
         "Expected a JSON object",
         "Offline review requires file-content disclosure for exactly the selected file",

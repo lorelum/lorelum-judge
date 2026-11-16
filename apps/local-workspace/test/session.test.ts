@@ -15,6 +15,14 @@ type State = {
   model: { mode: string; recipient: string } | null;
   plan: { identity: string; revision: number; status: string; eligible: boolean } | null;
   disclosure: { identity: string; request: { instructions: string }; authorized: boolean } | null;
+  chatDisclosure: {
+    identity: string;
+    recipient: string;
+    mode: string;
+    request: { messages: { role: string; content: string }[]; config: { model: string } };
+    authorized: boolean;
+  } | null;
+  chat: { messages: { role: string; content: string }[]; status: string };
   execution: { status: string; proposal: unknown };
 };
 type Response = { ok: boolean; state: State; error?: { message: string } };
@@ -169,6 +177,235 @@ describe("local workspace session router", () => {
       expect(JSON.stringify(failed)).not.toContain("test-secret");
       expect(JSON.stringify(failed)).not.toContain("private provider error body");
     } finally {
+      server.stop(true);
+    }
+  });
+
+  test("chat requires a configured model and a fresh request-bound authorization", async () => {
+    const requests: unknown[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        requests.push(await request.json());
+        return Response.json({
+          choices: [
+            { message: { content: requests.length === 1 ? "Hello back" : "Second answer" } },
+          ],
+        });
+      },
+    });
+    try {
+      const secret = "chat-test-secret";
+      const session = new SessionRouter({
+        configuredModel: {
+          endpoint: `http://127.0.0.1:${server.port}/v1`,
+          apiKey: secret,
+          config: { model: "local-chat", temperature: 0.5 },
+        },
+      });
+      await call(session, "model.offline", offline);
+      const firstMessages = [{ role: "user", content: "Hello" }];
+      const offlinePreview = await call(session, "chat.preview", { messages: firstMessages });
+      expect(offlinePreview.ok).toBe(false);
+      expect(offlinePreview.error?.message).toBe("Offline model does not support chat");
+      await call(session, "model.configured", {});
+      const first = await call(session, "chat.preview", { messages: firstMessages });
+      const firstDisclosure = first.state.chatDisclosure!;
+      expect(firstDisclosure.request.messages).toEqual(firstMessages);
+      expect(firstDisclosure.request.config.model).toBe("local-chat");
+      expect(firstDisclosure.mode).toBe("configured");
+      expect(firstDisclosure.recipient).toContain("127.0.0.1");
+      expect(
+        (await call(session, "chat.generate", { identity: firstDisclosure.identity })).ok,
+      ).toBe(false);
+      expect(requests).toHaveLength(0);
+      expect(
+        (await call(session, "chat.authorize", { identity: firstDisclosure.identity })).ok,
+      ).toBe(true);
+      const changed = await call(session, "chat.preview", {
+        messages: [{ role: "user", content: "Changed request" }],
+      });
+      expect(changed.state.chatDisclosure!.identity).not.toBe(firstDisclosure.identity);
+      expect(
+        (await call(session, "chat.generate", { identity: firstDisclosure.identity })).ok,
+      ).toBe(false);
+      expect(requests).toHaveLength(0);
+      const observed: { event: unknown; state: State }[] = [];
+      const unsubscribe = session.subscribe((event) => {
+        observed.push({ event, state: session.snapshot() as State });
+      });
+      const current = await call(session, "chat.preview", { messages: firstMessages });
+      const identity = current.state.chatDisclosure!.identity;
+      await call(session, "chat.authorize", { identity });
+      const reply = await call(session, "chat.generate", { identity });
+      unsubscribe();
+      expect(
+        observed.map(({ state }) => ({
+          sequence: state.sequence,
+          authorized: state.chatDisclosure?.authorized ?? null,
+          status: state.chat.status,
+        })),
+      ).toEqual([
+        { sequence: current.state.sequence, authorized: false, status: "idle" },
+        { sequence: current.state.sequence + 1, authorized: true, status: "idle" },
+        { sequence: current.state.sequence + 2, authorized: null, status: "running" },
+        { sequence: current.state.sequence + 3, authorized: null, status: "completed" },
+      ]);
+      expect(validateWorkflowSessionEvents(observed.map(({ event }) => event)).ok).toBe(true);
+      expect(reply.ok).toBe(true);
+      expect(reply.state.chat).toEqual({
+        messages: [...firstMessages, { role: "assistant", content: "Hello back" }],
+        status: "completed",
+      });
+      expect((await call(session, "chat.generate", { identity })).ok).toBe(false);
+      const secondMessages = [...reply.state.chat.messages, { role: "user", content: "Continue" }];
+      const second = await call(session, "chat.preview", { messages: secondMessages });
+      await call(session, "chat.authorize", { identity: second.state.chatDisclosure!.identity });
+      const continued = await call(session, "chat.generate", {
+        identity: second.state.chatDisclosure!.identity,
+      });
+      expect(continued.state.chat.messages).toEqual([
+        ...secondMessages,
+        { role: "assistant", content: "Second answer" },
+      ]);
+      expect(requests).toEqual([
+        { model: "local-chat", messages: firstMessages, stream: false, temperature: 0.5 },
+        { model: "local-chat", messages: secondMessages, stream: false, temperature: 0.5 },
+      ]);
+      expect(JSON.stringify(continued)).not.toContain(secret);
+      const sensitive = await call(session, "chat.preview", {
+        messages: [{ role: "user", content: `Do not send ${secret}` }],
+      });
+      expect(sensitive.ok).toBe(false);
+      expect(JSON.stringify(sensitive)).not.toContain(secret);
+      expect(requests).toHaveLength(2);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("chat failure and reentrant cancellation publish state without sending a cancelled request", async () => {
+    let calls = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        calls++;
+        return new Response("private failure", { status: 503 });
+      },
+    });
+    try {
+      const session = new SessionRouter({
+        configuredModel: {
+          endpoint: `http://127.0.0.1:${server.port}/v1`,
+          config: { model: "local-chat" },
+        },
+      });
+      await call(session, "model.configured", {});
+      const messages = [{ role: "user", content: "Hello" }];
+      const snapshots: State[] = [];
+      const unsubscribe = session.subscribe(() => snapshots.push(session.snapshot() as State));
+      const preview = await call(session, "chat.preview", { messages });
+      const identity = preview.state.chatDisclosure!.identity;
+      await call(session, "chat.authorize", { identity });
+      const failed = await call(session, "chat.generate", { identity });
+      expect(failed.ok).toBe(false);
+      expect(failed.state.chat.status).toBe("failed");
+      expect(snapshots.map((state) => state.chat.status)).toEqual([
+        "idle",
+        "idle",
+        "running",
+        "failed",
+      ]);
+      expect(snapshots.map((state) => state.sequence)).toEqual([
+        preview.state.sequence,
+        preview.state.sequence + 1,
+        preview.state.sequence + 2,
+        preview.state.sequence + 3,
+      ]);
+      const next = await call(session, "chat.preview", { messages });
+      await call(session, "chat.authorize", { identity: next.state.chatDisclosure!.identity });
+      const stopOnStart = session.subscribe((event) => {
+        if (event && typeof event === "object" && "stage" in event && event.stage === "started")
+          void session.dispatch("chat.cancel", {});
+      });
+      const cancelled = await call(session, "chat.generate", {
+        identity: next.state.chatDisclosure!.identity,
+      });
+      stopOnStart();
+      unsubscribe();
+      expect(cancelled.ok).toBe(false);
+      expect(cancelled.error?.message).toBe("Chat was superseded");
+      expect(cancelled.state.chat.status).toBe("idle");
+      expect(snapshots.slice(-2).map((state) => state.chat.status)).toEqual(["running", "idle"]);
+      expect(snapshots.at(-1)!.sequence).toBe(snapshots.at(-2)!.sequence + 1);
+      expect(calls).toBe(1);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("chat authorization is invalidated by model and plan changes", async () => {
+    const session = new SessionRouter({
+      configuredModel: { endpoint: "https://example.com/v1", config: { model: "example" } },
+    });
+    await call(session, "model.configured", {});
+    const messages = [{ role: "user", content: "Hello" }];
+    const preview = await call(session, "chat.preview", { messages });
+    const identity = preview.state.chatDisclosure!.identity;
+    await call(session, "chat.authorize", { identity });
+    await call(session, "model.configured", {});
+    expect((await call(session, "chat.generate", { identity })).ok).toBe(false);
+    const next = await call(session, "chat.preview", { messages });
+    const nextIdentity = next.state.chatDisclosure!.identity;
+    await call(session, "chat.authorize", { identity: nextIdentity });
+    const created = await call(session, "planning.create", {
+      id: "plan",
+      inputs: { task, sources },
+    });
+    expect(created.state.chatDisclosure).toBeNull();
+    expect((await call(session, "chat.generate", { identity: nextIdentity })).ok).toBe(false);
+  });
+
+  test("a superseded chat cannot overwrite the current conversation", async () => {
+    const requestStarted = Promise.withResolvers<void>();
+    const responseReleased = Promise.withResolvers<void>();
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch() {
+        requestStarted.resolve();
+        await responseReleased.promise;
+        return Response.json({ choices: [{ message: { content: "Stale reply" } }] });
+      },
+    });
+    try {
+      const session = new SessionRouter({
+        configuredModel: {
+          endpoint: `http://127.0.0.1:${server.port}/v1`,
+          config: { model: "local-chat" },
+        },
+      });
+      await call(session, "model.configured", {});
+      const preview = await call(session, "chat.preview", {
+        messages: [{ role: "user", content: "First" }],
+      });
+      const identity = preview.state.chatDisclosure!.identity;
+      await call(session, "chat.authorize", { identity });
+      const generating = call(session, "chat.generate", { identity });
+      await requestStarted.promise;
+      const replacement = await call(session, "chat.preview", {
+        messages: [{ role: "user", content: "Second" }],
+      });
+      responseReleased.resolve();
+      const stale = await generating;
+      expect(stale.ok).toBe(false);
+      expect(stale.state.chat.status).toBe("idle");
+      expect(stale.state.chat.messages).toEqual([]);
+      expect(stale.state.chatDisclosure?.identity).toBe(replacement.state.chatDisclosure?.identity);
+    } finally {
+      responseReleased.resolve();
       server.stop(true);
     }
   });

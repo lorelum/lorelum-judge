@@ -37,6 +37,90 @@ body {
   font-weight: 700;
   color: #2563eb;
 }
+.chat-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 20px;
+  align-items: start;
+}
+.conversation {
+  min-width: 0;
+}
+.conversation-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 16px;
+}
+.messages {
+  min-height: 260px;
+  max-height: 55vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 0;
+}
+.empty-chat {
+  margin: auto;
+  color: #64748b;
+  text-align: center;
+  font-size: 14px;
+}
+.message {
+  max-width: 88%;
+  padding: 12px 15px;
+  border-radius: 14px;
+  background: #f1f5f9;
+  align-self: flex-start;
+  min-width: 0;
+}
+.message.user {
+  align-self: flex-end;
+  background: #e8eefc;
+}
+.message-label {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 5px;
+}
+.message-content {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+.text-action {
+  border: 0;
+  background: none;
+  padding: 8px 0 0;
+  color: #1d4ed8;
+  font-size: 12px;
+  cursor: pointer;
+}
+.chat-disclosure {
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  background: #f8fbff;
+}
+.chat-disclosure h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+.advanced {
+  margin-top: 24px;
+}
+.advanced > summary {
+  padding: 16px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 700;
+}
 .layout {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.85fr);
@@ -117,6 +201,9 @@ body {
   margin-top: 9px;
 }
 @media (max-width: 900px) {
+  .chat-layout {
+    grid-template-columns: 1fr;
+  }
   .layout {
     grid-template-columns: 1fr;
   }
