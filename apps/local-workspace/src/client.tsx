@@ -459,10 +459,21 @@ function App() {
     const id = crypto.randomUUID();
     const hasEvaluation =
       !!state.evaluation.report && ["completed", "partial"].includes(state.evaluation.status);
+    const history = conversation
+      .filter((message) => message.role === "user" || message.label === "真实模型回复")
+      .map(({ role, content }) => ({ role, content }));
+    const conversationContext = history.length ? JSON.stringify(history) : "";
     const created = hasEvaluation
-      ? await action("planning.fromEvaluation", { id, text, paths: selectedPaths })
+      ? await action("planning.fromEvaluation", {
+          id,
+          text,
+          paths: selectedPaths,
+          ...(conversationContext ? { conversation: conversationContext } : {}),
+          ...(materials.trim() ? { materials } : {}),
+        })
       : await action("planning.create", {
           id,
+          paths: selectedPaths,
           inputs: {
             task: {
               schema: "lorelum.judge.task-contract/v1",
@@ -491,14 +502,14 @@ function App() {
                     },
                   ]
                 : []),
-              ...(selectedPaths.length
+              ...(conversationContext
                 ? [
                     {
-                      id: "project-paths",
+                      id: "conversation",
                       kind: "reference",
-                      locator: "user-selected-project-paths",
+                      locator: "visible-conversation",
                       version: "1",
-                      content: `用户选择的项目相对路径（仅路径，不含文件内容）：\n${selectedPaths.join("\n")}`,
+                      content: conversationContext,
                       status: "available",
                     },
                   ]
@@ -675,11 +686,7 @@ function App() {
         /(https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9]\d*)\/?(?:[?#/][^\s]*)?/i,
       );
       const fence = text.match(/```[^\n]*\n([\s\S]*?)```/);
-      if (pr) {
-        const url = pr[1];
-        const request = text.replace(pr[0], "").trim();
-        payload = { target: url, ...(request ? { request } : {}) };
-      } else if (fence || explicitSnippet) {
+      if (fence || explicitSnippet) {
         const code = fence ? (fence[1] ?? "") : text;
         const request = fence ? text.replace(fence[0], "").trim() : "";
         if (!code.trim()) {
@@ -687,6 +694,10 @@ function App() {
           return;
         }
         payload = { target: { kind: "snippet", text: code }, ...(request ? { request } : {}) };
+      } else if (pr) {
+        const url = pr[1];
+        const request = text.replace(pr[0], "").trim();
+        payload = { target: url, ...(request ? { request } : {}) };
       } else {
         const context: ChatMessage[] = conversation
           .filter(
@@ -899,6 +910,22 @@ function App() {
                   发送
                 </Button>
                 <span className="muted">Enter 发送 · Shift+Enter 换行</span>
+                {chatRunning && chatInput !== "连接检查：请回复“连接成功”。" && (
+                  <Button
+                    variant="flat"
+                    color="danger"
+                    onClick={() => {
+                      conversationChat.current = false;
+                      void action("chat.cancel", {});
+                      setConversation((messages) => [
+                        ...messages,
+                        { role: "assistant", content: "已取消普通对话请求。" },
+                      ]);
+                    }}
+                  >
+                    取消对话
+                  </Button>
+                )}
                 {analysisRunning && (
                   <Button
                     variant="flat"

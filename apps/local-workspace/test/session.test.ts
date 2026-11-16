@@ -928,6 +928,8 @@ describe("local workspace session router", () => {
         const created = await call(session, "planning.fromEvaluation", {
           id: "review-plan",
           text: "Fix the reported issues",
+          conversation: '[{"role":"user","content":"Preserve result ordering"}]',
+          materials: "The maximum is 20 items.",
         });
         expect(created.ok).toBe(true);
         expect(created.state.disclosure).toBeNull();
@@ -936,6 +938,14 @@ describe("local workspace session router", () => {
         expect(preview.ok).toBe(true);
         expect(preview.state.disclosure?.authorized).toBe(false);
         expect(preview.state.disclosure?.request.task.text).toBe("Fix the reported issues");
+        expect(
+          preview.state.disclosure!.request.sources.find((source) => source.id === "conversation")
+            ?.content,
+        ).toContain("Preserve result ordering");
+        expect(
+          preview.state.disclosure!.request.sources.find((source) => source.id === "material")
+            ?.content,
+        ).toBe("The maximum is 20 items.");
         const reference = preview.state.disclosure!.request.sources.find(
           (source) => source.kind === "reference",
         )!;
@@ -952,7 +962,16 @@ describe("local workspace session router", () => {
         });
         expect(requests).toHaveLength(2);
         expect(state.evaluation.text).toBeTruthy();
-        await call(session, "suggestions.start", {});
+        const startedSuggestions = await call(session, "suggestions.start", {});
+        expect(startedSuggestions.state.plan).toBeNull();
+        expect(startedSuggestions.state.disclosure).toBeNull();
+        expect(
+          (
+            await call(session, "planning.authorize", {
+              identity: preview.state.disclosure!.identity,
+            })
+          ).ok,
+        ).toBe(false);
         state = await next((value) => value.executionDisclosure !== null);
         expect(requests).toHaveLength(2);
         expect(JSON.stringify(state.executionDisclosure!.request.messages)).toContain("limit");
@@ -977,6 +996,19 @@ describe("local workspace session router", () => {
         expect(adviceSource?.kind).toBe("reference");
         expect(JSON.parse(adviceSource!.content).result).toEqual(state.suggestions.report?.result);
         expect(requests).toHaveLength(3);
+        const restarted = await call(session, "evaluation.start", {
+          target: { kind: "snippet", text: "function updated() {}" },
+        });
+        expect(restarted.state.plan).toBeNull();
+        expect(restarted.state.disclosure).toBeNull();
+        expect(
+          (
+            await call(session, "planning.authorize", {
+              identity: advicePreview.state.disclosure!.identity,
+            })
+          ).ok,
+        ).toBe(false);
+        await call(session, "evaluation.cancel", {});
         expect(JSON.stringify(state)).not.toContain("review-test-private-key");
       } finally {
         server.stop(true);
@@ -1052,6 +1084,63 @@ describe("local workspace session router", () => {
       unsubscribe();
     } finally {
       server.stop(true);
+    }
+  });
+
+  test("binds selected planning paths to the discovered workspace and rejects excluded paths", async () => {
+    const root = await mkdtemp(join(tmpdir(), "planning-paths-"));
+    const session = new SessionRouter();
+    try {
+      execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
+      await writeFile(join(root, "note.txt"), "public");
+      await writeFile(join(root, "secret.txt"), "excluded");
+      execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: root });
+      execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
+      execFileSync("git", ["add", "note.txt"], { cwd: root });
+      execFileSync("git", ["commit", "-m", "base"], { cwd: root, stdio: "ignore" });
+      expect(
+        (
+          await call(session, "workspace.discover", {
+            root,
+            exclusions: [{ path: "secret.txt", reason: "private" }],
+          })
+        ).ok,
+      ).toBe(true);
+      await call(session, "model.offline", offline);
+      const invalid = await call(session, "planning.create", {
+        id: "invalid",
+        inputs: { task, sources },
+        paths: ["secret.txt"],
+      });
+      expect(invalid.ok).toBe(false);
+      expect(invalid.error?.message).toBe("Invalid selected project paths");
+      const workspace = session.snapshot() as {
+        workspace: { identity: string; candidates: { path: string; contentIdentity: string }[] };
+      };
+      expect(
+        (
+          await call(session, "planning.create", {
+            id: "valid",
+            inputs: { task, sources },
+            paths: ["note.txt"],
+          })
+        ).ok,
+      ).toBe(true);
+      const preview = await call(session, "planning.preview", {});
+      const selected = preview.state.disclosure!.request.sources.find(
+        (source) => source.id === "project-paths",
+      )!;
+      expect(selected.version).toBe(workspace.workspace.identity);
+      expect(JSON.parse(selected.content).paths).toEqual([
+        {
+          path: "note.txt",
+          contentIdentity: workspace.workspace.candidates.find((item) => item.path === "note.txt")!
+            .contentIdentity,
+        },
+      ]);
+    } finally {
+      await call(session, "workspace.discover", { root: "relative", exclusions: [] });
+      await rm(root, { recursive: true, force: true });
     }
   });
 

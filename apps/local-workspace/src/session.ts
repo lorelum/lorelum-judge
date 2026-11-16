@@ -504,6 +504,35 @@ export class SessionRouter {
     this.#disclosure = undefined;
     this.#plan?.revokeModelDisclosure();
   }
+  #selectedPathsSource(value: unknown) {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value) || value.some((path) => typeof path !== "string"))
+      throw new Error("Invalid selected project paths");
+    const workspace = this.#workspace;
+    if (!value.length) return undefined;
+    if (
+      !workspace ||
+      value.some(
+        (path) =>
+          !workspace.candidates.some(
+            (item) => item.path === path && item.status === "present" && !item.exclusionReason,
+          ),
+      )
+    )
+      throw new Error("Invalid selected project paths");
+    return {
+      id: "project-paths",
+      kind: "reference" as const,
+      locator: "selected-workspace",
+      version: workspace.identity,
+      content: JSON.stringify({
+        paths: workspace.candidates
+          .filter((item) => value.includes(item.path))
+          .map((item) => ({ path: item.path, contentIdentity: item.contentIdentity })),
+      }),
+      status: "available" as const,
+    };
+  }
   #selectConfigured(hostModel: HostModel): void {
     const selected = createConfiguredModel(hostModel);
     if (hostModel.apiKey) new Headers({ authorization: `Bearer ${hostModel.apiKey}` });
@@ -637,6 +666,8 @@ export class SessionRouter {
       model: { provider: PROVIDER_LABEL, name: modelName },
       ...(Object.keys(decoding).length ? { decoding } : {}),
     };
+    this.#invalidate();
+    this.#plan = undefined;
     const controller = new AbortController();
     this.#reviewController = controller;
     this.#reviewKind = kind;
@@ -1145,25 +1176,10 @@ export class SessionRouter {
             advice.evaluationIdentity === evaluationIdentity.identity
               ? advice
               : null;
-          if (
-            data.paths !== undefined &&
-            (!Array.isArray(data.paths) || data.paths.some((path) => typeof path !== "string"))
-          )
-            throw new Error("Invalid selected project paths");
-          const paths = (data.paths ?? []) as string[];
-          const workspace = this.#workspace;
-          if (
-            paths.length &&
-            (!workspace ||
-              paths.some(
-                (path) =>
-                  !workspace.candidates.some(
-                    (item) =>
-                      item.path === path && item.status === "present" && !item.exclusionReason,
-                  ),
-              ))
-          )
-            throw new Error("Invalid selected project paths");
+          const projectSource = this.#selectedPathsSource(data.paths);
+          const conversation =
+            data.conversation === undefined ? "" : text(data.conversation, "conversation");
+          const materials = data.materials === undefined ? "" : text(data.materials, "materials");
           const plan = new PlanningSession(id, {
             task: {
               schema: "lorelum.judge.task-contract/v1",
@@ -1216,21 +1232,27 @@ export class SessionRouter {
                     },
                   ]
                 : []),
-              ...(workspace && paths.length
+              ...(materials
                 ? [
                     {
-                      id: "project-paths",
+                      id: "material",
                       kind: "reference" as const,
-                      locator: "selected-workspace",
-                      version: workspace.identity,
-                      content: JSON.stringify({
-                        paths: workspace.candidates
-                          .filter((item) => paths.includes(item.path))
-                          .map((item) => ({
-                            path: item.path,
-                            contentIdentity: item.contentIdentity,
-                          })),
-                      }),
+                      locator: "local-user-material",
+                      version: "1",
+                      content: materials,
+                      status: "available" as const,
+                    },
+                  ]
+                : []),
+              ...(projectSource ? [projectSource] : []),
+              ...(conversation
+                ? [
+                    {
+                      id: "conversation",
+                      kind: "reference" as const,
+                      locator: "visible-conversation",
+                      version: "1",
+                      content: conversation,
                       status: "available" as const,
                     },
                   ]
@@ -1244,7 +1266,12 @@ export class SessionRouter {
         }
         case "planning.create": {
           const id = text(data.id, "id");
-          const plan = new PlanningSession(id, data.inputs as PlanningInputs);
+          const inputs = data.inputs as PlanningInputs;
+          const projectSource = this.#selectedPathsSource(data.paths);
+          const plan = new PlanningSession(
+            id,
+            projectSource ? { ...inputs, sources: [...inputs.sources, projectSource] } : inputs,
+          );
           this.#invalidate();
           this.#plan = plan;
           this.#emit("planning", "result", "created");
