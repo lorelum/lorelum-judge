@@ -757,13 +757,24 @@ export class SessionRouter {
               : "completed",
         );
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (this.#reviewController !== controller) return;
         const state: ReviewState = {
           status: "failed",
           report: null,
           text: null,
-          issues: [{ code: "review_failed", message: "Review failed" }],
+          issues: [
+            {
+              code:
+                error instanceof Error && error.message.startsWith("GitHub PR metadata")
+                  ? "github_pr_unavailable"
+                  : "review_failed",
+              message:
+                error instanceof Error && error.message.startsWith("GitHub PR metadata")
+                  ? "无法读取 PR 信息，请检查链接、公开访问权限及 GitHub 速率限制。"
+                  : "评价未完成，请检查模型配置和来源。",
+            },
+          ],
         };
         if (kind === "evaluation") this.#evaluation = state;
         else this.#suggestions = state;
