@@ -465,18 +465,19 @@ function App() {
       .filter((message) => message.role === "user" || message.label === "真实模型回复")
       .map(({ role, content }) => ({ role, content }));
     const conversationContext = history.length ? JSON.stringify(history) : "";
+    const paths = selectedWorkspaceIdentity === state.workspace?.identity ? selectedPaths : [];
     const created = hasEvaluation
       ? await action("planning.fromEvaluation", {
           id,
           text,
-          paths: selectedPaths,
+          paths,
           workspaceIdentity: selectedWorkspaceIdentity,
           ...(conversationContext ? { conversation: conversationContext } : {}),
           ...(materials.trim() ? { materials } : {}),
         })
       : await action("planning.create", {
           id,
-          paths: selectedPaths,
+          paths,
           workspaceIdentity: selectedWorkspaceIdentity,
           inputs: {
             task: {
