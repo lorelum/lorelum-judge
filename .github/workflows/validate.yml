@@ -23,6 +23,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
+      - uses: actions/checkout@v4
+        with:
+          repository: lorelum/lumen-ui
+          ref: b95a5409bfaba0e0f8db65c7a82257425f2ca99e
+          path: .lumen-cache/source
+          token: ${{ secrets.LUMEN_UI_READ_TOKEN }}
+          persist-credentials: false
+      - run: bun run prepare:lumen
       - run: bun install --frozen-lockfile
       # GitHub's disposable runner restricts user namespaces and ships
       # user-writable files in /usr/local. Mask that tree only inside a private

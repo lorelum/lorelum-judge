@@ -7,6 +7,7 @@ import type { ModelPort, SandboxPort, SandboxRunResult } from "@lorelum/judge-ru
 import { writeAuthorizedFile } from "./controlled-write.js";
 import {
   composeEvidenceReport,
+  type EvidenceLifecycleEvent,
   type EvidenceReviewInput,
   type EvidenceReviewResult,
   runEvidenceReview,
@@ -29,6 +30,24 @@ import {
   createWorkspaceSnapshot,
   type WorkspaceCandidateReview,
 } from "./workspace.js";
+
+/** Internal lifecycle observations; payloads deliberately exclude model and command content. */
+export interface ExecutionLifecycleEvent {
+  readonly kind:
+    | EvidenceLifecycleEvent["kind"]
+    | "model"
+    | "read"
+    | "write"
+    | "command"
+    | "unknown"
+    | "terminal";
+  readonly id: string;
+  readonly stage: EvidenceLifecycleEvent["stage"];
+  readonly status: EvidenceLifecycleEvent["status"];
+  readonly reason?: "revoked" | "expired" | "precondition_changed" | "budget_exceeded" | "error";
+  readonly path?: string;
+  readonly commandIndex?: number;
+}
 
 export interface ExecutionCommand {
   readonly executable: string;
@@ -360,6 +379,7 @@ export class ControlledExecutionSession {
     readonly sandbox: SandboxPort;
     readonly runId: string;
     readonly signal: AbortSignal;
+    readonly onEvent?: (event: ExecutionLifecycleEvent) => void;
   }): Promise<ImplementationResult> {
     if (this.#used || !this.#proposal || !this.#approved || options.model !== this.#recipient)
       throw new Error("Independent permission and matching disclosure recipient required");
@@ -430,6 +450,64 @@ export class ControlledExecutionSession {
         throw new Error(`${key} budget exceeded`);
       usage[key] += amount;
     };
+    let eventSequence = 0;
+    const emit = (event: ExecutionLifecycleEvent) => {
+      try {
+        options.onEvent?.(event);
+      } catch {
+        // Observers cannot affect execution.
+      }
+    };
+    const failureStatus = (): "cancelled" | "timed_out" | "failed" =>
+      timedOut
+        ? "timed_out"
+        : this.#controller.signal.aborted || options.signal.aborted
+          ? "cancelled"
+          : "failed";
+    type ActionEvent = Pick<ExecutionLifecycleEvent, "kind" | "id" | "path" | "commandIndex">;
+    let active: { event: ActionEvent; started: boolean } | undefined;
+    const proposeAction = (event: ActionEvent) => {
+      active = { event, started: false };
+      emit({ ...event, stage: "proposed", status: "proposed" });
+      guard();
+    };
+    const startAction = () => {
+      if (!active) throw new Error("Missing action");
+      emit({ ...active.event, stage: "authorization", status: "allowed" });
+      guard();
+      active.started = true;
+      emit({ ...active.event, stage: "started", status: "started" });
+      guard();
+    };
+    const finishAction = (status: ExecutionLifecycleEvent["status"]) => {
+      if (!active) throw new Error("Missing action");
+      const event = active.event;
+      active = undefined;
+      emit({ ...event, stage: "result", status });
+    };
+    const modelCall = async <T>(call: () => Promise<T>): Promise<T> => {
+      const event: ActionEvent = { kind: "model", id: `model-${++eventSequence}` };
+      let started = false;
+      try {
+        emit({ ...event, stage: "proposed", status: "proposed" });
+        reserve("modelCalls", 1);
+        emit({ ...event, stage: "authorization", status: "allowed" });
+        guard();
+        started = true;
+        emit({ ...event, stage: "started", status: "started" });
+        guard();
+        const result = await call();
+        emit({ ...event, stage: "result", status: "completed" });
+        return result;
+      } catch (error) {
+        emit({
+          ...event,
+          stage: started ? "result" : "authorization",
+          status: started ? failureStatus() : "denied",
+        });
+        throw error;
+      }
+    };
     try {
       guard();
       if (!permission.disclosures.includes("plan"))
@@ -489,14 +567,15 @@ export class ControlledExecutionSession {
             "Return JSON action: {type:'read',path}, {type:'write',path,expectedIdentity,content}, {type:'command',index}, or {type:'done'}. Writes require the sha256 identity of the old bytes, or null for a new file. Commands are selected only by index from the host-approved list.",
           commands: permission.commands,
         });
-        reserve("modelCalls", 1);
-        const response = await options.model.generate({
-          runId: options.runId,
-          stepIndex: usage.modelCalls - 1,
-          signal: this.#controller.signal,
-          tools: [],
-          messages: [{ role: "user", content: prompt }],
-        });
+        const response = await modelCall(() =>
+          options.model.generate({
+            runId: options.runId,
+            stepIndex: usage.modelCalls - 1,
+            signal: this.#controller.signal,
+            tools: [],
+            messages: [{ role: "user", content: prompt }],
+          }),
+        );
         guard();
         const raw =
           response.kind === "structured"
@@ -536,15 +615,16 @@ export class ControlledExecutionSession {
           const reviewModel: ModelPort = {
             generate: async (request) => {
               guard();
-              reserve("modelCalls", 1);
-              const response = await options.model.generate({
-                runId: request.runId,
-                stepIndex: request.stepIndex,
-                messages: request.messages,
-                tools: request.tools,
-                ...(request.config === undefined ? {} : { config: request.config }),
-                signal: AbortSignal.any([request.signal, this.#controller.signal]),
-              });
+              const response = await modelCall(() =>
+                options.model.generate({
+                  runId: request.runId,
+                  stepIndex: request.stepIndex,
+                  messages: request.messages,
+                  tools: request.tools,
+                  ...(request.config === undefined ? {} : { config: request.config }),
+                  signal: AbortSignal.any([request.signal, this.#controller.signal]),
+                }),
+              );
               guard();
               reserve("outputBytes", bytes(JSON.stringify(response)));
               return response;
@@ -571,6 +651,7 @@ export class ControlledExecutionSession {
             candidateEvidence,
             checks: verification.checks,
             signal: this.#controller.signal,
+            ...(options.onEvent === undefined ? {} : { onEvent: emit, guard }),
             sandbox: {
               run: async (request) => {
                 guard();
@@ -670,6 +751,12 @@ export class ControlledExecutionSession {
               report.quality === "pass" || report.quality === "fail" ? report.quality : "unknown",
             unknowns: report.unknowns,
           });
+          emit({
+            kind: "terminal",
+            id: "terminal",
+            stage: "result",
+            status: evidence.stopReason ? "failed" : "completed",
+          });
           return {
             status: evidence.stopReason ? "failed" : "completed",
             reason: evidence.stopReason ?? "Independent review completed",
@@ -681,6 +768,18 @@ export class ControlledExecutionSession {
             records,
           };
         }
+        const actionKind =
+          item.type === "read" || item.type === "write" || item.type === "command"
+            ? item.type
+            : "unknown";
+        proposeAction({
+          kind: actionKind,
+          id: `action-${++eventSequence}`,
+          ...(typeof item.path === "string" ? { path: item.path } : {}),
+          ...(typeof item.index === "number" && Number.isSafeInteger(item.index)
+            ? { commandIndex: item.index }
+            : {}),
+        });
         if (item.type === "read") {
           if (
             typeof item.path !== "string" ||
@@ -688,6 +787,7 @@ export class ControlledExecutionSession {
             !permission.disclosures.includes("file-content")
           )
             throw new Error("Read or disclosure not authorized");
+          startAction();
           const file = await checkedPath(root, item.path, false);
           guard();
           const data = await readFile(file);
@@ -706,6 +806,7 @@ export class ControlledExecutionSession {
             !(typeof item.expectedIdentity === "string" || item.expectedIdentity === null)
           )
             throw new Error("Write not authorized");
+          startAction();
           const rootPath = root;
           const path = item.path;
           const file = await checkedPath(rootPath, path, true);
@@ -718,8 +819,9 @@ export class ControlledExecutionSession {
             signal: this.#controller.signal,
             resolveTarget: () => checkedPath(rootPath, path, true),
           });
-          guard();
           observations.push({ type: "write", path: item.path, identity: hash(content) });
+          finishAction("completed");
+          guard();
         } else if (item.type === "command") {
           if (
             typeof item.index !== "number" ||
@@ -732,6 +834,7 @@ export class ControlledExecutionSession {
           reserve("commands", 1);
           const remaining = permission.limits.outputBytes - usage.outputBytes;
           if (remaining <= 0) throw new Error("outputBytes budget exceeded");
+          startAction();
           const started = performance.now();
           let result: SandboxRunResult;
           try {
@@ -754,10 +857,14 @@ export class ControlledExecutionSession {
             throw new Error("outputBytes budget exceeded");
           usage.outputBytes += outputSize;
           observations.push({ type: "command", index: item.index, ...result });
+          finishAction(
+            result.status === "completed" && result.exitCode !== 0 ? "failed" : result.status,
+          );
           guard();
           if (result.status !== "completed" || result.exitCode !== 0)
             throw new Error(`Command ${result.status}`);
         } else throw new Error("Unsupported model action");
+        if (active) finishAction("completed");
       }
     } catch (error) {
       usage.totalTimeMs = Math.ceil(performance.now() - startedAt);
@@ -768,6 +875,29 @@ export class ControlledExecutionSession {
           : "failed";
       const reason =
         error instanceof Error ? error.message || "Unknown failure" : "Unknown failure";
+      if (active) {
+        if (active.started) finishAction(status);
+        else {
+          emit({ ...active.event, stage: "authorization", status: "denied" });
+          active = undefined;
+        }
+      }
+      emit({
+        kind: "terminal",
+        id: "terminal",
+        stage: "result",
+        status,
+        reason:
+          Date.now() >= permission.expiresAt
+            ? "expired"
+            : !this.#plan.isEligible(permission.planIdentity, permission.planRevision)
+              ? "precondition_changed"
+              : !this.#approved
+                ? "revoked"
+                : timedOut
+                  ? "budget_exceeded"
+                  : "error",
+      });
       const failureEvidence: EvidenceReviewResult | undefined = collectedEvidence
         ? {
             ...collectedEvidence,

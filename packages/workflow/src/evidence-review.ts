@@ -44,6 +44,24 @@ export type EvidenceAuthorizationStage =
   | "after_check"
   | "before_review"
   | "after_review";
+export interface EvidenceLifecycleEvent {
+  readonly kind: "check" | "review";
+  readonly id: string;
+  readonly stage: "proposed" | "authorization" | "started" | "result";
+  readonly status:
+    | "proposed"
+    | "allowed"
+    | "denied"
+    | "started"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "timed_out"
+    | "truncated"
+    | "unavailable"
+    | "unknown";
+}
+
 export interface EvidenceReviewInput {
   /** An independently created, frozen candidate copy, never the implementer's working tree. */
   readonly root: string;
@@ -53,6 +71,9 @@ export interface EvidenceReviewInput {
   readonly checks: readonly ApprovedEvidenceCheck[];
   readonly sandbox: SandboxPort;
   readonly signal: AbortSignal;
+  readonly onEvent?: (event: EvidenceLifecycleEvent) => void;
+  /** Revalidates authority without reserving budget; required when observing lifecycle events. */
+  readonly guard?: () => void;
   /** Must revalidate current authority and reserve applicable budget before side effects. Throws on denial. */
   readonly authorize: (
     stage: EvidenceAuthorizationStage,
@@ -93,6 +114,9 @@ function pending(check: ApprovedEvidenceCheck): EvidenceCheckResult {
 
 /** Runs checks against a read-only sandbox mount. The caller owns and authenticates the snapshot. */
 export async function runEvidenceReview(input: EvidenceReviewInput): Promise<EvidenceReviewResult> {
+  if (input.onEvent !== undefined && input.guard === undefined) {
+    throw new Error("Lifecycle observation requires a non-reserving authority guard");
+  }
   const candidateIdentity = input.candidateIdentity;
   const root = input.root;
   const fields = [
@@ -142,15 +166,62 @@ export async function runEvidenceReview(input: EvidenceReviewInput): Promise<Evi
   let commands = 0;
   let review: ExecuteReviewResult | null = null;
   let gate: ValidationResult<ReviewGateResult> | null = null;
+  const emit = (event: EvidenceLifecycleEvent) => {
+    try {
+      input.onEvent?.(event);
+    } catch {
+      // Observers are not part of the evidence execution.
+    }
+  };
+  const guard = () => {
+    if (input.signal.aborted) throw new Error("cancelled");
+    input.guard?.();
+    if (input.signal.aborted) throw new Error("cancelled");
+  };
+  const authorize = async (
+    stage: EvidenceAuthorizationStage,
+    kind: EvidenceLifecycleEvent["kind"],
+    id: string,
+    check?: ApprovedEvidenceCheck,
+  ) => {
+    try {
+      guard();
+      await input.authorize(stage, check);
+    } catch (error) {
+      emit({ kind, id, stage: "authorization", status: "denied" });
+      throw error;
+    }
+    emit({ kind, id, stage: "authorization", status: "allowed" });
+    try {
+      guard();
+    } catch (error) {
+      if (!input.signal.aborted) {
+        emit({ kind, id, stage: "authorization", status: "denied" });
+      }
+      throw error;
+    }
+  };
+  const revalidateAfterObserver = (kind: EvidenceLifecycleEvent["kind"], id: string) => {
+    try {
+      guard();
+    } catch (error) {
+      if (!input.signal.aborted) {
+        emit({ kind, id, stage: "authorization", status: "denied" });
+      }
+      throw error;
+    }
+  };
   for (const check of checks) {
     if (stopReason !== null || input.signal.aborted) {
       stopReason ??= "cancelled";
       results.push(pending(check));
       continue;
     }
+    emit({ kind: "check", id: check.id, stage: "proposed", status: "proposed" });
     try {
-      await input.authorize("before_check", check);
-      if (input.signal.aborted) throw new Error("cancelled");
+      await authorize("before_check", "check", check.id, check);
+      emit({ kind: "check", id: check.id, stage: "started", status: "started" });
+      revalidateAfterObserver("check", check.id);
     } catch (error) {
       stopReason = input.signal.aborted
         ? "cancelled"
@@ -199,9 +270,20 @@ export async function runEvidenceReview(input: EvidenceReviewInput): Promise<Evi
         error: message(error),
       });
     }
+    const checkStatus = results[results.length - 1]!.status;
+    emit({
+      kind: "check",
+      id: check.id,
+      stage: "result",
+      status:
+        checkStatus === "passed"
+          ? "completed"
+          : checkStatus === "not_started"
+            ? "unknown"
+            : checkStatus,
+    });
     try {
-      await input.authorize("after_check", check);
-      if (input.signal.aborted) throw new Error("cancelled");
+      await authorize("after_check", "check", check.id, check);
     } catch (error) {
       stopReason = input.signal.aborted
         ? "cancelled"
@@ -210,9 +292,12 @@ export async function runEvidenceReview(input: EvidenceReviewInput): Promise<Evi
     if (results[results.length - 1]?.status === "cancelled") stopReason ??= "cancelled";
   }
   if (stopReason === null && !input.signal.aborted) {
+    const reviewId = input.review.input.id ?? "review";
+    let reviewStarted = false;
+    let reviewResultEmitted = false;
+    emit({ kind: "review", id: reviewId, stage: "proposed", status: "proposed" });
     try {
-      await input.authorize("before_review");
-      if (input.signal.aborted) throw new Error("cancelled");
+      await authorize("before_review", "review", reviewId);
       const evidence = [
         ...candidateEvidence,
         ...results.map(
@@ -243,12 +328,31 @@ export async function runEvidenceReview(input: EvidenceReviewInput): Promise<Evi
               : { id: `check-${index + 1}`, status: "unavailable" },
         ),
       ];
+      emit({ kind: "review", id: reviewId, stage: "started", status: "started" });
+      revalidateAfterObserver("review", reviewId);
+      reviewStarted = true;
       review = await executeReview(
         { ...input.review.input, evidence, signal: input.signal },
         input.review.ports,
       );
-      await input.authorize("after_review");
-      if (input.signal.aborted) throw new Error("cancelled");
+      emit({
+        kind: "review",
+        id: reviewId,
+        stage: "result",
+        status: input.signal.aborted
+          ? "cancelled"
+          : !review.ok
+            ? "failed"
+            : review.value.completeness === "complete"
+              ? "completed"
+              : review.value.completeness === "failed"
+                ? "failed"
+                : review.value.completeness === "cancelled"
+                  ? "cancelled"
+                  : "unknown",
+      });
+      reviewResultEmitted = true;
+      await authorize("after_review", "review", reviewId);
       if (review.ok && input.review.gate !== undefined) {
         gate = evaluateReviewGate({
           ...input.review.gate,
@@ -258,6 +362,14 @@ export async function runEvidenceReview(input: EvidenceReviewInput): Promise<Evi
         });
       }
     } catch (error) {
+      if (reviewStarted && !reviewResultEmitted) {
+        emit({
+          kind: "review",
+          id: reviewId,
+          stage: "result",
+          status: input.signal.aborted ? "cancelled" : "unavailable",
+        });
+      }
       review = null;
       gate = null;
       stopReason = input.signal.aborted

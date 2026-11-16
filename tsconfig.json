@@ -1,5 +1,16 @@
 {
   "extends": "./tsconfig.base.json",
-  "include": ["packages/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"],
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["bun"]
+  },
+  "include": [
+    "packages/**/*.ts",
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "scripts/**/*.ts",
+    "tests/**/*.ts"
+  ],
   "exclude": ["**/dist/**", "node_modules"]
 }

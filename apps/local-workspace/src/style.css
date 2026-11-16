@@ -1,0 +1,130 @@
+@import "tailwindcss";
+@import "@lorelum/lumen-ui/theme.css";
+@source "../node_modules/@lorelum/lumen-ui/dist";
+
+body {
+  margin: 0;
+  background: #f3f4f6;
+  font-family: Inter, system-ui, sans-serif;
+}
+.shell {
+  max-width: 1440px;
+  margin: auto;
+  padding: 28px;
+}
+.hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+.hero h1 {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  margin: 4px 0;
+}
+.muted {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: #2563eb;
+}
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.85fr);
+  gap: 20px;
+  align-items: start;
+}
+.stack {
+  display: grid;
+  gap: 16px;
+}
+.section {
+  padding: 20px;
+}
+.section h2 {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+.field {
+  display: grid;
+  gap: 6px;
+  margin-top: 13px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.field textarea {
+  min-height: 80px;
+}
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.data {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px;
+  overflow: auto;
+  max-height: 300px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font:
+    12px / 1.5 ui-monospace,
+    monospace;
+}
+.state {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+  background: #e8eefc;
+  color: #1d4ed8;
+  font-weight: 700;
+}
+.notice {
+  padding: 12px;
+  border-radius: 12px;
+  background: #eff6ff;
+  color: #1e40af;
+  font-size: 13px;
+}
+.error {
+  background: #fef2f2;
+  color: #991b1b;
+}
+.check {
+  display: flex;
+  gap: 8px;
+  align-items: start;
+  font-size: 13px;
+  margin-top: 9px;
+}
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+  .hero {
+    align-items: start;
+    flex-direction: column;
+  }
+  .shell {
+    padding: 16px;
+  }
+}

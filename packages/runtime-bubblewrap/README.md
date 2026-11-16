@@ -46,6 +46,9 @@ operations and prevent command startup; a single in-flight filesystem operation
 cannot be interrupted by this adapter. Bubblewrap retains its PID 1 reaper so
 that cancellation, timeout and output truncation kill the namespace, including
 descendants that created a new session. No network access grant is supported.
+The returned stdout and stderr share `maxOutputBytes` when encoded as UTF-8.
+Incomplete or invalid sequences may require replacement characters; output that
+cannot fit remains truncated rather than exceeding that limit.
 
 Tests exercise actual sandbox escape attempts and process cleanup on Linux. They
 need the required kernel and bubblewrap features; a startup check alone is not
