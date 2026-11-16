@@ -468,6 +468,12 @@ export class SessionRouter {
           if (!this.#hostModel) throw new Error("No configured model is available from the host");
           const selected = createConfiguredModel(this.#hostModel);
           const secret = this.#hostModel.apiKey;
+          if (
+            secret &&
+            (selected.recipient.includes(secret) ||
+              JSON.stringify(selected.config).includes(secret))
+          )
+            throw new Error("Model recipient or configuration cannot be safely displayed");
           const model: ModelPort = {
             generate(request) {
               if (secret && JSON.stringify(request.messages).includes(secret))

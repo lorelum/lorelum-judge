@@ -181,6 +181,23 @@ describe("local workspace session router", () => {
     }
   });
 
+  test("refuses a model whose recipient or configuration cannot be displayed without revealing its credential", async () => {
+    for (const configuredModel of [
+      { endpoint: "http://test.local/v1", apiKey: "test", config: { model: "safe-model" } },
+      { endpoint: "http://localhost/v1", apiKey: "secret", config: { model: "secret-model" } },
+    ]) {
+      const session = new SessionRouter({ configuredModel });
+      const selected = await call(session, "model.configured", {});
+      expect(selected.ok).toBe(false);
+      expect(selected.state.model).toBeNull();
+      expect(
+        (await call(session, "chat.preview", { messages: [{ role: "user", content: "hello" }] }))
+          .ok,
+      ).toBe(false);
+      expect(JSON.stringify(selected)).not.toContain(configuredModel.apiKey);
+    }
+  });
+
   test("chat requires a configured model and a fresh request-bound authorization", async () => {
     const requests: unknown[] = [];
     const server = Bun.serve({

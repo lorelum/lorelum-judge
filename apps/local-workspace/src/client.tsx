@@ -133,6 +133,21 @@ function App() {
   });
   const tokenRef = useRef("");
   const advancedRef = useRef<HTMLDetailsElement>(null);
+  const submittedChat = useRef<{ messages: string; input: string } | null>(null);
+
+  useEffect(() => {
+    const submitted = submittedChat.current;
+    const chat = state?.chat;
+    if (!submitted || chat?.status !== "completed" || chat.messages.length < 2) return;
+    const last = chat.messages[chat.messages.length - 1];
+    if (
+      last?.role !== "assistant" ||
+      JSON.stringify(chat.messages.slice(0, -1)) !== submitted.messages
+    )
+      return;
+    setChatInput((current) => (current === submitted.input ? "" : current));
+    submittedChat.current = null;
+  }, [state?.chat]);
 
   useEffect(() => {
     void fetch("/api/bootstrap", { headers: clientHeader })
@@ -348,6 +363,7 @@ function App() {
   const proposal = state?.execution.proposal;
   const ready = Object.values(approvals).every(Boolean);
   const chatMessages = state?.chat?.messages ?? [];
+  const chatRunning = chatGenerating || state?.chat?.status === "running";
   const pendingMessages: ChatMessage[] = [...chatMessages, { role: "user", content: chatInput }];
   const chatDisclosure = state?.chatDisclosure;
   const previewMatches =
@@ -379,6 +395,10 @@ function App() {
         setError("披露已变化，请重新预览并授权。");
         return;
       }
+      submittedChat.current = {
+        messages: JSON.stringify(chatDisclosure.request.messages),
+        input: chatInput,
+      };
       setChatGenerating(true);
       const result = await action("chat.generate", { identity }, true);
       if (result) setChatInput("");
@@ -441,9 +461,9 @@ function App() {
                   )}
                 </article>
               ))}
-              {(chatDisclosure || chatGenerating) && chatInput.trim() && (
+              {(chatDisclosure || chatRunning) && chatInput.trim() && (
                 <article className="message user">
-                  <div className="message-label">{chatGenerating ? "你" : "你 · 待发送"}</div>
+                  <div className="message-label">{chatRunning ? "你" : "你 · 待发送"}</div>
                   <div className="message-content">{chatInput}</div>
                 </article>
               )}
@@ -452,7 +472,7 @@ function App() {
                   模型请求失败，未生成回复。可检查配置后重新预览并授权。
                 </p>
               )}
-              {chatBusy && (
+              {(chatBusy || chatRunning) && (
                 <p className="muted" role="status">
                   正在处理，请稍候…
                 </p>
@@ -464,7 +484,7 @@ function App() {
                 value={chatInput}
                 onChange={(event) => setChatInput(event.target.value)}
                 placeholder="描述你的问题或想要完成的任务"
-                disabled={chatBusy}
+                disabled={chatBusy || chatRunning}
               />
             </label>
             <div className="row">
@@ -474,6 +494,7 @@ function App() {
                   !token ||
                   busy ||
                   chatBusy ||
+                  chatRunning ||
                   !chatInput.trim() ||
                   state?.model?.mode !== "configured"
                 }
@@ -482,7 +503,7 @@ function App() {
               </Button>
               <Button
                 variant="flat"
-                disabled={!chatInput.trim() || chatBusy}
+                disabled={!chatInput.trim() || chatBusy || chatRunning}
                 onClick={() => {
                   setTask(chatInput);
                   if (advancedRef.current) advancedRef.current.open = true;
@@ -491,7 +512,7 @@ function App() {
               >
                 将输入用于工作流任务
               </Button>
-              {chatGenerating && (
+              {chatRunning && (
                 <Button
                   variant="flat"
                   color="danger"
