@@ -247,6 +247,11 @@ describe("local workspace session router", () => {
     for (const config of [
       { endpoint, model: `prefix-${secret}`, apiKey: "new-secret" },
       { endpoint: `${endpoint}/${secret}`, model: "two", apiKey: "new-secret" },
+      {
+        endpoint: `${endpoint}/%2570revious-secret-credential`,
+        model: "two",
+        apiKey: "new-secret",
+      },
     ]) {
       const result = await call(session, "model.configure", config);
       expect(result.ok).toBe(false);
@@ -411,14 +416,20 @@ describe("local workspace session router", () => {
     expect(
       (await call(escaped, "chat.preview", { messages: [{ role: "user", content: "ab\\cd" }] })).ok,
     ).toBe(false);
-    const keyName = new SessionRouter({
-      configuredModel: {
-        endpoint: "http://localhost/v1",
-        apiKey: "model",
-        config: { model: "safe" },
-      },
+    const encodedMessage = await call(escaped, "chat.preview", {
+      messages: [{ role: "user", content: JSON.stringify({ file: "ab\\cd" }) }],
     });
-    expect((await call(keyName, "model.configured", {})).ok).toBe(true);
+    expect(encodedMessage.ok).toBe(false);
+    expect(JSON.stringify(encodedMessage)).not.toContain("ab\\\\cd");
+    const keyName = new SessionRouter();
+    const rejected = await call(keyName, "model.configure", {
+      endpoint: "http://localhost/v1",
+      apiKey: "model",
+      model: "safe",
+    });
+    expect(rejected.ok).toBe(false);
+    expect(rejected.state.model).toBeNull();
+    expect(rejected.error?.message).toBe("API key conflicts with the session protocol");
   });
 
   test("chat requires a configured model and a fresh request-bound authorization", async () => {

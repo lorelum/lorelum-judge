@@ -16,7 +16,7 @@ bun run workspace:local
 
 公开 fork 的 pull request 默认拿不到上游仓库的 Actions secrets，因此上述 CI 步骤也不能读取私有组件库；不要使用 `pull_request_target` 或向不可信代码暴露 token 来绕过该限制。
 
-宿主默认只监听随机 loopback 端口；可用 `LORELUM_WORKSPACE_PORT` 指定端口。可在页面配置 OpenAI-compatible 端点、模型名称及可选 API 密钥，也可在启动环境设置 `LORELUM_MODEL_ENDPOINT`、`LORELUM_MODEL_NAME` 和可选 `LORELUM_MODEL_API_KEY`。页面提交后清空密钥输入，密钥仅存于宿主内存，不写入状态、事件、日志或文件。不要把密钥发到对话或放入仓库。接收方地址或模型配置包含密钥时，宿主会拒绝该配置。
+宿主默认只监听随机 loopback 端口；可用 `LORELUM_WORKSPACE_PORT` 指定端口。可在页面配置 OpenAI-compatible 端点、模型名称及可选 API 密钥，也可在启动环境设置 `LORELUM_MODEL_ENDPOINT`、`LORELUM_MODEL_NAME` 和可选 `LORELUM_MODEL_API_KEY`。页面提交后清空密钥输入，密钥仅存于宿主内存，不写入状态、事件、日志或文件。不要把密钥发到对话或放入仓库。接收方地址或模型配置包含当前或历史密钥（包括 URL 编码）时，宿主会拒绝该配置；与状态协议字段冲突的密钥也会被拒绝，避免脱敏破坏状态结构。
 
 页面以对话为入口：配置模型并选择项目后输入任务，在对话中查看规划披露、确认计划、分别审核文件及命令权限、执行并查看结果。连接检查、对话和规划均在实际请求前展示接收方、配置和完整消息并要求明确同意；执行与评审期间的每次真实模型请求也须逐次审核。模型配置或连接失败时不会静默回退到离线模型。确定性离线演示不是聊天模型。
 

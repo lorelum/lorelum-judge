@@ -84,8 +84,91 @@ function text(value: unknown, name: string): string {
     throw new Error(`${name} must be a nonempty string`);
   return value;
 }
+const PROTOCOL_FIELDS = [
+  "model",
+  "sessionId",
+  "sequence",
+  "workspace",
+  "diagnostics",
+  "plan",
+  "disclosure",
+  "chat",
+  "chatDisclosure",
+  "execution",
+  "executionDisclosure",
+  "status",
+  "recipient",
+  "config",
+  "identity",
+  "request",
+  "messages",
+  "role",
+  "content",
+  "authorized",
+  "result",
+  "proposal",
+  "error",
+  "path",
+  "origin",
+  "exclusionReason",
+  "mode",
+  "size",
+  "revision",
+  "eligible",
+  "acceptanceProposed",
+  "goal",
+  "scope",
+  "task",
+  "acceptance",
+  "id",
+  "text",
+  "source",
+  "ref",
+  "steps",
+  "description",
+  "acceptanceIds",
+  "checks",
+  "nonGoals",
+  "missing",
+  "conflicts",
+  "sourceIds",
+  "root",
+  "gitIdentity",
+  "candidates",
+  "temperature",
+  "topP",
+  "maxTokens",
+  "seed",
+  "permission",
+  "verification",
+  "reason",
+  "workspaceRoot",
+  "evidence",
+  "candidateIdentity",
+  "review",
+  "reviewStatus",
+  "stopReason",
+  "completeness",
+  "report",
+  "diff",
+  "diffUnavailable",
+  "quality",
+  "diffAvailable",
+  "diffRevealed",
+  "actions",
+];
+function conflictsWithProtocol(secret: string): boolean {
+  return PROTOCOL_FIELDS.some((key) => key.includes(secret));
+}
+function secretForms(secret: string): string[] {
+  return [secret, JSON.stringify(secret).slice(1, -1)];
+}
+function maskSecret(value: string, secret: string): string {
+  for (const form of secretForms(secret)) value = value.split(form).join("[redacted]");
+  return value;
+}
 function containsSecret(value: unknown, secret: string): boolean {
-  if (typeof value === "string") return value.includes(secret);
+  if (typeof value === "string") return secretForms(secret).some((form) => value.includes(form));
   if (Array.isArray(value)) return value.some((item) => containsSecret(item, secret));
   if (value && typeof value === "object")
     return Object.values(value).some((item) => containsSecret(item, secret));
@@ -95,18 +178,18 @@ function containsSecretKey(value: unknown, secret: string): boolean {
   if (Array.isArray(value)) return value.some((item) => containsSecretKey(item, secret));
   if (value && typeof value === "object")
     return Object.entries(value).some(
-      ([key, item]) => key.includes(secret) || containsSecretKey(item, secret),
+      ([key, item]) => containsSecret(key, secret) || containsSecretKey(item, secret),
     );
   return false;
 }
 function redact(value: unknown, secret: string): unknown {
   if (!secret) return value;
-  if (typeof value === "string") return value.split(secret).join("[redacted]");
+  if (typeof value === "string") return maskSecret(value, secret);
   if (Array.isArray(value)) return value.map((item) => redact(item, secret));
   if (value && typeof value === "object")
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [
-        key.split(secret).join("[redacted]"),
+        PROTOCOL_FIELDS.includes(key) ? key : maskSecret(key, secret),
         redact(item, secret),
       ]),
     );
@@ -175,20 +258,22 @@ export class SessionRouter {
     this.#hostModel = options.configuredModel
       ? structuredClone(options.configuredModel)
       : undefined;
+    if (this.#hostModel?.apiKey && conflictsWithProtocol(this.#hostModel.apiKey))
+      throw new Error("API key conflicts with the session protocol");
     if (this.#hostModel?.apiKey) this.#secrets.add(this.#hostModel.apiKey);
   }
 
   #safe(value: unknown): unknown {
     if (typeof value === "string") {
       let sanitized = value;
-      for (const secret of this.#secrets) sanitized = sanitized.split(secret).join("[redacted]");
+      for (const secret of this.#secrets) sanitized = maskSecret(sanitized, secret);
       return sanitized;
     }
     if (Array.isArray(value)) return value.map((item) => this.#safe(item));
     if (value && typeof value === "object")
       return Object.fromEntries(
         Object.entries(value).map(([key, item]) => {
-          for (const secret of this.#secrets) key = key.split(secret).join("[redacted]");
+          for (const secret of this.#secrets) key = maskSecret(key, secret);
           return [key, this.#safe(item)];
         }),
       );
@@ -353,10 +438,22 @@ export class SessionRouter {
     const selected = createConfiguredModel(hostModel);
     if (hostModel.apiKey) new Headers({ authorization: `Bearer ${hostModel.apiKey}` });
     const secret = hostModel.apiKey;
+    if (secret && conflictsWithProtocol(secret))
+      throw new Error("API key conflicts with the session protocol");
+    let decodedRecipient = selected.recipient;
+    try {
+      for (;;) {
+        const decoded = decodeURIComponent(decodedRecipient);
+        if (decoded === decodedRecipient) break;
+        decodedRecipient = decoded;
+      }
+    } catch {
+      throw new Error("Model recipient or configuration cannot be safely displayed");
+    }
     const protectedKeys = secret ? [...this.#secrets, secret] : [...this.#secrets];
     if (
       protectedKeys.some(
-        (key) => selected.recipient.includes(key) || containsSecret(selected.config, key),
+        (key) => decodedRecipient.includes(key) || containsSecret(selected.config, key),
       )
     )
       throw new Error("Model recipient or configuration cannot be safely displayed");
@@ -1199,6 +1296,7 @@ export class SessionRouter {
       const message = error instanceof Error ? error.message : "";
       const safe = [
         "Configured model request failed",
+        "API key conflicts with the session protocol",
         "Secure source reading requires Linux openat2",
         "Project root must be absolute",
         "Project root must not traverse symbolic links",
