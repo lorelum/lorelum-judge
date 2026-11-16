@@ -77,6 +77,13 @@ function text(value: unknown, name: string): string {
     throw new Error(`${name} must be a nonempty string`);
   return value;
 }
+function containsSecret(value: unknown, secret: string): boolean {
+  if (typeof value === "string") return value.includes(secret);
+  if (Array.isArray(value)) return value.some((item) => containsSecret(item, secret));
+  if (value && typeof value === "object")
+    return Object.values(value).some((item) => containsSecret(item, secret));
+  return false;
+}
 function json(value: unknown): void {
   const visit = (item: unknown): void => {
     if (item === null || typeof item === "string" || typeof item === "boolean") return;
@@ -470,13 +477,12 @@ export class SessionRouter {
           const secret = this.#hostModel.apiKey;
           if (
             secret &&
-            (selected.recipient.includes(secret) ||
-              JSON.stringify(selected.config).includes(secret))
+            (selected.recipient.includes(secret) || containsSecret(selected.config, secret))
           )
             throw new Error("Model recipient or configuration cannot be safely displayed");
           const model: ModelPort = {
             generate(request) {
-              if (secret && JSON.stringify(request.messages).includes(secret))
+              if (secret && containsSecret(request.messages, secret))
                 throw new Error("Credential disclosure refused");
               return selected.model.generate(request);
             },
@@ -505,7 +511,7 @@ export class SessionRouter {
           });
           if (messages[messages.length - 1]?.role !== "user")
             throw new Error("Chat must end with a user message");
-          if (this.#hostModel?.apiKey && JSON.stringify(messages).includes(this.#hostModel.apiKey))
+          if (this.#hostModel?.apiKey && containsSecret(messages, this.#hostModel.apiKey))
             throw new Error("Credential disclosure refused");
           this.#invalidateChat();
           this.#chatDisclosure = {

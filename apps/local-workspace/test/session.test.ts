@@ -185,6 +185,7 @@ describe("local workspace session router", () => {
     for (const configuredModel of [
       { endpoint: "http://test.local/v1", apiKey: "test", config: { model: "safe-model" } },
       { endpoint: "http://localhost/v1", apiKey: "secret", config: { model: "secret-model" } },
+      { endpoint: "http://localhost/v1", apiKey: "ab\\cd", config: { model: "prefix-ab\\cd" } },
     ]) {
       const session = new SessionRouter({ configuredModel });
       const selected = await call(session, "model.configured", {});
@@ -196,6 +197,25 @@ describe("local workspace session router", () => {
       ).toBe(false);
       expect(JSON.stringify(selected)).not.toContain(configuredModel.apiKey);
     }
+    const escaped = new SessionRouter({
+      configuredModel: {
+        endpoint: "http://localhost/v1",
+        apiKey: "ab\\cd",
+        config: { model: "safe" },
+      },
+    });
+    expect((await call(escaped, "model.configured", {})).ok).toBe(true);
+    expect(
+      (await call(escaped, "chat.preview", { messages: [{ role: "user", content: "ab\\cd" }] })).ok,
+    ).toBe(false);
+    const keyName = new SessionRouter({
+      configuredModel: {
+        endpoint: "http://localhost/v1",
+        apiKey: "model",
+        config: { model: "safe" },
+      },
+    });
+    expect((await call(keyName, "model.configured", {})).ok).toBe(true);
   });
 
   test("chat requires a configured model and a fresh request-bound authorization", async () => {
