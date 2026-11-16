@@ -706,13 +706,36 @@ export class SessionRouter {
         : undefined;
     const work =
       kind === "evaluation"
-        ? evaluateCode(
-            { target: target!, ...(request === undefined ? {} : { request }) },
-            {
-              ...ports,
-              ...(repository ? { sources: { github: { repositories: [repository] } } } : {}),
-            },
-          )
+        ? (async () => {
+            let repositories: string[] | undefined;
+            if (typeof target === "string" && repository) {
+              const number = new URL(target).pathname.split("/")[4];
+              const response = await fetch(
+                `https://api.github.com/repos/${repository}/pulls/${number}`,
+                {
+                  headers: { Accept: "application/vnd.github+json" },
+                  redirect: "error",
+                  signal: controller.signal,
+                },
+              );
+              if (!response.ok) throw new Error("GitHub PR metadata unavailable");
+              const metadata = object(await response.json());
+              const base = object(object(metadata.base).repo).full_name;
+              const head = object(object(metadata.head).repo).full_name;
+              if (
+                typeof base !== "string" ||
+                base.toLowerCase() !== repository.toLowerCase() ||
+                typeof head !== "string" ||
+                !/^(?!\.{1,2}\/)[\w.-]+\/(?!\.{1,2}$)[\w.-]+$/.test(head)
+              )
+                throw new Error("GitHub PR metadata invalid");
+              repositories = [repository, head];
+            }
+            return evaluateCode(
+              { target: target!, ...(request === undefined ? {} : { request }) },
+              { ...ports, ...(repositories ? { sources: { github: { repositories } } } : {}) },
+            );
+          })()
         : generateCodeSuggestions({ evaluation: evaluation! }, ports);
     void work
       .then((result) => {

@@ -695,6 +695,12 @@ function App() {
                     onChange={(event) => setEvaluationTarget(event.target.value)}
                   />
                 </label>
+                {evaluationKind === "pr" && (
+                  <p className="muted">
+                    将读取所给 PR
+                    的公开信息及其基础仓库和来源仓库的相关内容；发送模型前仍需逐次同意。私有仓库认证暂未接入。
+                  </p>
+                )}
                 <label className="field">
                   评价要求（可选）
                   <Textarea
