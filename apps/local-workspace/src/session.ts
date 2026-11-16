@@ -333,7 +333,7 @@ export class SessionRouter {
       candidateIdentity:
         typeof source.candidateIdentity === "string" ? source.candidateIdentity : null,
       quality: typeof source.quality === "string" ? source.quality : "unknown",
-      checks: typeof source.checks === "string" ? source.checks : "incomplete",
+      checks: typeof source.completeness === "string" ? source.completeness : "incomplete",
       enforcement: typeof source.enforcement === "string" ? source.enforcement : "unknown",
       diff: null,
       diffUnavailable:
@@ -793,6 +793,7 @@ export class SessionRouter {
           this.#emit("execution", "started", "started");
           const runId = randomUUID();
           let terminalReason: WorkflowSessionEvent["reason"] = null;
+          let terminalStatus: string | undefined;
           try {
             const result = await execution.implement({
               model: model.model,
@@ -800,7 +801,11 @@ export class SessionRouter {
               runId,
               signal: controller.signal,
               onEvent: (event) => {
-                if (event.kind === "terminal") terminalReason = event.reason ?? null;
+                if (event.kind === "terminal") {
+                  terminalReason = event.reason ?? null;
+                  terminalStatus = event.status;
+                  return;
+                }
                 const details: { path?: string; commandIndex?: number } = {};
                 if (
                   event.path &&
@@ -843,6 +848,8 @@ export class SessionRouter {
               this.#workspace = undefined;
               if (consumedWorkspace) await closeWorkspaceReview(consumedWorkspace);
             } else this.#previousResults.push(projected);
+            if (terminalStatus)
+              this.#emit("terminal", "terminal", terminalStatus, undefined, terminalReason);
           } catch (error) {
             if (this.#execution === execution) {
               this.#controller = undefined;

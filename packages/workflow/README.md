@@ -27,6 +27,8 @@ Git metadata snapshot and does not prove resistance to transient malicious chang
 and a separate host `authorize` call over the exact permission identity. Its
 structured model actions can read and write only approved paths, require an
 expected old-content hash for writes, and never write back to the source project.
+The resolved temporary parent must be outside the original project; otherwise
+snapshot creation is rejected before creating a directory.
 Writes are staged in a private temporary file; the target's previous content and
 current authorization are rechecked immediately before atomic replacement.
 Cancelled or conflicting writes remove the staged file without replacing the target.

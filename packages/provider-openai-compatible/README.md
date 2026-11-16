@@ -34,6 +34,7 @@ const model = createOpenAiCompatibleModel({
 carry `temperature`, `topP`, `maxTokens`, and `seed`. Only set fields are sent,
 mapped to `temperature`, `top_p`, `max_tokens`, and `seed`. Unknown fields,
 tool calls, an empty model, or an out-of-range value fail before any HTTP call.
+Redirects are rejected rather than forwarding the request to an unapproved endpoint.
 
 The response returns `kind: "message"` with `content` and optional metadata
 (`provider`, `model`, `responseId`, `finishReason`, `status`, `usage`). The

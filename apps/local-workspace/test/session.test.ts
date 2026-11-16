@@ -222,7 +222,7 @@ linux("real workspace authorization", () => {
         revision: plan.plan!.revision,
       });
       const command = { executable: "/usr/bin/true", args: [], cwd: "." };
-      const proposal = await call(session, "execution.propose", {
+      const proposalInput = {
         permission: {
           planIdentity: plan.plan!.identity,
           planRevision: plan.plan!.revision,
@@ -236,7 +236,7 @@ linux("real workspace authorization", () => {
           modelRecipient: "offline (local deterministic model)",
           limits: {
             totalTimeMs: 30000,
-            commandTimeMs: 1000,
+            commandTimeMs: 15000,
             modelCalls: 4,
             actions: 4,
             commands: 1,
@@ -250,15 +250,16 @@ linux("real workspace authorization", () => {
             {
               id: "check",
               version: "1",
-              environmentIdentity: "test",
+              environmentIdentity: null,
               ...command,
               readPaths: ["."],
-              timeoutMs: 1000,
+              timeoutMs: 15000,
               maxOutputBytes: 1000,
             },
           ],
         },
-      });
+      };
+      const proposal = await call(session, "execution.propose", proposalInput);
       expect(proposal.ok).toBe(true);
       const proposed = proposal.state.execution.proposal as { identity: string };
       expect((await call(session, "execution.run", {})).ok).toBe(false);
@@ -274,11 +275,42 @@ linux("real workspace authorization", () => {
         "cancelled",
       );
       expect((await call(session, "execution.run", {})).ok).toBe(false);
+      const second = await call(session, "execution.propose", proposalInput);
+      const nextProposal = second.state.execution.proposal as { identity: string };
+      expect(
+        (
+          await call(session, "execution.authorize", {
+            identity: nextProposal.identity,
+            decisionRef: "second-approval",
+          })
+        ).ok,
+      ).toBe(true);
+      type CompletedState = {
+        sequence: number;
+        execution: {
+          status: string;
+          result: { workspaceRoot: string | null; report: { checks: string } };
+        };
+      };
+      let terminalSnapshot: CompletedState | undefined;
+      session.subscribe((event) => {
+        if (event && typeof event === "object" && "stage" in event && event.stage === "terminal")
+          terminalSnapshot = session.snapshot() as CompletedState;
+      });
+      const completed = await call(session, "execution.run", {});
+      const final = completed.state as unknown as CompletedState;
+      expect(final.execution.status).toBe("completed");
+      expect(final.execution.result.report.checks).toBe("complete");
+      expect(terminalSnapshot?.sequence).toBe(final.sequence);
+      expect(terminalSnapshot?.execution.result.report.checks).toBe("complete");
+      expect(terminalSnapshot?.execution.status).toBe("completed");
+      if (final.execution.result.workspaceRoot)
+        await rm(final.execution.result.workspaceRoot, { recursive: true, force: true });
       expect(await readFile(join(root, "note.txt"), "utf8")).toBe("dirty");
       expect(await readFile(join(root, "secret.txt"), "utf8")).toBe("private");
     } finally {
       await call(session, "workspace.discover", { root: "relative", exclusions: [] });
       await rm(root, { recursive: true, force: true });
     }
-  });
+  }, 30000);
 });

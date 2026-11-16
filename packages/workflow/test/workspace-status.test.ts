@@ -1,13 +1,49 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeWorkspaceReview, discoverWorkspace } from "../src/workspace.js";
+import {
+  closeWorkspaceReview,
+  createWorkspaceSnapshot,
+  discoverWorkspace,
+} from "../src/workspace.js";
 
 const linux = process.platform === "linux" ? describe : describe.skip;
 
 linux("workspace Git index flags", () => {
+  test("rejects a temporary directory inside the project before creating a candidate", async () => {
+    const root = await mkdtemp(join(tmpdir(), "workspace-temp-"));
+    const previous = process.env.TMPDIR;
+    try {
+      const git = (...args: string[]) => execFileSync("git", args, { cwd: root, stdio: "ignore" });
+      git("init");
+      git("config", "user.email", "test@example.invalid");
+      git("config", "user.name", "Test");
+      await writeFile(join(root, "tracked.txt"), "original");
+      git("add", "tracked.txt");
+      git("commit", "-m", "initial");
+      const temporary = join(root, "temporary");
+      await mkdir(temporary);
+      const before = await stat(temporary, { bigint: true });
+      const review = await discoverWorkspace(root, []);
+      try {
+        process.env.TMPDIR = temporary;
+        await expect(createWorkspaceSnapshot(review, () => {})).rejects.toThrow(
+          "Private snapshot must be outside the original project",
+        );
+        expect(await readdir(temporary)).toEqual([]);
+        expect((await stat(temporary, { bigint: true })).mtimeNs).toBe(before.mtimeNs);
+      } finally {
+        await closeWorkspaceReview(review);
+      }
+    } finally {
+      if (previous === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = previous;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   for (const flags of [
     ["--assume-unchanged"],
     ["--skip-worktree"],
