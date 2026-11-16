@@ -156,19 +156,50 @@ const PROTOCOL_FIELDS = [
   "diffAvailable",
   "diffRevealed",
   "actions",
+  "planIdentity",
+  "planRevision",
+  "workspaceIdentity",
+  "readPaths",
+  "commandReadPaths",
+  "writePaths",
+  "writablePaths",
+  "commands",
+  "disclosures",
+  "modelRecipient",
+  "limits",
+  "expiresAt",
+  "isolation",
+  "verificationIdentity",
+  "executable",
+  "args",
+  "cwd",
+  "totalTimeMs",
+  "commandTimeMs",
+  "modelCalls",
+  "outputBytes",
 ];
 function conflictsWithProtocol(secret: string): boolean {
   return PROTOCOL_FIELDS.some((key) => key.includes(secret));
 }
-function secretForms(secret: string): string[] {
-  return [secret, JSON.stringify(secret).slice(1, -1)];
+function secretForms(secret: string, limit: number): string[] {
+  const forms = [secret];
+  let previous = secret;
+  while (previous.length <= limit) {
+    const encoded = JSON.stringify(previous).slice(1, -1);
+    if (encoded === previous || encoded.length > limit) break;
+    forms.push(encoded);
+    previous = encoded;
+  }
+  return forms.reverse();
 }
 function maskSecret(value: string, secret: string): string {
-  for (const form of secretForms(secret)) value = value.split(form).join("[redacted]");
+  for (const form of secretForms(secret, value.length))
+    value = value.split(form).join("[redacted]");
   return value;
 }
 function containsSecret(value: unknown, secret: string): boolean {
-  if (typeof value === "string") return secretForms(secret).some((form) => value.includes(form));
+  if (typeof value === "string")
+    return secretForms(secret, value.length).some((form) => value.includes(form));
   if (Array.isArray(value)) return value.some((item) => containsSecret(item, secret));
   if (value && typeof value === "object")
     return Object.values(value).some((item) => containsSecret(item, secret));
@@ -440,22 +471,24 @@ export class SessionRouter {
     const secret = hostModel.apiKey;
     if (secret && conflictsWithProtocol(secret))
       throw new Error("API key conflicts with the session protocol");
-    let decodedRecipient = selected.recipient;
-    try {
-      for (;;) {
-        const decoded = decodeURIComponent(decodedRecipient);
-        if (decoded === decodedRecipient) break;
-        decodedRecipient = decoded;
-      }
-    } catch {
-      throw new Error("Model recipient or configuration cannot be safely displayed");
-    }
     const protectedKeys = secret ? [...this.#secrets, secret] : [...this.#secrets];
-    if (
-      protectedKeys.some(
-        (key) => decodedRecipient.includes(key) || containsSecret(selected.config, key),
-      )
-    )
+    let recipient = selected.recipient;
+    for (;;) {
+      if (protectedKeys.some((key) => recipient.includes(key)))
+        throw new Error("Model recipient or configuration cannot be safely displayed");
+      const decoded = recipient.replace(/(?:%[0-9a-f]{2})+/gi, (part) => {
+        try {
+          return decodeURIComponent(part);
+        } catch {
+          return part.replace(/%([0-9a-f]{2})/gi, (_, hex: string) =>
+            String.fromCharCode(Number.parseInt(hex, 16)),
+          );
+        }
+      });
+      if (decoded === recipient) break;
+      recipient = decoded;
+    }
+    if (protectedKeys.some((key) => containsSecret(selected.config, key)))
       throw new Error("Model recipient or configuration cannot be safely displayed");
     const model: ModelPort = {
       generate: async (request) => {

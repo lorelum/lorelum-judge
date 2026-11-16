@@ -268,6 +268,38 @@ describe("local workspace session router", () => {
     expect(JSON.stringify([created, preview])).not.toContain(secret);
   });
 
+  test("checks each URL decoding stage without rejecting valid percent escapes", async () => {
+    const session = new SessionRouter();
+    const endpoint = "http://localhost/v1";
+    expect(
+      (
+        await call(session, "model.configure", {
+          endpoint,
+          model: "safe",
+          apiKey: "private-key%41",
+        })
+      ).ok,
+    ).toBe(true);
+    expect(
+      (
+        await call(session, "model.configure", {
+          endpoint: `${endpoint}/private-key%41`,
+          model: "safe",
+          apiKey: "next-private-key",
+        })
+      ).ok,
+    ).toBe(false);
+    expect(
+      (
+        await call(session, "model.configure", {
+          endpoint: `${endpoint}/proxy%25route`,
+          model: "safe",
+          apiKey: "",
+        })
+      ).ok,
+    ).toBe(true);
+  });
+
   test("reconfiguration revokes chat and plan authority and redacts prior credentials", async () => {
     const oldKey = "previous-private-credential";
     const newKey = "replacement-private-credential";
@@ -421,6 +453,15 @@ describe("local workspace session router", () => {
     });
     expect(encodedMessage.ok).toBe(false);
     expect(JSON.stringify(encodedMessage)).not.toContain("ab\\\\cd");
+    const nestedMessage = await call(escaped, "chat.preview", {
+      messages: [
+        {
+          role: "user",
+          content: JSON.stringify({ observation: JSON.stringify({ file: "ab\\cd" }) }),
+        },
+      ],
+    });
+    expect(nestedMessage.ok).toBe(false);
     const keyName = new SessionRouter();
     const rejected = await call(keyName, "model.configure", {
       endpoint: "http://localhost/v1",
@@ -430,6 +471,13 @@ describe("local workspace session router", () => {
     expect(rejected.ok).toBe(false);
     expect(rejected.state.model).toBeNull();
     expect(rejected.error?.message).toBe("API key conflicts with the session protocol");
+    const pathKey = await call(keyName, "model.configure", {
+      endpoint: "http://localhost/v1",
+      apiKey: "Paths",
+      model: "safe",
+    });
+    expect(pathKey.ok).toBe(false);
+    expect(pathKey.state.model).toBeNull();
   });
 
   test("chat requires a configured model and a fresh request-bound authorization", async () => {
