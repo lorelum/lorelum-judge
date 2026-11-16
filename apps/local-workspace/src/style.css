@@ -108,6 +108,22 @@ body {
   overflow-wrap: anywhere;
   line-height: 1.6;
 }
+.composer {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 12px;
+}
+.composer textarea {
+  min-height: 100px;
+}
+.composer .check {
+  margin-top: 10px;
+}
+.composer .row {
+  margin-top: 12px;
+}
+.feature-choices {
+  flex-wrap: wrap;
+}
 .text-action {
   border: 0;
   background: none;

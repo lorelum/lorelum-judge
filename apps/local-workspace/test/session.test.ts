@@ -18,7 +18,19 @@ type State = {
   plan: { identity: string; revision: number; status: string; eligible: boolean } | null;
   disclosure: {
     identity: string;
-    request: { instructions: string; messages: { role: string; content: string }[] };
+    request: {
+      instructions: string;
+      messages: { role: string; content: string }[];
+      task: { text: string };
+      sources: {
+        id: string;
+        kind: string;
+        locator: string;
+        version: string;
+        content: string;
+        status: string;
+      }[];
+    };
     authorized: boolean;
   } | null;
   chatDisclosure: {
@@ -734,176 +746,243 @@ describe("local workspace session router", () => {
     }
   });
 
-  test("evaluation gates each request, and suggestions consume its real report", async () => {
-    const requests: unknown[] = [];
-    let evaluationReport: CodeEvaluationReport | null = null;
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      async fetch(request) {
-        const body = (await request.json()) as { messages: { role: string; content: string }[] };
-        requests.push(body);
-        const user = body.messages.find((message) => message.role === "user")?.content ?? "";
-        let response: unknown;
-        if (body.messages[0]?.content.includes("You prepare")) {
-          response = {
-            task: "inspect",
-            focus: [],
-            standards: ["behavior"],
-            requirements: [],
-            excluded: ["boundaries", "security", "concurrency", "performance", "maintenance"].map(
-              (id) => ({
-                id,
-                reason: "This test examines only visible behavior.",
-              }),
-            ),
-            reads: [],
-          };
-        } else if (!evaluationReport) {
-          const marker = "Untrusted review context:\n";
-          const context = JSON.parse(user.slice(user.lastIndexOf(marker) + marker.length)) as {
-            sources: { id: string; role: string; startLine: number }[];
-          };
-          const item = context.sources.find((entry) => entry.role === "target");
-          if (!item) throw new Error("Missing target evidence");
-          const criteria = [...user.matchAll(/^Criterion ([^ ]+) \((quality|contract),/gm)];
-          const criterion = criteria[0]?.[1];
-          response = {
-            schema: "lorelum.judge.review-result/v2",
-            verdicts: criteria.map((entry) => ({
-              schema: "lorelum.judge.verdict/v1",
-              criterionId: entry[1],
-              verdict: "weak",
-              evidenceIds: [item.id],
-              rationale: "The visible function returns its input.",
-            })),
-            summary: [
-              {
-                text: "The function returns all items.",
-                criterionIds: [criterion],
-                problemIds: ["limit"],
+  test.each([false, true])(
+    "evaluation gates requests and supports planning (partial: %s)",
+    async (partial) => {
+      const requests: unknown[] = [];
+      let evaluationReport: CodeEvaluationReport | null = null;
+      const server = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        async fetch(request) {
+          const body = (await request.json()) as { messages: { role: string; content: string }[] };
+          requests.push(body);
+          const user = body.messages.find((message) => message.role === "user")?.content ?? "";
+          let response: unknown;
+          if (body.messages[0]?.content.includes("You prepare")) {
+            response = {
+              task: "inspect",
+              focus: [],
+              standards: ["behavior"],
+              requirements: [],
+              excluded: ["boundaries", "security", "concurrency", "performance", "maintenance"].map(
+                (id) => ({
+                  id,
+                  reason: "This test examines only visible behavior.",
+                }),
+              ),
+              reads: [],
+            };
+          } else if (!evaluationReport) {
+            const marker = "Untrusted review context:\n";
+            const context = JSON.parse(user.slice(user.lastIndexOf(marker) + marker.length)) as {
+              sources: { id: string; role: string; startLine: number }[];
+            };
+            const item = context.sources.find((entry) => entry.role === "target");
+            if (!item) throw new Error("Missing target evidence");
+            const criteria = [...user.matchAll(/^Criterion ([^ ]+) \((quality|contract),/gm)];
+            const criterion = criteria[0]?.[1];
+            response = {
+              schema: "lorelum.judge.review-result/v2",
+              verdicts: criteria.map((entry) => ({
+                schema: "lorelum.judge.verdict/v1",
+                criterionId: entry[1],
+                verdict: "weak",
                 evidenceIds: [item.id],
-              },
-            ],
-            problems: [
-              {
-                id: "limit",
-                criterionId: criterion,
-                title: "Unbounded result",
-                severity: "medium",
-                condition: "Large input",
-                impact: "Large output",
-                rationale: "The array is returned directly.",
-                evidenceIds: [item.id],
-                locations: [
-                  { itemId: item.id, startLine: item.startLine, endLine: item.startLine },
-                ],
-                attribution: "not_applicable",
-              },
-            ],
-            pending: [],
-            followUps: [],
-          };
-        } else {
-          const problem = evaluationReport.result?.problems[0];
-          if (!problem) throw new Error("Missing evaluated problem");
-          response = {
-            schema: "lorelum.judge.code-suggestion-result/v1",
-            suggestions: [
-              {
-                id: "suggestion-1",
-                problemId: problem.id,
-                evidenceIds: problem.evidenceIds,
-                location: problem.locations[0],
-                category: "required",
-                problem: "Unbounded result",
-                priorityRationale: "Large output",
-                direction: "Consider a limit",
-                impact: "Less output",
-                checks: ["Check large input"],
-                uncertainPremises: [],
-                alternatives: [],
-              },
-            ],
-            omissions: [],
-          };
-        }
-        return Response.json({ choices: [{ message: { content: JSON.stringify(response) } }] });
-      },
-    });
-    const session = new SessionRouter({
-      configuredModel: {
-        endpoint: `http://127.0.0.1:${server.port}/v1`,
-        apiKey: "review-test-private-key",
-        config: { model: "review-model" },
-      },
-    });
-    const next = (predicate: (state: State) => boolean): Promise<State> => {
-      const current = session.snapshot() as State;
-      if (predicate(current)) return Promise.resolve(current);
-      const { promise, resolve } = Promise.withResolvers<State>();
-      const unsubscribe = session.subscribe(() => {
-        const state = session.snapshot() as State;
-        if (predicate(state)) {
-          unsubscribe();
-          resolve(state);
-        }
+                rationale: "The visible function returns its input.",
+              })),
+              summary: [
+                {
+                  text: "The function returns all items.",
+                  criterionIds: [criterion],
+                  problemIds: ["limit"],
+                  evidenceIds: [item.id],
+                },
+              ],
+              problems: [
+                {
+                  id: "limit",
+                  criterionId: criterion,
+                  title: "Unbounded result",
+                  severity: "medium",
+                  condition: "Large input",
+                  impact: "Large output",
+                  rationale: "The array is returned directly.",
+                  evidenceIds: [item.id],
+                  locations: [
+                    { itemId: item.id, startLine: item.startLine, endLine: item.startLine },
+                  ],
+                  attribution: "not_applicable",
+                },
+              ],
+              pending: partial
+                ? [
+                    {
+                      id: "pending-1",
+                      criterionId: criterion,
+                      question: "What is the intended limit?",
+                      reason: "The target does not specify one.",
+                      evidenceIds: [item.id],
+                    },
+                  ]
+                : [],
+              followUps: [],
+            };
+          } else {
+            const problem = evaluationReport.result?.problems[0];
+            if (!problem) throw new Error("Missing evaluated problem");
+            response = {
+              schema: "lorelum.judge.code-suggestion-result/v1",
+              suggestions: [
+                {
+                  id: "suggestion-1",
+                  problemId: problem.id,
+                  evidenceIds: problem.evidenceIds,
+                  location: problem.locations[0],
+                  category: "required",
+                  problem: "Unbounded result",
+                  priorityRationale: "Large output",
+                  direction: "Consider a limit",
+                  impact: "Less output",
+                  checks: ["Check large input"],
+                  uncertainPremises: [],
+                  alternatives: [],
+                },
+              ],
+              omissions: [],
+            };
+          }
+          return Response.json({ choices: [{ message: { content: JSON.stringify(response) } }] });
+        },
       });
-      return promise;
-    };
-    try {
-      await call(session, "model.configured", {});
-      expect((await call(session, "suggestions.start", {})).ok).toBe(false);
-      expect(
-        (
-          await call(session, "evaluation.start", {
-            target: { kind: "snippet", text: "function list(items) { return items; }" },
-          })
-        ).ok,
-      ).toBe(true);
-      let state = await next((value) => value.executionDisclosure !== null);
-      const first = state.executionDisclosure!;
-      expect(first.recipient).toContain("127.0.0.1");
-      expect(first.request.config.model).toBe("review-model");
-      expect(JSON.stringify(first.request.messages)).toContain("function list");
-      expect(requests).toHaveLength(0);
-      expect((await call(session, "execution.disclosure.allow", { identity: "wrong" })).ok).toBe(
-        false,
-      );
-      await call(session, "execution.disclosure.allow", { identity: first.identity });
-      state = await next(
-        (value) =>
-          value.executionDisclosure !== null &&
-          value.executionDisclosure.identity !== first.identity,
-      );
-      expect(requests).toHaveLength(1);
-      expect(
-        (await call(session, "execution.disclosure.allow", { identity: first.identity })).ok,
-      ).toBe(false);
-      await call(session, "execution.disclosure.allow", {
-        identity: state.executionDisclosure!.identity,
+      const session = new SessionRouter({
+        configuredModel: {
+          endpoint: `http://127.0.0.1:${server.port}/v1`,
+          apiKey: "review-test-private-key",
+          config: { model: "review-model" },
+        },
       });
-      state = await next((value) => value.evaluation.status !== "running");
-      expect(["completed", "partial"]).toContain(state.evaluation.status);
-      expect(state.evaluation.report?.result?.problems).toHaveLength(1);
-      evaluationReport = state.evaluation.report;
-      expect(state.evaluation.text).toBeTruthy();
-      await call(session, "suggestions.start", {});
-      state = await next((value) => value.executionDisclosure !== null);
-      expect(requests).toHaveLength(2);
-      expect(JSON.stringify(state.executionDisclosure!.request.messages)).toContain("limit");
-      await call(session, "execution.disclosure.allow", {
-        identity: state.executionDisclosure!.identity,
-      });
-      state = await next((value) => value.suggestions.status !== "running");
-      expect(["completed", "partial"]).toContain(state.suggestions.status);
-      expect(state.suggestions.report?.evaluationIdentity).toBeTruthy();
-      expect(requests).toHaveLength(3);
-      expect(JSON.stringify(state)).not.toContain("review-test-private-key");
-    } finally {
-      server.stop(true);
-    }
-  });
+      const next = (predicate: (state: State) => boolean): Promise<State> => {
+        const current = session.snapshot() as State;
+        if (predicate(current)) return Promise.resolve(current);
+        const { promise, resolve } = Promise.withResolvers<State>();
+        const unsubscribe = session.subscribe(() => {
+          const state = session.snapshot() as State;
+          if (predicate(state)) {
+            unsubscribe();
+            resolve(state);
+          }
+        });
+        return promise;
+      };
+      try {
+        await call(session, "model.configured", {});
+        const noEvaluation = await call(session, "planning.fromEvaluation", {
+          id: "plan",
+          text: "Fix the reported issues",
+        });
+        expect(noEvaluation.ok).toBe(false);
+        expect(noEvaluation.error?.message).toBe("A usable evaluation is required for planning");
+        expect((await call(session, "suggestions.start", {})).ok).toBe(false);
+        expect(
+          (
+            await call(session, "evaluation.start", {
+              target: { kind: "snippet", text: "function list(items) { return items; }" },
+            })
+          ).ok,
+        ).toBe(true);
+        let state = await next((value) => value.executionDisclosure !== null);
+        const first = state.executionDisclosure!;
+        expect(first.recipient).toContain("127.0.0.1");
+        expect(first.request.config.model).toBe("review-model");
+        expect(JSON.stringify(first.request.messages)).toContain("function list");
+        expect(requests).toHaveLength(0);
+        expect((await call(session, "execution.disclosure.allow", { identity: "wrong" })).ok).toBe(
+          false,
+        );
+        await call(session, "execution.disclosure.allow", { identity: first.identity });
+        state = await next(
+          (value) =>
+            value.executionDisclosure !== null &&
+            value.executionDisclosure.identity !== first.identity,
+        );
+        expect(requests).toHaveLength(1);
+        expect(
+          (await call(session, "execution.disclosure.allow", { identity: first.identity })).ok,
+        ).toBe(false);
+        await call(session, "execution.disclosure.allow", {
+          identity: state.executionDisclosure!.identity,
+        });
+        state = await next((value) => value.evaluation.status !== "running");
+        expect(["completed", "partial"]).toContain(state.evaluation.status);
+        expect(state.evaluation.report?.result?.problems).toHaveLength(1);
+        evaluationReport = state.evaluation.report;
+        if (partial) expect(state.evaluation.status).toBe("partial");
+        const missingWorkspace = await call(session, "planning.fromEvaluation", {
+          id: "missing-workspace",
+          text: "Fix the issues",
+          paths: ["not-discovered.ts"],
+        });
+        expect(missingWorkspace.ok).toBe(false);
+        expect(missingWorkspace.error?.message).toBe("Invalid selected project paths");
+        const created = await call(session, "planning.fromEvaluation", {
+          id: "review-plan",
+          text: "Fix the reported issues",
+        });
+        expect(created.ok).toBe(true);
+        expect(created.state.disclosure).toBeNull();
+        expect(requests).toHaveLength(2);
+        const preview = await call(session, "planning.preview", {});
+        expect(preview.ok).toBe(true);
+        expect(preview.state.disclosure?.authorized).toBe(false);
+        expect(preview.state.disclosure?.request.task.text).toBe("Fix the reported issues");
+        const reference = preview.state.disclosure!.request.sources.find(
+          (source) => source.kind === "reference",
+        )!;
+        expect(reference.kind).toBe("reference");
+        expect(reference.locator).toBe(`evaluation:${evaluationReport!.id}`);
+        expect(reference.version).toBe(evaluationReport!.sourceIdentity);
+        expect(JSON.parse(reference.content)).toEqual({
+          status: evaluationReport!.status,
+          request: evaluationReport!.request,
+          source: evaluationReport!.source,
+          result: evaluationReport!.result,
+          issues: evaluationReport!.issues,
+          limitations: evaluationReport!.limitations,
+        });
+        expect(requests).toHaveLength(2);
+        expect(state.evaluation.text).toBeTruthy();
+        await call(session, "suggestions.start", {});
+        state = await next((value) => value.executionDisclosure !== null);
+        expect(requests).toHaveLength(2);
+        expect(JSON.stringify(state.executionDisclosure!.request.messages)).toContain("limit");
+        await call(session, "execution.disclosure.allow", {
+          identity: state.executionDisclosure!.identity,
+        });
+        state = await next((value) => value.suggestions.status !== "running");
+        expect(["completed", "partial"]).toContain(state.suggestions.status);
+        expect(state.suggestions.report?.evaluationIdentity).toBeTruthy();
+        expect(
+          (
+            await call(session, "planning.fromEvaluation", {
+              id: "with-advice",
+              text: "按建议修复",
+            })
+          ).ok,
+        ).toBe(true);
+        const advicePreview = await call(session, "planning.preview", {});
+        const adviceSource = advicePreview.state.disclosure!.request.sources.find(
+          (source) => source.id === "suggestions",
+        );
+        expect(adviceSource?.kind).toBe("reference");
+        expect(JSON.parse(adviceSource!.content).result).toEqual(state.suggestions.report?.result);
+        expect(requests).toHaveLength(3);
+        expect(JSON.stringify(state)).not.toContain("review-test-private-key");
+      } finally {
+        server.stop(true);
+      }
+    },
+  );
 
   test("review cancellation revokes the pending request and stale approvals", async () => {
     const session = new SessionRouter({
@@ -963,6 +1042,12 @@ describe("local workspace session router", () => {
       await finished.promise;
       const result = session.snapshot() as State;
       expect(result.evaluation.report?.status).toBe("failed");
+      const planning = await call(session, "planning.fromEvaluation", {
+        id: "plan",
+        text: "Fix the issues",
+      });
+      expect(planning.ok).toBe(false);
+      expect(planning.error?.message).toBe("A usable evaluation is required for planning");
       expect(requests).toBe(0);
       unsubscribe();
     } finally {

@@ -169,11 +169,17 @@ function App() {
   const [excluded, setExcluded] = useState("");
   const [task, setTask] = useState("");
   const [feature, setFeature] = useState<"evaluation" | "suggestions" | "planning">("evaluation");
-  const [evaluationKind, setEvaluationKind] = useState<"snippet" | "pr">("snippet");
-  const [evaluationTarget, setEvaluationTarget] = useState("");
-  const [evaluationRequest, setEvaluationRequest] = useState("");
+  const [conversationInput, setConversationInput] = useState("");
+  const [explicitSnippet, setExplicitSnippet] = useState(false);
+  const [conversation, setConversation] = useState<(ChatMessage & { label?: string })[]>([]);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const [trackedAnalysis, setTrackedAnalysis] = useState<"evaluation" | "suggestions" | null>(null);
+  const [trackingPlan, setTrackingPlan] = useState(false);
+  const seenPlan = useRef("");
+  const seenDisclosure = useRef("");
   const [analysisBusy, setAnalysisBusy] = useState<"evaluation" | "suggestions" | null>(null);
   const [chatInput, setChatInput] = useState("");
+  const [chatContext, setChatContext] = useState<ChatMessage[]>([]);
   const [endpoint, setEndpoint] = useState("");
   const [modelName, setModelName] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -215,6 +221,12 @@ function App() {
   const tokenRef = useRef("");
   const advancedRef = useRef<HTMLDetailsElement>(null);
   const submittedChat = useRef<{ messages: string; input: string } | null>(null);
+  const conversationChat = useRef(false);
+
+  useEffect(() => {
+    const container = messagesRef.current;
+    if (container && conversation.length) container.scrollTop = container.scrollHeight;
+  }, [conversation.length]);
 
   useEffect(() => {
     const submitted = submittedChat.current;
@@ -226,6 +238,13 @@ function App() {
       JSON.stringify(chat.messages.slice(0, -1)) !== submitted.messages
     )
       return;
+    if (conversationChat.current) {
+      setConversation((messages) => [
+        ...messages,
+        { role: "assistant", label: "真实模型回复", content: last.content },
+      ]);
+      conversationChat.current = false;
+    }
     setChatInput((current) => (current === submitted.input ? "" : current));
     submittedChat.current = null;
   }, [state?.chat]);
@@ -438,54 +457,69 @@ function App() {
     setTask(text);
     setPlanDirty(false);
     const id = crypto.randomUUID();
-    const created = await action("planning.create", {
-      id,
-      inputs: {
-        task: {
-          schema: "lorelum.judge.task-contract/v1",
-          id: `task-${id}`,
-          taskClass: "code",
-          text,
-        },
-        sources: [
-          {
-            id: "request",
-            kind: "user",
-            locator: "local-user",
-            version: "1",
-            content: text,
-            status: "available",
+    const hasEvaluation =
+      !!state.evaluation.report && ["completed", "partial"].includes(state.evaluation.status);
+    const created = hasEvaluation
+      ? await action("planning.fromEvaluation", { id, text, paths: selectedPaths })
+      : await action("planning.create", {
+          id,
+          inputs: {
+            task: {
+              schema: "lorelum.judge.task-contract/v1",
+              id: `task-${id}`,
+              taskClass: "code",
+              text,
+            },
+            sources: [
+              {
+                id: "request",
+                kind: "user",
+                locator: "local-user",
+                version: "1",
+                content: text,
+                status: "available",
+              },
+              ...(materials.trim()
+                ? [
+                    {
+                      id: "material",
+                      kind: "reference",
+                      locator: "local-user-material",
+                      version: "1",
+                      content: materials,
+                      status: "available",
+                    },
+                  ]
+                : []),
+              ...(selectedPaths.length
+                ? [
+                    {
+                      id: "project-paths",
+                      kind: "reference",
+                      locator: "user-selected-project-paths",
+                      version: "1",
+                      content: `用户选择的项目相对路径（仅路径，不含文件内容）：\n${selectedPaths.join("\n")}`,
+                      status: "available",
+                    },
+                  ]
+                : []),
+            ],
           },
-          ...(materials.trim()
-            ? [
-                {
-                  id: "material",
-                  kind: "reference",
-                  locator: "local-user-material",
-                  version: "1",
-                  content: materials,
-                  status: "available",
-                },
-              ]
-            : []),
-          ...(selectedPaths.length
-            ? [
-                {
-                  id: "project-paths",
-                  kind: "reference",
-                  locator: "user-selected-project-paths",
-                  version: "1",
-                  content: `用户选择的项目相对路径（仅路径，不含文件内容）：\n${selectedPaths.join("\n")}`,
-                  status: "available",
-                },
-              ]
-            : []),
-        ],
-      },
-    });
+        });
     if (created) {
+      setTrackingPlan(true);
       setInstructions("");
-      await action("planning.preview", { instructions: "" });
+      const preview = await action("planning.preview", { instructions: "" });
+      if (!preview)
+        setConversation((messages) => [
+          ...messages,
+          { role: "assistant", content: "无法预览规划请求，请查看错误并重试。" },
+        ]);
+    } else {
+      setConversation((messages) => [
+        ...messages,
+        { role: "assistant", content: "无法创建修改计划，请查看错误并重试。" },
+      ]);
     }
   }
 
@@ -565,7 +599,7 @@ function App() {
   const ready = Object.values(approvals).every(Boolean);
   const chatMessages = state?.chat?.messages ?? [];
   const chatRunning = chatGenerating || state?.chat?.status === "running";
-  const pendingMessages: ChatMessage[] = [...chatMessages, { role: "user", content: chatInput }];
+  const pendingMessages: ChatMessage[] = [...chatContext, { role: "user", content: chatInput }];
   const chatDisclosure = state?.chatDisclosure;
   const previewMatches =
     !!chatDisclosure &&
@@ -575,22 +609,125 @@ function App() {
     state?.evaluation?.status === "running" ||
     state?.suggestions?.status === "running";
 
-  async function startAnalysis(kind: "evaluation" | "suggestions") {
-    setAnalysisBusy(kind);
-    try {
-      await action(
-        `${kind}.start`,
-        kind === "evaluation"
-          ? {
-              target:
-                evaluationKind === "snippet"
-                  ? { kind: "snippet", text: evaluationTarget }
-                  : evaluationTarget.trim(),
-              ...(evaluationRequest.trim() ? { request: evaluationRequest } : {}),
-            }
-          : {},
-        true,
+  useEffect(() => {
+    if (!trackedAnalysis || !state) return;
+    const result = state[trackedAnalysis];
+    if (!["completed", "partial", "failed", "cancelled"].includes(result.status)) return;
+    const label = trackedAnalysis === "evaluation" ? "评价" : "修改建议";
+    setConversation((messages) => [
+      ...messages,
+      {
+        role: "assistant",
+        label: "真实结果",
+        content: `${label} · ${result.status}\n${result.text ?? ""}${result.issues !== null ? `\n问题与限制：\n${pretty(result.issues)}` : ""}`,
+      },
+    ]);
+    setTrackedAnalysis(null);
+  }, [state, trackedAnalysis]);
+
+  useEffect(() => {
+    if (!trackingPlan || !state?.plan) return;
+    const plan = state.plan;
+    const key = `${plan.identity}:${plan.revision}`;
+    if (seenPlan.current === key) return;
+    seenPlan.current = key;
+    setConversation((messages) => [
+      ...messages,
+      {
+        role: "assistant",
+        label: "真实计划",
+        content: `修改计划 · 版本 ${plan.revision}\n目标：${plan.plan.goal}\n步骤：\n${plan.plan.steps.map((item) => `- ${item.description}`).join("\n")}\n检查：\n${plan.plan.checks.map((item) => `- ${item.description}`).join("\n")}\n请在下方审核完整计划并确认或拒绝。`,
+      },
+    ]);
+  }, [state?.plan, trackingPlan]);
+
+  useEffect(() => {
+    const pending = state?.executionDisclosure ?? state?.disclosure;
+    if (!pending || seenDisclosure.current === pending.identity) return;
+    seenDisclosure.current = pending.identity;
+    setConversation((messages) => [
+      ...messages,
+      {
+        role: "assistant",
+        content: `有一项发送至 ${pending.recipient} 的真实模型请求等待审核。请在下方查看完整披露并单独决定是否同意。`,
+      },
+    ]);
+  }, [state?.executionDisclosure, state?.disclosure]);
+
+  async function sendConversation() {
+    const text = conversationInput.trim();
+    if (!text) return;
+    setConversation((messages) => [...messages, { role: "user", content: text }]);
+    setConversationInput("");
+    const respond = (content: string) =>
+      setConversation((messages) => [...messages, { role: "assistant", content }]);
+    if (state?.model?.mode !== "configured") {
+      respond("请先配置真实模型；配置本身不会发送消息。");
+      return;
+    }
+    if (feature === "planning") {
+      await startPlanning(text);
+      return;
+    }
+    let payload: unknown = {};
+    if (feature === "evaluation") {
+      const pr = text.match(
+        /(https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9]\d*)\/?(?:[?#/][^\s]*)?/i,
       );
+      const fence = text.match(/```[^\n]*\n([\s\S]*?)```/);
+      if (pr) {
+        const url = pr[1];
+        const request = text.replace(pr[0], "").trim();
+        payload = { target: url, ...(request ? { request } : {}) };
+      } else if (fence || explicitSnippet) {
+        const code = fence ? (fence[1] ?? "") : text;
+        const request = fence ? text.replace(fence[0], "").trim() : "";
+        if (!code.trim()) {
+          respond("代码材料为空，请提供代码或 GitHub PR 链接。");
+          return;
+        }
+        payload = { target: { kind: "snippet", text: code }, ...(request ? { request } : {}) };
+      } else {
+        const context: ChatMessage[] = conversation
+          .filter(
+            (message) =>
+              message.role === "user" ||
+              message.label === "真实结果" ||
+              message.label === "真实计划" ||
+              message.label === "真实模型回复",
+          )
+          .map(({ role, content }) => ({ role, content }));
+        respond(
+          "普通对话不会自动读取项目；当前评价、建议和普通对话可能作为上下文，发送前请审核完整请求。",
+        );
+        conversationChat.current = true;
+        setChatContext(context);
+        setChatInput(text);
+        setChatBusy(true);
+        const preview = await action("chat.preview", {
+          messages: [...context, { role: "user", content: text }],
+        });
+        if (!preview) {
+          conversationChat.current = false;
+          respond("无法预览对话请求，请查看错误后重试。");
+        }
+        setChatBusy(false);
+        return;
+      }
+    } else {
+      if (!state.evaluation.report || !["completed", "partial"].includes(state.evaluation.status)) {
+        respond("当前没有可用的真实评价报告，请先完成评价。");
+        return;
+      }
+      respond(
+        "将基于当前评价生成建议。此接口不接收本条消息中的自定义指导，因此这些文字不会发送给模型。",
+      );
+    }
+    setAnalysisBusy(feature);
+    try {
+      const started = await action(`${feature}.start`, payload, true);
+      if (started) setTrackedAnalysis(feature);
+      else respond("操作未能开始，请查看错误后重试。");
     } finally {
       setAnalysisBusy(null);
     }
@@ -619,6 +756,14 @@ function App() {
       setChatGenerating(true);
       const result = await action("chat.generate", { identity }, true);
       if (result) setChatInput("");
+      else if (conversationChat.current) {
+        conversationChat.current = false;
+        submittedChat.current = null;
+        setConversation((messages) => [
+          ...messages,
+          { role: "assistant", content: "真实模型对话未完成，请查看错误后重试。" },
+        ]);
+      }
     } finally {
       setChatGenerating(false);
       setChatBusy(false);
@@ -666,181 +811,123 @@ function App() {
             {state?.model?.mode !== "configured" && (
               <p className="notice">请先填写并保存真实模型设置。</p>
             )}
-            {feature === "evaluation" && (
-              <section>
-                <h3>代码 / PR 评价</h3>
-                <div className="row">
-                  <Button
-                    aria-pressed={evaluationKind === "snippet"}
-                    variant={evaluationKind === "snippet" ? "solid" : "flat"}
-                    disabled={analysisRunning}
-                    onClick={() => setEvaluationKind("snippet")}
-                  >
-                    粘贴代码
-                  </Button>
-                  <Button
-                    aria-pressed={evaluationKind === "pr"}
-                    variant={evaluationKind === "pr" ? "solid" : "flat"}
-                    disabled={analysisRunning}
-                    onClick={() => setEvaluationKind("pr")}
-                  >
-                    PR URL
-                  </Button>
-                </div>
-                <label className="field">
-                  {evaluationKind === "snippet" ? "待评价代码" : "PR URL"}
-                  <Textarea
-                    value={evaluationTarget}
-                    disabled={analysisRunning}
-                    onChange={(event) => setEvaluationTarget(event.target.value)}
-                  />
-                </label>
-                {evaluationKind === "pr" && (
-                  <p className="muted">
-                    将读取所给 PR
-                    的公开信息及其基础仓库和来源仓库的相关内容；发送模型前仍需逐次同意。私有仓库认证暂未接入。
-                  </p>
-                )}
-                <label className="field">
-                  评价要求（可选）
-                  <Textarea
-                    value={evaluationRequest}
-                    disabled={analysisRunning}
-                    onChange={(event) => setEvaluationRequest(event.target.value)}
-                  />
-                </label>
-                <div className="row">
-                  <Button
-                    disabled={
-                      !token ||
-                      busy ||
-                      analysisRunning ||
-                      planningBusy ||
-                      !evaluationTarget.trim() ||
-                      state?.model?.mode !== "configured"
-                    }
-                    onClick={() => void startAnalysis("evaluation")}
-                  >
-                    开始评价
-                  </Button>
-                  {(analysisBusy === "evaluation" || state?.evaluation?.status === "running") && (
-                    <Button
-                      variant="flat"
-                      color="danger"
-                      onClick={() => void action("evaluation.cancel", {})}
-                    >
-                      取消评价
-                    </Button>
-                  )}
-                </div>
-              </section>
-            )}
-            {feature === "suggestions" && (
-              <section>
-                <h3>基于当前评价生成修改建议</h3>
-                <p className="muted">使用当前评价结果，不会修改代码。</p>
-                <div className="row">
-                  <Button
-                    disabled={
-                      !token ||
-                      busy ||
-                      analysisRunning ||
-                      planningBusy ||
-                      state?.model?.mode !== "configured" ||
-                      !state?.evaluation?.report ||
-                      !["completed", "partial"].includes(state.evaluation.status)
-                    }
-                    onClick={() => void startAnalysis("suggestions")}
-                  >
-                    生成修改建议
-                  </Button>
-                  {(analysisBusy === "suggestions" || state?.suggestions?.status === "running") && (
-                    <Button
-                      variant="flat"
-                      color="danger"
-                      onClick={() => void action("suggestions.cancel", {})}
-                    >
-                      取消生成
-                    </Button>
-                  )}
-                </div>
-              </section>
-            )}
-            {feature === "planning" && (
-              <section>
-                <h3>修改计划与执行</h3>
-                <p className="muted">
-                  粘贴代码并填写修改意见即可规划；仅实际执行需要 Git 项目和独立权限。
+            <div className="messages" aria-live="polite" ref={messagesRef}>
+              {conversation.length === 0 && (
+                <p className="empty-chat">
+                  在下方发送消息。切换功能不会清除本页对话；刷新后不恢复消息历史。
                 </p>
-                <label className="field">
-                  代码
-                  <Textarea
-                    value={materials}
-                    disabled={busy || planningBusy}
-                    onChange={(event) => {
-                      setMaterials(event.target.value);
-                      if (!planDirty && (state?.plan || state?.disclosure)) {
-                        setPlanDirty(true);
-                        void action("planning.revokeDisclosure", {});
-                      }
-                    }}
-                  />
-                </label>
-                <label className="field">
-                  修改意见
-                  <Textarea
-                    disabled={busy || planningBusy}
-                    value={task}
-                    onChange={(event) => {
-                      setTask(event.target.value);
-                      if (!planDirty && (state?.plan || state?.disclosure)) {
-                        setPlanDirty(true);
-                        void action("planning.revokeDisclosure", {});
-                      }
-                    }}
-                  />
-                </label>
+              )}
+              {conversation.map((message, index) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: Messages are append-only.
+                <div className={`message ${message.role}`} key={index}>
+                  <div className="message-label">
+                    {message.role === "user" ? "你" : (message.label ?? "界面提示")}
+                  </div>
+                  <div className="message-content">{message.content}</div>
+                </div>
+              ))}
+            </div>
+            <div className="composer">
+              <p className="muted">
+                {feature === "evaluation"
+                  ? "发送含 GitHub PR 链接的自然语言，或用代码块提供代码。PR 会读取公开信息及相关仓库内容；私有仓库认证暂未接入。"
+                  : feature === "suggestions"
+                    ? "发送消息以根据当前真实评价生成建议；此接口不接收自定义指导，不会修改代码。"
+                    : "描述修改需求；有当前评价时以评价作为参考。无需代码或项目即可规划，执行才需要项目和独立授权。"}
+              </p>
+              <label className="field">
+                消息
+                <Textarea
+                  value={conversationInput}
+                  onChange={(event) => setConversationInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === "Enter" &&
+                      !event.shiftKey &&
+                      !event.nativeEvent.isComposing
+                    ) {
+                      event.preventDefault();
+                      if (
+                        token &&
+                        !busy &&
+                        !chatBusy &&
+                        !chatRunning &&
+                        !chatDisclosure &&
+                        !analysisRunning &&
+                        !planningBusy &&
+                        conversationInput.trim()
+                      )
+                        void sendConversation();
+                    }
+                  }}
+                  placeholder={
+                    feature === "evaluation"
+                      ? "请审核 https://github.com/owner/repo/pull/123，重点关注安全性"
+                      : feature === "suggestions"
+                        ? "请根据当前评价生成修改建议"
+                        : "请修复评价中发现的问题"
+                  }
+                />
+              </label>
+              {feature === "evaluation" && (
+                <details>
+                  <summary>代码输入选项</summary>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={explicitSnippet}
+                      onChange={(event) => setExplicitSnippet(event.target.checked)}
+                    />
+                    整条消息是代码材料
+                  </label>
+                </details>
+              )}
+              <div className="row">
                 <Button
                   disabled={
                     !token ||
                     busy ||
-                    planningBusy ||
+                    chatBusy ||
+                    chatRunning ||
+                    !!chatDisclosure ||
                     analysisRunning ||
-                    !materials.trim() ||
-                    !task.trim() ||
-                    state?.model?.mode !== "configured"
+                    planningBusy ||
+                    !conversationInput.trim()
                   }
-                  onClick={() => void startPlanning(task)}
+                  onClick={() => void sendConversation()}
                 >
-                  预览规划请求
+                  发送
                 </Button>
-                {planDirty && (
-                  <p className="notice">代码、意见或所选路径已变化，请重新预览并确认计划。</p>
+                <span className="muted">Enter 发送 · Shift+Enter 换行</span>
+                {analysisRunning && (
+                  <Button
+                    variant="flat"
+                    color="danger"
+                    onClick={() =>
+                      void action(
+                        `${analysisBusy ?? (state?.evaluation.status === "running" ? "evaluation" : "suggestions")}.cancel`,
+                        {},
+                      )
+                    }
+                  >
+                    取消生成
+                  </Button>
                 )}
-              </section>
-            )}
+              </div>
+            </div>
             {(["evaluation", "suggestions"] as const).map((kind) => {
               const result = state?.[kind];
-              if (feature !== kind || !result || result.status === "idle") return null;
+              if (!result || result.status === "idle") return null;
               return (
-                <section className="result-panel" key={kind} aria-live="polite">
-                  <h3>
-                    {kind === "evaluation" ? "评价结果" : "修改建议"} · {result.status}
-                  </h3>
+                <details className="result-panel" key={kind}>
+                  <summary>
+                    宿主当前{kind === "evaluation" ? "评价" : "建议"}状态 · {result.status}
+                    （不一定对应最近发送的消息）
+                  </summary>
                   {result.text && <p className="result-text">{result.text}</p>}
-                  {result.report !== null && (
-                    <details>
-                      <summary>查看结构化报告</summary>
-                      <DisclosureView value={result.report} />
-                    </details>
-                  )}
-                  {result.issues !== null && (
-                    <>
-                      <h4>问题与限制</h4>
-                      <DisclosureView value={result.issues} />
-                    </>
-                  )}
-                </section>
+                  {result.report !== null && <DisclosureView value={result.report} />}
+                  {result.issues !== null && <DisclosureView value={result.issues} />}
+                </details>
               );
             })}
             {chatDisclosure && previewMatches && (
@@ -859,13 +946,35 @@ function App() {
                   <Button onClick={() => void consentAndSendChat()} disabled={busy || chatBusy}>
                     同意并发送
                   </Button>
+                  <Button
+                    variant="flat"
+                    disabled={busy || chatBusy}
+                    onClick={() => {
+                      conversationChat.current = false;
+                      void action("chat.cancel", {});
+                    }}
+                  >
+                    取消本次请求
+                  </Button>
                 </div>
               </div>
             )}
             {chatDisclosure && !previewMatches && (
-              <p className="notice">消息已变化，请重新预览并授权后发送。</p>
+              <div className="notice">
+                消息已变化或页面已刷新，请取消旧请求并重新预览。
+                <Button
+                  variant="flat"
+                  disabled={busy || chatBusy}
+                  onClick={() => {
+                    conversationChat.current = false;
+                    void action("chat.cancel", {});
+                  }}
+                >
+                  取消旧请求
+                </Button>
+              </div>
             )}
-            {feature === "planning" && (state?.disclosure || state?.plan || planningBusy) && (
+            {(state?.disclosure || (feature === "planning" && state?.plan) || planningBusy) && (
               <Card className="section workflow-card">
                 <h2>03 · 计划和披露</h2>
                 <p className="muted">
@@ -1447,6 +1556,8 @@ function App() {
                   !token || busy || chatBusy || chatRunning || state?.model?.mode !== "configured"
                 }
                 onClick={() => {
+                  conversationChat.current = false;
+                  setChatContext(chatMessages);
                   const content = "连接检查：请回复“连接成功”。";
                   setChatInput(content);
                   setChatBusy(true);
@@ -1460,7 +1571,7 @@ function App() {
               <p className="muted">
                 检查会发送“连接检查：请回复‘连接成功’。”及现有聊天记录；须先查看完整披露并同意。
               </p>
-              {chatRunning && (
+              {chatRunning && chatInput === "连接检查：请回复“连接成功”。" && (
                 <Button
                   variant="flat"
                   color="danger"
@@ -1469,15 +1580,16 @@ function App() {
                   取消连接检查
                 </Button>
               )}
-              {state?.chat?.status === "failed" && (
+              {state?.chat?.status === "failed" && chatInput === "连接检查：请回复“连接成功”。" && (
                 <p className="notice error">连接检查失败，请检查配置后重新预览。</p>
               )}
-              {state?.chat?.status === "completed" && chatMessages.length > 0 && (
-                <div className="result-panel">
-                  <h3>连接检查结果</h3>
-                  <p className="result-text">{chatMessages[chatMessages.length - 1]?.content}</p>
-                </div>
-              )}
+              {state?.chat?.status === "completed" &&
+                chatMessages.at(-2)?.content === "连接检查：请回复“连接成功”。" && (
+                  <div className="result-panel">
+                    <h3>连接检查结果</h3>
+                    <p className="result-text">{chatMessages[chatMessages.length - 1]?.content}</p>
+                  </div>
+                )}
             </Card>
             {feature === "planning" && (
               <Card className="section">
@@ -1513,7 +1625,7 @@ function App() {
                   <>
                     <p className="muted">
                       已选择：{state.workspace.root}
-                      。勾选允许用于规划的路径；只发送名称，不发送文件内容。
+                      。无当前评价时，勾选的路径名可作为规划参考，不发送文件内容；基于评价规划时请在消息中说明所需路径。
                     </p>
                     <div className="path-list">
                       {state.workspace.candidates

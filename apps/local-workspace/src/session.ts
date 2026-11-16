@@ -3,8 +3,9 @@ import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
 import { release } from "node:os";
 import { evaluateCode, generateCodeSuggestions, type ProgramChecker } from "@lorelum/judge";
-import type { CodeEvaluationReport } from "@lorelum/judge-protocol";
+import type { CodeEvaluationReport, CodeSuggestionReport } from "@lorelum/judge-protocol";
 import {
+  codeEvaluationReportIdentity,
   type Identity,
   identityOf,
   validateWorkflowSessionEvent,
@@ -1124,6 +1125,123 @@ export class SessionRouter {
           this.#emit("model", "result", "cancelled");
           break;
         }
+        case "planning.fromEvaluation": {
+          const id = text(data.id, "id");
+          const instruction = text(data.text, "text");
+          const report = this.#evaluation.report as CodeEvaluationReport | null;
+          if (
+            !report ||
+            !["completed", "partial"].includes(this.#evaluation.status) ||
+            !report.result ||
+            !report.source.items.some((item) => item.role === "target")
+          )
+            throw new Error("A usable evaluation is required for planning");
+          const evaluationIdentity = codeEvaluationReportIdentity(report);
+          const advice = this.#suggestions.report as CodeSuggestionReport | null;
+          const linkedAdvice =
+            evaluationIdentity.ok &&
+            advice &&
+            ["completed", "partial"].includes(this.#suggestions.status) &&
+            advice.evaluationIdentity === evaluationIdentity.identity
+              ? advice
+              : null;
+          if (
+            data.paths !== undefined &&
+            (!Array.isArray(data.paths) || data.paths.some((path) => typeof path !== "string"))
+          )
+            throw new Error("Invalid selected project paths");
+          const paths = (data.paths ?? []) as string[];
+          const workspace = this.#workspace;
+          if (
+            paths.length &&
+            (!workspace ||
+              paths.some(
+                (path) =>
+                  !workspace.candidates.some(
+                    (item) =>
+                      item.path === path && item.status === "present" && !item.exclusionReason,
+                  ),
+              ))
+          )
+            throw new Error("Invalid selected project paths");
+          const plan = new PlanningSession(id, {
+            task: {
+              schema: "lorelum.judge.task-contract/v1",
+              id,
+              taskClass: "code",
+              text: instruction,
+            },
+            sources: [
+              {
+                id: "request",
+                kind: "user",
+                locator: "user",
+                version: "1",
+                content: instruction,
+                status: "available",
+              },
+              {
+                id: "evaluation",
+                kind: "reference",
+                locator: `evaluation:${report.id}`,
+                version: report.sourceIdentity,
+                content: JSON.stringify({
+                  status: report.status,
+                  request: report.request,
+                  source: report.source,
+                  result: report.result,
+                  issues: report.issues,
+                  limitations: report.limitations,
+                }),
+                status:
+                  report.source.omitted.length > 0 ||
+                  report.source.items.some((item) => !item.complete)
+                    ? "truncated"
+                    : "available",
+              },
+              ...(linkedAdvice
+                ? [
+                    {
+                      id: "suggestions",
+                      kind: "reference" as const,
+                      locator: "evaluation-suggestions",
+                      version: linkedAdvice.evaluationIdentity,
+                      content: JSON.stringify({
+                        status: linkedAdvice.status,
+                        result: linkedAdvice.result,
+                        gaps: linkedAdvice.gaps,
+                        limitations: linkedAdvice.limitations,
+                      }),
+                      status: "available" as const,
+                    },
+                  ]
+                : []),
+              ...(workspace && paths.length
+                ? [
+                    {
+                      id: "project-paths",
+                      kind: "reference" as const,
+                      locator: "selected-workspace",
+                      version: workspace.identity,
+                      content: JSON.stringify({
+                        paths: workspace.candidates
+                          .filter((item) => paths.includes(item.path))
+                          .map((item) => ({
+                            path: item.path,
+                            contentIdentity: item.contentIdentity,
+                          })),
+                      }),
+                      status: "available" as const,
+                    },
+                  ]
+                : []),
+            ],
+          });
+          this.#invalidate();
+          this.#plan = plan;
+          this.#emit("planning", "result", "created");
+          break;
+        }
         case "planning.create": {
           const id = text(data.id, "id");
           const plan = new PlanningSession(id, data.inputs as PlanningInputs);
@@ -1623,6 +1741,8 @@ export class SessionRouter {
         "Configured model is required for review",
         "Another background operation is running",
         "A completed evaluation is required",
+        "A usable evaluation is required for planning",
+        "Invalid selected project paths",
         "No matching review to cancel",
         "Configured model request failed",
         "API key conflicts with the session protocol",
