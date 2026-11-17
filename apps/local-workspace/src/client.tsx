@@ -169,7 +169,6 @@ function App() {
   const [stream, setStream] = useState("未连接");
   const [root, setRoot] = useState("");
   const [excluded, setExcluded] = useState("");
-  const [task, setTask] = useState("");
   const [feature, setFeature] = useState<"evaluation" | "suggestions" | "planning">("evaluation");
   const [conversationInput, setConversationInput] = useState("");
   const [explicitSnippet, setExplicitSnippet] = useState(false);
@@ -193,9 +192,6 @@ function App() {
   const [planDirty, setPlanDirty] = useState(false);
   const [materials, setMaterials] = useState("");
   const [instructions, setInstructions] = useState("");
-  const [target, setTarget] = useState("");
-  const [replacement, setReplacement] = useState("");
-  const [checkDescription, setCheckDescription] = useState("独立检查修改后的文件");
   const [readPaths, setReadPaths] = useState("");
   const [writePaths, setWritePaths] = useState("");
   const [writablePaths, setWritablePaths] = useState("");
@@ -222,7 +218,6 @@ function App() {
   });
   const [proposalInputs, setProposalInputs] = useState<string | null>(null);
   const tokenRef = useRef("");
-  const advancedRef = useRef<HTMLDetailsElement>(null);
   const submittedChat = useRef<{ messages: string; input: string } | null>(null);
   const conversationChat = useRef(false);
 
@@ -399,56 +394,6 @@ function App() {
       setWritablePaths("");
     }
   }
-  async function offline() {
-    const result = await action("model.offline", {
-      targetPath: target,
-      replacement,
-      checkDescription,
-    });
-    if (result) {
-      setReadPaths(target);
-      setWritePaths(target);
-      setArgs(target);
-    }
-  }
-  async function createPlan() {
-    const id = crypto.randomUUID();
-    const sources = [
-      {
-        id: "request",
-        kind: "user",
-        locator: "local-user",
-        version: "1",
-        content: task,
-        status: "available",
-      },
-      ...(materials.trim()
-        ? [
-            {
-              id: "material",
-              kind: "reference",
-              locator: "local-user-material",
-              version: "1",
-              content: materials,
-              status: "available",
-            },
-          ]
-        : []),
-    ];
-    const created = await action("planning.create", {
-      id,
-      inputs: {
-        task: {
-          schema: "lorelum.judge.task-contract/v1",
-          id: `task-${id}`,
-          taskClass: "code",
-          text: task,
-        },
-        sources,
-      },
-    });
-    if (created) await action("planning.preview", { instructions: "" });
-  }
   async function startPlanning(text: string) {
     if (!text.trim()) {
       setError("请先填写修改意见。");
@@ -458,7 +403,6 @@ function App() {
       setError("请先配置真实模型；配置本身不会发送消息。");
       return;
     }
-    setTask(text);
     setPlanDirty(false);
     const id = crypto.randomUUID();
     const hasEvaluation =
@@ -805,13 +749,9 @@ function App() {
             <div className="brand-mark" aria-hidden="true">
               L
             </div>
-            <div>
-              <div className="eyebrow">
-                Lorelum Judge <span> / </span> Local workspace
-              </div>
-              <h1>代码评价与受控修改</h1>
-              <p className="muted">从一个问题开始，到有依据的修改。</p>
-            </div>
+            <h1>Lorelum Judge</h1>
+            <span className="brand-divider">/</span>
+            <span className="brand-subtitle">本地工作区</span>
           </div>
           <span className="state">
             <span className="state-dot" />
@@ -826,11 +766,7 @@ function App() {
         <div className="chat-layout">
           <Card className="section conversation">
             <div className="conversation-heading">
-              <div>
-                <div className="conversation-kicker">WORKSPACE / 对话</div>
-                <h2>和 Judge 一起解决问题</h2>
-                <p className="muted">选择当前要做的事，切换后仍在同一段对话中。</p>
-              </div>
+              <span>对话</span>
               <span className="privacy-note">本地会话</span>
             </div>
             <div className="row feature-choices">
@@ -866,44 +802,8 @@ function App() {
                   <div className="empty-icon" aria-hidden="true">
                     L
                   </div>
-                  <h3>今天想解决什么问题？</h3>
-                  <p>发来 PR 链接或代码，也可以从下面的方向开始。</p>
-                  <div className="starter-grid">
-                    <Button
-                      variant="flat"
-                      onClick={() => {
-                        setFeature("evaluation");
-                        setConversationInput("请审查这个 PR：");
-                      }}
-                    >
-                      <span>01</span>
-                      <strong>审查代码或 PR</strong>
-                      <small>发现问题与依据</small>
-                    </Button>
-                    <Button
-                      variant="flat"
-                      onClick={() => {
-                        setFeature("suggestions");
-                        setConversationInput("请根据当前评价给出修改建议");
-                      }}
-                    >
-                      <span>02</span>
-                      <strong>获取修改建议</strong>
-                      <small>基于已有评价</small>
-                    </Button>
-                    <Button
-                      variant="flat"
-                      onClick={() => {
-                        setFeature("planning");
-                        setConversationInput("请帮我制定修改计划：");
-                      }}
-                    >
-                      <span>03</span>
-                      <strong>制定修改计划</strong>
-                      <small>确认后再受控执行</small>
-                    </Button>
-                  </div>
-                  <p className="empty-hint">会话仅保留在当前页面，刷新后不恢复消息历史。</p>
+                  <h3>有什么可以帮你？</h3>
+                  <p>发送代码、PR 链接或你想完成的修改。</p>
                 </div>
               )}
               {conversation.map((message, index) => (
@@ -971,6 +871,18 @@ function App() {
                         onChange={(event) => setExplicitSnippet(event.target.checked)}
                       />
                       整条消息是代码材料
+                    </label>
+                  </details>
+                )}
+                {feature === "planning" && (
+                  <details>
+                    <summary>添加规划参考资料（可选）</summary>
+                    <label className="field">
+                      参考资料（发送前会完整展示）
+                      <Textarea
+                        value={materials}
+                        onChange={(event) => setMaterials(event.target.value)}
+                      />
                     </label>
                   </details>
                 )}
@@ -1606,287 +1518,189 @@ function App() {
             )}
           </Card>
           <aside className="stack">
-            <Card className="section">
-              <h2>真实模型设置</h2>
-              <p className="muted">
-                模型：{state?.model ? `${state.model.recipient} · ${state.model.mode}` : "尚未选择"}
-              </p>
-              <label className="field">
-                OpenAI-compatible endpoint
-                <Input
-                  value={endpoint}
-                  onChange={(event) => setEndpoint(event.target.value)}
-                  placeholder="https://api.example.com/v1"
-                />
-              </label>
-              <label className="field">
-                模型名称
-                <Input value={modelName} onChange={(event) => setModelName(event.target.value)} />
-              </label>
-              <label className="field">
-                API 密钥（可留空，仅保存在宿主内存）
-                <Input
-                  type="password"
-                  autoComplete="off"
-                  value={apiKey}
-                  onChange={(event) => setApiKey(event.target.value)}
-                />
-              </label>
-              <Button
-                disabled={!token || busy || chatBusy || !endpoint.trim() || !modelName.trim()}
-                onClick={() => {
-                  const credential = apiKey;
-                  setApiKey("");
-                  void action("model.configure", {
-                    endpoint: endpoint.trim(),
-                    model: modelName.trim(),
-                    apiKey: credential,
-                  });
-                }}
-              >
-                保存并选择模型
-              </Button>
-              <p className="muted">保存不会发送模型请求，更换模型会使相关授权失效。</p>
-              <Button
-                variant="flat"
-                disabled={
-                  !token || busy || chatBusy || chatRunning || state?.model?.mode !== "configured"
-                }
-                onClick={() => {
-                  conversationChat.current = false;
-                  setChatContext(chatMessages);
-                  const content = "连接检查：请回复“连接成功”。";
-                  setChatInput(content);
-                  setChatBusy(true);
-                  void action("chat.preview", {
-                    messages: [...chatMessages, { role: "user", content }],
-                  }).finally(() => setChatBusy(false));
-                }}
-              >
-                预览连接检查
-              </Button>
-              <p className="muted">
-                检查会发送“连接检查：请回复‘连接成功’。”及现有聊天记录；须先查看完整披露并同意。
-              </p>
-              {chatRunning && chatInput === "连接检查：请回复“连接成功”。" && (
-                <Button
-                  variant="flat"
-                  color="danger"
-                  onClick={() => void action("chat.cancel", {})}
-                >
-                  取消连接检查
-                </Button>
-              )}
-              {state?.chat?.status === "failed" && chatInput === "连接检查：请回复“连接成功”。" && (
-                <p className="notice error">连接检查失败，请检查配置后重新预览。</p>
-              )}
-              {state?.chat?.status === "completed" &&
-                chatMessages.at(-2)?.content === "连接检查：请回复“连接成功”。" && (
-                  <div className="result-panel">
-                    <h3>连接检查结果</h3>
-                    <p className="result-text">{chatMessages[chatMessages.length - 1]?.content}</p>
-                  </div>
-                )}
-            </Card>
-            {feature === "planning" && (
+            <details className="settings-panel">
+              <summary>
+                模型设置{" "}
+                <span>
+                  {state?.model?.mode === "configured" ? modelName || "已配置" : "未配置"}
+                </span>
+              </summary>
               <Card className="section">
-                <h2>项目文件夹</h2>
-                <p className="muted">只有实际执行时需要选择项目。选择后请重新生成并确认计划。</p>
-                <p className="notice">
-                  发现会列出 Git
-                  已跟踪、未跟踪和忽略文件的路径。请先排除凭据、密钥及其他敏感文件；发现不会发送内容给模型。
+                <h2>真实模型设置</h2>
+                <p className="muted">
+                  模型：
+                  {state?.model ? `${state.model.recipient} · ${state.model.mode}` : "尚未选择"}
                 </p>
                 <label className="field">
-                  项目路径（支持 WSL 路径及 Windows 盘符路径）
+                  OpenAI-compatible endpoint
                   <Input
-                    value={root}
-                    onChange={(event) => setRoot(event.target.value)}
-                    placeholder="例如 E:\project 或 /home/user/project"
+                    value={endpoint}
+                    onChange={(event) => setEndpoint(event.target.value)}
+                    placeholder="https://api.example.com/v1"
                   />
                 </label>
-                <details>
-                  <summary>排除敏感文件（选择项目前设置）</summary>
+                <label className="field">
+                  模型名称
+                  <Input value={modelName} onChange={(event) => setModelName(event.target.value)} />
+                </label>
+                <label className="field">
+                  API 密钥（可留空，仅保存在宿主内存）
+                  <Input
+                    type="password"
+                    autoComplete="off"
+                    value={apiKey}
+                    onChange={(event) => setApiKey(event.target.value)}
+                  />
+                </label>
+                <Button
+                  disabled={!token || busy || chatBusy || !endpoint.trim() || !modelName.trim()}
+                  onClick={() => {
+                    const credential = apiKey;
+                    setApiKey("");
+                    void action("model.configure", {
+                      endpoint: endpoint.trim(),
+                      model: modelName.trim(),
+                      apiKey: credential,
+                    });
+                  }}
+                >
+                  保存并选择模型
+                </Button>
+                <p className="muted">保存不会发送模型请求，更换模型会使相关授权失效。</p>
+                <Button
+                  variant="flat"
+                  disabled={
+                    !token || busy || chatBusy || chatRunning || state?.model?.mode !== "configured"
+                  }
+                  onClick={() => {
+                    conversationChat.current = false;
+                    setChatContext(chatMessages);
+                    const content = "连接检查：请回复“连接成功”。";
+                    setChatInput(content);
+                    setChatBusy(true);
+                    void action("chat.preview", {
+                      messages: [...chatMessages, { role: "user", content }],
+                    }).finally(() => setChatBusy(false));
+                  }}
+                >
+                  预览连接检查
+                </Button>
+                <p className="muted">
+                  检查会发送“连接检查：请回复‘连接成功’。”及现有聊天记录；须先查看完整披露并同意。
+                </p>
+                {chatRunning && chatInput === "连接检查：请回复“连接成功”。" && (
+                  <Button
+                    variant="flat"
+                    color="danger"
+                    onClick={() => void action("chat.cancel", {})}
+                  >
+                    取消连接检查
+                  </Button>
+                )}
+                {state?.chat?.status === "failed" &&
+                  chatInput === "连接检查：请回复“连接成功”。" && (
+                    <p className="notice error">连接检查失败，请检查配置后重新预览。</p>
+                  )}
+                {state?.chat?.status === "completed" &&
+                  chatMessages.at(-2)?.content === "连接检查：请回复“连接成功”。" && (
+                    <div className="result-panel">
+                      <h3>连接检查结果</h3>
+                      <p className="result-text">
+                        {chatMessages[chatMessages.length - 1]?.content}
+                      </p>
+                    </div>
+                  )}
+                <Button
+                  variant="flat"
+                  onClick={() => void action("model.configured", {})}
+                  disabled={busy}
+                >
+                  使用宿主配置的模型
+                </Button>
+              </Card>
+            </details>
+            {feature === "planning" && (
+              <details className="settings-panel project-panel">
+                <summary>
+                  项目设置 <span>{state?.workspace ? "已选择" : "执行时需要"}</span>
+                </summary>
+                <Card className="section">
+                  <h2>项目文件夹</h2>
+                  <p className="muted">只有实际执行时需要选择项目。选择后请重新生成并确认计划。</p>
+                  <p className="notice">
+                    发现会列出 Git
+                    已跟踪、未跟踪和忽略文件的路径。请先排除凭据、密钥及其他敏感文件；发现不会发送内容给模型。
+                  </p>
                   <label className="field">
-                    排除相对路径（每行一个）
-                    <Textarea
-                      value={excluded}
-                      onChange={(event) => setExcluded(event.target.value)}
-                      placeholder=".env"
+                    项目路径（支持 WSL 路径及 Windows 盘符路径）
+                    <Input
+                      value={root}
+                      onChange={(event) => setRoot(event.target.value)}
+                      placeholder="例如 E:\project 或 /home/user/project"
                     />
                   </label>
-                </details>
-                <Button disabled={!token || busy || !root.trim()} onClick={() => void discover()}>
-                  选择项目
-                </Button>
-                {state?.workspace && (
-                  <>
-                    <p className="muted">
-                      已选择：{state.workspace.root}
-                      。勾选的路径及其身份作为规划参考，不发送文件内容；重新选择项目后须重新规划。
-                    </p>
-                    <div className="path-list">
-                      {state.workspace.candidates
-                        .filter((candidate) => !candidate.exclusionReason)
-                        .map((candidate) => (
-                          <label className="check" key={candidate.path}>
-                            <input
-                              type="checkbox"
-                              checked={
-                                selectedWorkspaceIdentity === state.workspace?.identity &&
-                                selectedPaths.includes(candidate.path)
-                              }
-                              onChange={(event) => {
-                                const checked = event.target.checked;
-                                const workspaceIdentity = state.workspace?.identity;
-                                if (!workspaceIdentity) return;
-                                setSelectedPaths((current) => {
-                                  const selected =
-                                    selectedWorkspaceIdentity === workspaceIdentity ? current : [];
-                                  return checked
-                                    ? [...selected, candidate.path]
-                                    : selected.filter((path) => path !== candidate.path);
-                                });
-                                setSelectedWorkspaceIdentity(workspaceIdentity);
-                                if (!planDirty && (state.plan || state.disclosure)) {
-                                  setPlanDirty(true);
-                                  void action("planning.revokeDisclosure", {});
+                  <details>
+                    <summary>排除敏感文件（选择项目前设置）</summary>
+                    <label className="field">
+                      排除相对路径（每行一个）
+                      <Textarea
+                        value={excluded}
+                        onChange={(event) => setExcluded(event.target.value)}
+                        placeholder=".env"
+                      />
+                    </label>
+                  </details>
+                  <Button disabled={!token || busy || !root.trim()} onClick={() => void discover()}>
+                    选择项目
+                  </Button>
+                  {state?.workspace && (
+                    <>
+                      <p className="muted">
+                        已选择：{state.workspace.root}
+                        。勾选的路径及其身份作为规划参考，不发送文件内容；重新选择项目后须重新规划。
+                      </p>
+                      <div className="path-list">
+                        {state.workspace.candidates
+                          .filter((candidate) => !candidate.exclusionReason)
+                          .map((candidate) => (
+                            <label className="check" key={candidate.path}>
+                              <input
+                                type="checkbox"
+                                checked={
+                                  selectedWorkspaceIdentity === state.workspace?.identity &&
+                                  selectedPaths.includes(candidate.path)
                                 }
-                              }}
-                            />
-                            {candidate.path} ({candidate.status})
-                          </label>
-                        ))}
-                    </div>
-                  </>
-                )}
-              </Card>
+                                onChange={(event) => {
+                                  const checked = event.target.checked;
+                                  const workspaceIdentity = state.workspace?.identity;
+                                  if (!workspaceIdentity) return;
+                                  setSelectedPaths((current) => {
+                                    const selected =
+                                      selectedWorkspaceIdentity === workspaceIdentity
+                                        ? current
+                                        : [];
+                                    return checked
+                                      ? [...selected, candidate.path]
+                                      : selected.filter((path) => path !== candidate.path);
+                                  });
+                                  setSelectedWorkspaceIdentity(workspaceIdentity);
+                                  if (!planDirty && (state.plan || state.disclosure)) {
+                                    setPlanDirty(true);
+                                    void action("planning.revokeDisclosure", {});
+                                  }
+                                }}
+                              />
+                              {candidate.path} ({candidate.status})
+                            </label>
+                          ))}
+                      </div>
+                    </>
+                  )}
+                </Card>
+              </details>
             )}
           </aside>
         </div>
-        <details className="advanced" ref={advancedRef}>
-          <summary>高级工作流 · 项目、计划、执行与报告</summary>
-          <p className="muted">其他工作区诊断及离线演示选项；执行仍需独立授权。</p>
-          <div className="layout">
-            <main className="stack">
-              <Card className="section">
-                <h2>01 · 选择工作区</h2>
-                <p className="muted">
-                  本地发现会列出 Git
-                  已跟踪、未跟踪及忽略文件的路径；在读取文件正文之前，先输入需要排除的相对路径。请排除凭据和敏感材料。发现不等于模型披露。
-                </p>
-                <label className="field">
-                  Git 工作区绝对路径
-                  <Input
-                    value={root}
-                    onChange={(event) => setRoot(event.target.value)}
-                    placeholder="例如 /home/user/project"
-                  />
-                </label>
-                <label className="field">
-                  排除路径（每行一个，先于内容读取生效）
-                  <Textarea
-                    value={excluded}
-                    onChange={(event) => setExcluded(event.target.value)}
-                    placeholder=".env"
-                  />
-                </label>
-                <div className="row">
-                  <Button onClick={() => void discover()} disabled={!token || busy || !root.trim()}>
-                    发现本地现场
-                  </Button>
-                </div>
-                {state?.workspace && (
-                  <>
-                    <p className="muted">
-                      规范根目录：{state.workspace.root}
-                      <br />
-                      副本来源身份：{state.workspace.identity}
-                    </p>
-                    <pre className="data">{pretty(state.workspace.candidates)}</pre>
-                    <p className="muted">支持诊断：{pretty(state.diagnostics)}</p>
-                  </>
-                )}
-                <p className="muted">
-                  仅支持 Linux、openat2 与 bubblewrap。Git
-                  HEAD、冲突索引、隐藏修改标志、链接、特殊文件和 mount
-                  必须满足安全约束；隔离工具链能力在实际执行时验证。沙箱无网络、原项目 Git
-                  元数据和个人 home；命令必须授权读取整个副本，根目录写入仅通过受控文件写入。
-                </p>
-              </Card>
-              <Card className="section">
-                <h2>02 · 模型与任务</h2>
-                <p className="muted">
-                  可在右侧配置真实模型，选择不会发送请求。离线演示是确定性的单文件替换，不代表真实模型效果。
-                </p>
-                <label className="field">
-                  自然语言修改意见
-                  <Textarea
-                    value={task}
-                    onChange={(event) => setTask(event.target.value)}
-                    placeholder="描述你希望修改的行为"
-                  />
-                </label>
-                <label className="field">
-                  可选规划资料（仅在明确披露授权后发送）
-                  <Textarea
-                    value={materials}
-                    onChange={(event) => setMaterials(event.target.value)}
-                  />
-                </label>
-                <div className="grid2">
-                  <label className="field">
-                    离线目标相对路径
-                    <Input value={target} onChange={(event) => setTarget(event.target.value)} />
-                  </label>
-                  <label className="field">
-                    检查说明
-                    <Input
-                      value={checkDescription}
-                      onChange={(event) => setCheckDescription(event.target.value)}
-                    />
-                  </label>
-                </div>
-                <label className="field">
-                  离线替换后的完整文本
-                  <Textarea
-                    value={replacement}
-                    onChange={(event) => setReplacement(event.target.value)}
-                  />
-                </label>
-                <div className="row">
-                  <Button
-                    variant="flat"
-                    onClick={() => void offline()}
-                    disabled={busy || !target.trim()}
-                  >
-                    选择离线演示
-                  </Button>
-                  <Button
-                    variant="flat"
-                    onClick={() => void action("model.configured", {})}
-                    disabled={busy}
-                  >
-                    选择宿主配置的真实模型
-                  </Button>
-                  <Button
-                    onClick={() => void createPlan()}
-                    disabled={busy || !task.trim() || !state?.model}
-                  >
-                    创建任务
-                  </Button>
-                </div>
-                {state?.model && (
-                  <p className="muted">
-                    接收方：{state.model.recipient} · 模式：{state.model.mode}
-                    <br />
-                    有效配置：{pretty(state.model.config)}
-                  </p>
-                )}
-              </Card>
-            </main>
-            <aside className="stack"></aside>
-          </div>
-        </details>
       </div>
     </LumenProvider>
   );
