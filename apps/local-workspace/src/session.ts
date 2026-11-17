@@ -2,7 +2,13 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
 import { release } from "node:os";
-import { evaluateCode, generateCodeSuggestions, type ProgramChecker } from "@lorelum/judge";
+import {
+  collectCodeSources,
+  evaluateCode,
+  generateCodeSuggestions,
+  type ProgramChecker,
+  type SourceSession,
+} from "@lorelum/judge";
 import type { CodeEvaluationReport, CodeSuggestionReport } from "@lorelum/judge-protocol";
 import {
   codeEvaluationReportIdentity,
@@ -498,6 +504,7 @@ export class SessionRouter {
   #invalidate(): void {
     this.#generation++;
     this.#cancelReview();
+    this.#reviewController = undefined;
     this.#invalidateChat();
     this.#controller?.abort();
     this.#clearExecution();
@@ -628,12 +635,12 @@ export class SessionRouter {
     this.#chatStatus = "idle";
     this.#model = { mode: "configured", ...selected, model };
   }
-  #cancelReview(): void {
+  #cancelReview(preserveResult = false): void {
     const kind = this.#reviewKind;
     if (!kind) return;
     this.#reviewKind = undefined;
     this.#reviewController?.abort();
-    this.#reviewController = undefined;
+    if (!preserveResult) this.#reviewController = undefined;
     if (this.#executionDisclosure?.owner === "review") this.#executionDisclosure.decide(false);
     const state = kind === "evaluation" ? this.#evaluation : this.#suggestions;
     state.status = "cancelled";
@@ -773,6 +780,10 @@ export class SessionRouter {
     void work
       .then((result) => {
         if (this.#reviewController !== controller) return;
+        if (controller.signal.aborted && (!result.ok || result.value.status !== "cancelled")) {
+          this.#reviewController = undefined;
+          return;
+        }
         const state: ReviewState = result.ok
           ? { status: result.value.status, report: result.value, text: result.text, issues: null }
           : { status: "failed", report: null, text: null, issues: result.issues };
@@ -792,6 +803,10 @@ export class SessionRouter {
       })
       .catch((error: unknown) => {
         if (this.#reviewController !== controller) return;
+        if (controller.signal.aborted) {
+          this.#reviewController = undefined;
+          return;
+        }
         const state: ReviewState = {
           status: "failed",
           report: null,
@@ -981,7 +996,7 @@ export class SessionRouter {
       if (action === "evaluation.cancel" || action === "suggestions.cancel") {
         if (this.#reviewKind !== (action === "evaluation.cancel" ? "evaluation" : "suggestions"))
           throw new Error("No matching review to cancel");
-        this.#cancelReview();
+        this.#cancelReview(action === "evaluation.cancel");
         return { ok: true, state: this.snapshot() };
       }
       switch (action) {
@@ -1158,9 +1173,104 @@ export class SessionRouter {
           this.#emit("model", "result", "cancelled");
           break;
         }
+        case "planning.fromPullRequest": {
+          const id = text(data.id, "id");
+          const instruction = text(data.text, "text");
+          const url = text(data.url, "url");
+          if (
+            !/^https:\/\/github\.com\/(?!\.{1,2}\/)[\w.-]+\/(?!\.{1,2}\/)[\w.-]+\/pull\/[1-9]\d*\/?$/i.test(
+              url,
+            )
+          )
+            throw new Error("Target must be a public GitHub pull request URL");
+          const projectSource = this.#selectedPathsSource(data.paths, data.workspaceIdentity);
+          const materials = data.materials === undefined ? "" : text(data.materials, "materials");
+          this.#invalidate();
+          this.#plan = undefined;
+          this.#evaluation = emptyReview();
+          this.#suggestions = emptyReview();
+          const generation = this.#generation;
+          const controller = new AbortController();
+          this.#controller = controller;
+          let source: SourceSession;
+          try {
+            source = await collectCodeSources(
+              { kind: "github", url },
+              { signal: controller.signal },
+            );
+            await source.verify();
+            if (generation !== this.#generation || controller.signal.aborted)
+              throw new Error("Pull request planning was superseded");
+          } finally {
+            if (this.#controller === controller) this.#controller = undefined;
+          }
+          const snapshot = source.snapshot;
+          if (
+            !snapshot.consistent ||
+            snapshot.issues.some(
+              (issue) => issue.fatal || issue.code === "verification_unavailable",
+            )
+          )
+            throw new Error("Pull request source could not be read and verified");
+          if (!snapshot.items.some((item) => item.role === "target"))
+            throw new Error("Pull request has no readable changed code");
+          const identity = identityOf(snapshot.schema, snapshot);
+          if (!identity.ok) throw new Error("Pull request source identity unavailable");
+          const plan = new PlanningSession(id, {
+            task: {
+              schema: "lorelum.judge.task-contract/v1",
+              id,
+              taskClass: "code",
+              text: instruction,
+            },
+            sources: [
+              {
+                id: "request",
+                kind: "user",
+                locator: "user",
+                version: "1",
+                content: instruction,
+                status: "available",
+              },
+              {
+                id: "pull-request",
+                kind: "reference",
+                locator: url,
+                version: identity.identity,
+                content: JSON.stringify(snapshot),
+                status:
+                  snapshot.omitted.length ||
+                  snapshot.items.some((item) => !item.complete) ||
+                  snapshot.issues.length
+                    ? "truncated"
+                    : "available",
+              },
+              ...(materials
+                ? [
+                    {
+                      id: "material",
+                      kind: "reference" as const,
+                      locator: "local-user-material",
+                      version: "1",
+                      content: materials,
+                      status: "available" as const,
+                    },
+                  ]
+                : []),
+              ...(projectSource ? [projectSource] : []),
+            ],
+          });
+          this.#plan = plan;
+          this.#emit("planning", "result", "created");
+          break;
+        }
         case "planning.fromEvaluation": {
           const id = text(data.id, "id");
           const instruction = text(data.text, "text");
+          if (/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/[1-9]\d*/i.test(instruction))
+            throw new Error(
+              "A pull request must be read as the planning source, not paired with a previous evaluation",
+            );
           const report = this.#evaluation.report as CodeEvaluationReport | null;
           if (
             !report ||
@@ -1169,6 +1279,8 @@ export class SessionRouter {
             !report.source.items.some((item) => item.role === "target")
           )
             throw new Error("A usable evaluation is required for planning");
+          if (data.evaluationId !== report.id || data.sourceIdentity !== report.sourceIdentity)
+            throw new Error("Evaluation identity does not match the current planning source");
           const evaluationIdentity = codeEvaluationReportIdentity(report);
           const advice = this.#suggestions.report as CodeSuggestionReport | null;
           const linkedAdvice =
@@ -1766,11 +1878,18 @@ export class SessionRouter {
         "Windows paths require WSL and wslpath",
         "Windows path could not be converted by wslpath",
         "Target must be a GitHub pull request URL or code snippet",
+        "Target must be a public GitHub pull request URL",
+        "Pull request planning was superseded",
+        "Pull request source could not be read and verified",
+        "Pull request has no readable changed code",
+        "Pull request source identity unavailable",
+        "A pull request must be read as the planning source, not paired with a previous evaluation",
         "Request must be nonempty text",
         "Configured model is required for review",
         "Another background operation is running",
         "A completed evaluation is required",
         "A usable evaluation is required for planning",
+        "Evaluation identity does not match the current planning source",
         "Invalid selected project paths",
         "No matching review to cancel",
         "Configured model request failed",

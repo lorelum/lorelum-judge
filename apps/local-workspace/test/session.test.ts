@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { release, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -918,9 +919,27 @@ describe("local workspace session router", () => {
         expect(state.evaluation.report?.result?.problems).toHaveLength(1);
         evaluationReport = state.evaluation.report;
         if (partial) expect(state.evaluation.status).toBe("partial");
+        const wrongTarget = await call(session, "planning.fromEvaluation", {
+          id: "wrong-target",
+          text: "请根据 https://github.com/other/project/pull/9 制定计划",
+        });
+        expect(wrongTarget.ok).toBe(false);
+        expect(wrongTarget.error?.message).toContain("pull request must be read");
+        const staleEvaluation = await call(session, "planning.fromEvaluation", {
+          id: "stale-evaluation",
+          text: "Fix the issues",
+          evaluationId: "previous-result",
+          sourceIdentity: evaluationReport?.sourceIdentity,
+        });
+        expect(staleEvaluation.ok).toBe(false);
+        expect(staleEvaluation.error?.message).toBe(
+          "Evaluation identity does not match the current planning source",
+        );
         const missingWorkspace = await call(session, "planning.fromEvaluation", {
           id: "missing-workspace",
           text: "Fix the issues",
+          evaluationId: evaluationReport?.id,
+          sourceIdentity: evaluationReport?.sourceIdentity,
           paths: ["not-discovered.ts"],
         });
         expect(missingWorkspace.ok).toBe(false);
@@ -928,6 +947,8 @@ describe("local workspace session router", () => {
         const created = await call(session, "planning.fromEvaluation", {
           id: "review-plan",
           text: "Fix the reported issues",
+          evaluationId: evaluationReport?.id,
+          sourceIdentity: evaluationReport?.sourceIdentity,
           conversation: '[{"role":"user","content":"Preserve result ordering"}]',
           materials: "The maximum is 20 items.",
         });
@@ -986,6 +1007,8 @@ describe("local workspace session router", () => {
             await call(session, "planning.fromEvaluation", {
               id: "with-advice",
               text: "按建议修复",
+              evaluationId: evaluationReport?.id,
+              sourceIdentity: evaluationReport?.sourceIdentity,
             })
           ).ok,
         ).toBe(true);
@@ -996,6 +1019,22 @@ describe("local workspace session router", () => {
         expect(adviceSource?.kind).toBe("reference");
         expect(JSON.parse(adviceSource!.content).result).toEqual(state.suggestions.report?.result);
         expect(requests).toHaveLength(3);
+        const originalFetch = globalThis.fetch;
+        try {
+          globalThis.fetch = (async () =>
+            new Response("not found", { status: 404 })) as unknown as typeof globalThis.fetch;
+          const switched = await call(session, "planning.fromPullRequest", {
+            id: "other-pull",
+            text: "Plan another PR",
+            url: "https://github.com/other/project/pull/9",
+          });
+          expect(switched.ok).toBe(false);
+          expect(switched.state.evaluation.report).toBeNull();
+          expect(switched.state.suggestions.report).toBeNull();
+          expect(switched.state.disclosure).toBeNull();
+        } finally {
+          globalThis.fetch = originalFetch;
+        }
         const restarted = await call(session, "evaluation.start", {
           target: { kind: "snippet", text: "function updated() {}" },
         });
@@ -1600,4 +1639,90 @@ linux("real workspace authorization", () => {
       await rm(root, { recursive: true, force: true });
     }
   }, 240000);
+});
+
+test("planning from a pull request binds the actual verified source without sending it to the model", async () => {
+  const originalFetch = globalThis.fetch;
+  const base = "a".repeat(40);
+  const head = "b".repeat(40);
+  const merge = "c".repeat(40);
+  const blob = (content: string) => {
+    const bytes = Buffer.from(content);
+    return {
+      sha: createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"),
+      size: bytes.length,
+      encoding: "base64",
+      content: bytes.toString("base64"),
+    };
+  };
+  const old = blob("export const value = 0;\n");
+  const current = blob("export const value = 1;\n");
+  const pull = {
+    title: "Change",
+    body: "",
+    base: { sha: base, repo: { full_name: "up/project" } },
+    head: { sha: head, repo: { full_name: "up/project" } },
+  };
+  const tree = (item: typeof old) => ({
+    tree: [{ path: "a.ts", type: "blob", mode: "100644", sha: item.sha, size: item.size }],
+    truncated: false,
+  });
+  const routes: Record<string, unknown> = {
+    "/repos/up/project/pulls/3": pull,
+    [`/repos/up/project/compare/${base}...${head}`]: { merge_base_commit: { sha: merge } },
+    [`/repos/up/project/git/trees/${merge}?recursive=1`]: tree(old),
+    [`/repos/up/project/git/trees/${head}?recursive=1`]: tree(current),
+    [`/repos/up/project/git/blobs/${old.sha}`]: old,
+    [`/repos/up/project/git/blobs/${current.sha}`]: current,
+    "/repos/up/project/issues/3/comments?per_page=100&page=1": [],
+    "/repos/up/project/pulls/3/reviews?per_page=100&page=1": [],
+    "/repos/up/project/pulls/3/comments?per_page=100&page=1": [],
+  };
+  let requests = 0;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+    if (url.origin !== "https://api.github.com") {
+      requests++;
+      throw new Error("Unexpected model request");
+    }
+    const route = routes[url.pathname + url.search];
+    return Response.json(route ?? { message: "not found" }, {
+      status: route === undefined ? 404 : 200,
+    });
+  }) as typeof globalThis.fetch;
+  const session = new SessionRouter({
+    configuredModel: { endpoint: "http://127.0.0.1:1/v1", config: { model: "test" } },
+  });
+  try {
+    await call(session, "model.configured", {});
+    const created = await call(session, "planning.fromPullRequest", {
+      id: "pull-plan",
+      text: "请根据 PR 制定计划",
+      url: "https://github.com/up/project/pull/3",
+    });
+    expect(created.ok).toBe(true);
+    const preview = await call(session, "planning.preview", {});
+    const source = preview.state.disclosure?.request.sources.find(
+      (item) => item.id === "pull-request",
+    );
+    expect(source?.locator).toBe("https://github.com/up/project/pull/3");
+    expect(source?.version).toMatch(/^sha256:/);
+    expect(source?.content).toContain("export const value = 1;");
+    expect(source?.content).toContain("export const value = 0;");
+    expect(preview.state.disclosure?.request.sources.some((item) => item.id === "evaluation")).toBe(
+      false,
+    );
+    expect(preview.state.disclosure?.authorized).toBe(false);
+    expect(requests).toBe(0);
+    delete routes["/repos/up/project/pulls/3"];
+    const failed = await call(session, "planning.fromPullRequest", {
+      id: "failed",
+      text: "另一个计划",
+      url: "https://github.com/up/project/pull/3",
+    });
+    expect(failed.ok).toBe(false);
+    expect(failed.state.disclosure).toBeNull();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

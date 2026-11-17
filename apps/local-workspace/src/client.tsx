@@ -126,6 +126,8 @@ const lines = (value: string): string[] =>
     .map((item) => item.trim())
     .filter(Boolean);
 const pretty = (value: unknown): string => JSON.stringify(value, null, 2) ?? "未知";
+const pullRequestPattern =
+  /(https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9]\d*)\/?(?:[?#/][^\s]*)?/i;
 
 function DisclosureView({ value }: { value: unknown }) {
   if (value === null || value === undefined) return <span>无</span>;
@@ -174,7 +176,10 @@ function App() {
   const [explicitSnippet, setExplicitSnippet] = useState(false);
   const [conversation, setConversation] = useState<(ChatMessage & { label?: string })[]>([]);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const conversationScopeStart = useRef(0);
+  const activePullRequest = useRef<string | null>(null);
   const [trackedAnalysis, setTrackedAnalysis] = useState<"evaluation" | "suggestions" | null>(null);
+  const seenCancelledReport = useRef("");
   const [trackingPlan, setTrackingPlan] = useState(false);
   const seenPlan = useRef("");
   const seenDisclosure = useRef("");
@@ -190,8 +195,14 @@ function App() {
   const [chatGenerating, setChatGenerating] = useState(false);
   const [planningBusy, setPlanningBusy] = useState(false);
   const [planDirty, setPlanDirty] = useState(false);
+  const [newPlan, setNewPlan] = useState(false);
   const [materials, setMaterials] = useState("");
+  const materialsFresh = useRef(false);
+  const materialsTarget = useRef<string | null>(null);
   const [instructions, setInstructions] = useState("");
+  const [offlineTarget, setOfflineTarget] = useState("");
+  const [offlineReplacement, setOfflineReplacement] = useState("");
+  const [offlineCheck, setOfflineCheck] = useState("独立检查修改后的文件");
   const [readPaths, setReadPaths] = useState("");
   const [writePaths, setWritePaths] = useState("");
   const [writablePaths, setWritablePaths] = useState("");
@@ -399,76 +410,147 @@ function App() {
       setError("请先填写修改意见。");
       return;
     }
-    if (state?.model?.mode !== "configured") {
-      setError("请先配置真实模型；配置本身不会发送消息。");
+    if (!state?.model) {
+      setError("请先选择模型或离线演示。");
       return;
     }
-    setPlanDirty(false);
+    const explicitUrl = text.match(pullRequestPattern)?.[1];
+    const url =
+      explicitUrl ??
+      (!state.plan && !newPlan && !/```/.test(text) ? activePullRequest.current : null);
+    if (explicitUrl || newPlan) activePullRequest.current = null;
+    if (state.plan && !url && !newPlan) {
+      if (planDirty) {
+        setError("项目选择已变化，请先新建计划并重新确认。");
+        return;
+      }
+      if (state.disclosure && !(await action("planning.revokeDisclosure", {}))) {
+        setConversation((messages) => [
+          ...messages,
+          { role: "assistant", content: "无法撤销旧的披露请求，请查看错误并重试。" },
+        ]);
+        return;
+      }
+      setInstructions(text);
+      setTrackingPlan(true);
+      const preview = await action("planning.preview", { instructions: text });
+      if (!preview)
+        setConversation((messages) => [
+          ...messages,
+          {
+            role: "assistant",
+            content: "无法预览计划调整请求，请查看错误并重试；当前计划仍保留。",
+          },
+        ]);
+      return;
+    }
+    const newSource = !!url || newPlan || /```/.test(text);
+    const targetKey = url ?? "new-plan";
+    const currentMaterials =
+      materialsFresh.current && (!materialsTarget.current || materialsTarget.current === targetKey)
+        ? materials.trim()
+        : "";
+    if (currentMaterials) materialsTarget.current = targetKey;
+    if (newSource) {
+      conversationScopeStart.current = conversation.length;
+      if (!currentMaterials) setMaterials("");
+    }
+    if (url) {
+      setConversation((messages) => [
+        ...messages,
+        {
+          role: "assistant",
+          content:
+            "正在读取公开 PR 及其讨论，创建独立计划；旧评价、对话和项目路径不会自动带入，本次新填写的参考资料会展示在发送前披露中。PR 仅作参考，实际执行仍需选择项目并独立授权。",
+        },
+      ]);
+    }
     const id = crypto.randomUUID();
+    const evaluation = state.evaluation.report as { id?: string; sourceIdentity?: string } | null;
     const hasEvaluation =
-      !!state.evaluation.report && ["completed", "partial"].includes(state.evaluation.status);
+      !newPlan &&
+      !/```/.test(text) &&
+      !!evaluation?.id &&
+      !!evaluation.sourceIdentity &&
+      ["completed", "partial"].includes(state.evaluation.status);
     const history = conversation
+      .slice(conversationScopeStart.current)
       .filter((message) => message.role === "user" || message.label === "真实模型回复")
       .map(({ role, content }) => ({ role, content }));
-    const conversationContext = history.length ? JSON.stringify(history) : "";
+    const conversationContext =
+      !newPlan && !/```/.test(text) && history.length ? JSON.stringify(history) : "";
     const paths = selectedWorkspaceIdentity === state.workspace?.identity ? selectedPaths : [];
-    const created = hasEvaluation
-      ? await action("planning.fromEvaluation", {
+    const created = url
+      ? await action("planning.fromPullRequest", {
           id,
           text,
-          paths,
-          workspaceIdentity: selectedWorkspaceIdentity,
-          ...(conversationContext ? { conversation: conversationContext } : {}),
-          ...(materials.trim() ? { materials } : {}),
+          url,
+          ...(currentMaterials ? { materials: currentMaterials } : {}),
         })
-      : await action("planning.create", {
-          id,
-          paths,
-          workspaceIdentity: selectedWorkspaceIdentity,
-          inputs: {
-            task: {
-              schema: "lorelum.judge.task-contract/v1",
-              id: `task-${id}`,
-              taskClass: "code",
-              text,
-            },
-            sources: [
-              {
-                id: "request",
-                kind: "user",
-                locator: "local-user",
-                version: "1",
-                content: text,
-                status: "available",
+      : hasEvaluation
+        ? await action("planning.fromEvaluation", {
+            id,
+            text,
+            evaluationId: evaluation?.id,
+            sourceIdentity: evaluation?.sourceIdentity,
+            paths,
+            workspaceIdentity: selectedWorkspaceIdentity,
+            ...(conversationContext ? { conversation: conversationContext } : {}),
+            ...(currentMaterials ? { materials: currentMaterials } : {}),
+          })
+        : await action("planning.create", {
+            id,
+            paths,
+            workspaceIdentity: selectedWorkspaceIdentity,
+            inputs: {
+              task: {
+                schema: "lorelum.judge.task-contract/v1",
+                id: `task-${id}`,
+                taskClass: "code",
+                text,
               },
-              ...(materials.trim()
-                ? [
-                    {
-                      id: "material",
-                      kind: "reference",
-                      locator: "local-user-material",
-                      version: "1",
-                      content: materials,
-                      status: "available",
-                    },
-                  ]
-                : []),
-              ...(conversationContext
-                ? [
-                    {
-                      id: "conversation",
-                      kind: "reference",
-                      locator: "visible-conversation",
-                      version: "1",
-                      content: conversationContext,
-                      status: "available",
-                    },
-                  ]
-                : []),
-            ],
-          },
-        });
+              sources: [
+                {
+                  id: "request",
+                  kind: "user",
+                  locator: "local-user",
+                  version: "1",
+                  content: text,
+                  status: "available",
+                },
+                ...(currentMaterials
+                  ? [
+                      {
+                        id: "material",
+                        kind: "reference",
+                        locator: "local-user-material",
+                        version: "1",
+                        content: currentMaterials,
+                        status: "available",
+                      },
+                    ]
+                  : []),
+                ...(conversationContext
+                  ? [
+                      {
+                        id: "conversation",
+                        kind: "reference",
+                        locator: "visible-conversation",
+                        version: "1",
+                        content: conversationContext,
+                        status: "available",
+                      },
+                    ]
+                  : []),
+              ],
+            },
+          });
     if (created) {
+      activePullRequest.current = url ?? null;
+      materialsFresh.current = false;
+      materialsTarget.current = null;
+      setPlanDirty(false);
+      setNewPlan(false);
       setTrackingPlan(true);
       setInstructions("");
       const preview = await action("planning.preview", { instructions: "" });
@@ -480,7 +562,12 @@ function App() {
     } else {
       setConversation((messages) => [
         ...messages,
-        { role: "assistant", content: "无法创建修改计划，请查看错误并重试。" },
+        {
+          role: "assistant",
+          content: url
+            ? "读取公开 PR 或创建计划失败，请查看错误并重试。"
+            : "无法创建修改计划，请查看错误并重试。",
+        },
       ]);
     }
   }
@@ -575,6 +662,8 @@ function App() {
     if (!trackedAnalysis || !state) return;
     const result = state[trackedAnalysis];
     if (!["completed", "partial", "failed", "cancelled"].includes(result.status)) return;
+    if (trackedAnalysis === "evaluation" && result.status === "cancelled" && result.report)
+      seenCancelledReport.current = JSON.stringify(result.report);
     const label = trackedAnalysis === "evaluation" ? "评价" : "修改建议";
     setConversation((messages) => [
       ...messages,
@@ -586,6 +675,23 @@ function App() {
     ]);
     setTrackedAnalysis(null);
   }, [state, trackedAnalysis]);
+
+  useEffect(() => {
+    const result = state?.evaluation;
+    if (result?.status !== "cancelled" || !result.report || trackedAnalysis === "evaluation")
+      return;
+    const key = JSON.stringify(result.report);
+    if (seenCancelledReport.current === key) return;
+    seenCancelledReport.current = key;
+    setConversation((messages) => [
+      ...messages,
+      {
+        role: "assistant",
+        label: "真实结果",
+        content: `评价已取消；以下保留取消前已完成的评价事实：\n${result.text ?? ""}`,
+      },
+    ]);
+  }, [state?.evaluation, trackedAnalysis]);
 
   useEffect(() => {
     if (!trackingPlan || !state?.plan) return;
@@ -611,7 +717,7 @@ function App() {
       ...messages,
       {
         role: "assistant",
-        content: `有一项发送至 ${pending.recipient} 的真实模型请求等待审核。请在下方查看完整披露并单独决定是否同意。`,
+        content: `有一项发往 ${pending.recipient} 的模型请求等待审核。请在下方查看完整披露并单独决定是否同意。`,
       },
     ]);
   }, [state?.executionDisclosure, state?.disclosure]);
@@ -623,8 +729,11 @@ function App() {
     setConversationInput("");
     const respond = (content: string) =>
       setConversation((messages) => [...messages, { role: "assistant", content }]);
-    if (state?.model?.mode !== "configured") {
-      respond("请先配置真实模型；配置本身不会发送消息。");
+    if (
+      state?.model?.mode !== "configured" &&
+      !(feature === "planning" && state?.model?.mode === "offline")
+    ) {
+      respond("请先配置真实模型；规划模式也可选择离线演示。");
       return;
     }
     if (feature === "planning") {
@@ -633,13 +742,17 @@ function App() {
     }
     let payload: unknown = {};
     if (feature === "evaluation") {
-      const pr = text.match(
-        /(https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9]\d*)\/?(?:[?#/][^\s]*)?/i,
-      );
+      const pr = text.match(pullRequestPattern);
       const fence = text.match(/```[^\n]*\n([\s\S]*?)```/);
+      if (pr && fence && !explicitSnippet) {
+        respond(
+          "消息同时包含 PR 链接和代码块。请只保留要评价的一种材料；若整条消息都是代码，请勾选“整条消息是代码材料”。",
+        );
+        return;
+      }
       if (fence || explicitSnippet) {
-        const code = fence ? (fence[1] ?? "") : text;
-        const request = fence ? text.replace(fence[0], "").trim() : "";
+        const code = explicitSnippet ? text : (fence?.[1] ?? "");
+        const request = !explicitSnippet && fence ? text.replace(fence[0], "").trim() : "";
         if (!code.trim()) {
           respond("代码材料为空，请提供代码或 GitHub PR 链接。");
           return;
@@ -688,8 +801,18 @@ function App() {
     setAnalysisBusy(feature);
     try {
       const started = await action(`${feature}.start`, payload, true);
-      if (started) setTrackedAnalysis(feature);
-      else respond("操作未能开始，请查看错误后重试。");
+      if (started) {
+        if (feature === "evaluation") {
+          conversationScopeStart.current = conversation.length;
+          activePullRequest.current = null;
+          if (materials.trim())
+            respond("已切换评价对象；先前填写的规划参考资料已清除，请按需为新对象重新填写。");
+          setMaterials("");
+          materialsFresh.current = false;
+          materialsTarget.current = null;
+        }
+        setTrackedAnalysis(feature);
+      } else respond("操作未能开始，请查看错误后重试。");
     } finally {
       setAnalysisBusy(null);
     }
@@ -787,9 +910,9 @@ function App() {
                 </Button>
               ))}
             </div>
-            {state?.model?.mode !== "configured" && (
+            {!state?.model && (
               <p className="notice model-notice">
-                请先在模型设置中配置真实模型。配置本身不会发送请求。
+                请先在模型设置中选择真实模型或离线演示。配置本身不会发送请求。
               </p>
             )}
             <div
@@ -837,7 +960,7 @@ function App() {
                   ? "发送含 GitHub PR 链接的自然语言，或用代码块提供代码。PR 会读取公开信息及相关仓库内容；私有仓库认证暂未接入。"
                   : feature === "suggestions"
                     ? "发送消息以根据当前真实评价生成建议；此接口不接收自定义指导，不会修改代码。"
-                    : "描述修改需求；有当前评价时以评价作为参考。无需代码或项目即可规划，执行才需要项目和独立授权。"}
+                    : "描述修改需求或提供公开 GitHub PR 链接；输入 PR 将创建独立计划，不携带先前对话或评价。PR 及其讨论仅作参考，不会自动更新 PR。已有计划时普通消息用于调整，发送前仍需单独授权。实际执行须选择本地项目并独立授权。"}
               </p>
               <PromptInput
                 variant="flat"
@@ -874,14 +997,29 @@ function App() {
                     </label>
                   </details>
                 )}
+                {feature === "planning" && state?.plan && (
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={newPlan}
+                      disabled={busy || planningBusy}
+                      onChange={(event) => setNewPlan(event.target.checked)}
+                    />
+                    下次发送新建计划，替换当前计划（保留对话记录）
+                  </label>
+                )}
                 {feature === "planning" && (
                   <details>
-                    <summary>添加规划参考资料（可选）</summary>
+                    <summary>添加新计划参考资料（可选）</summary>
                     <label className="field">
-                      参考资料（发送前会完整展示）
+                      新建计划时使用的参考资料（发送前会完整展示；调整现有计划请在消息中提供）
                       <Textarea
                         value={materials}
-                        onChange={(event) => setMaterials(event.target.value)}
+                        onChange={(event) => {
+                          materialsFresh.current = true;
+                          materialsTarget.current = null;
+                          setMaterials(event.target.value);
+                        }}
                       />
                     </label>
                   </details>
@@ -1522,7 +1660,11 @@ function App() {
               <summary>
                 模型设置{" "}
                 <span>
-                  {state?.model?.mode === "configured" ? modelName || "已配置" : "未配置"}
+                  {state?.model?.mode === "configured"
+                    ? modelName || "已配置"
+                    : state?.model?.mode === "offline"
+                      ? "离线演示"
+                      : "未配置"}
                 </span>
               </summary>
               <Card className="section">
@@ -1617,6 +1759,52 @@ function App() {
                 >
                   使用宿主配置的模型
                 </Button>
+                <details>
+                  <summary>离线演示（不调用真实模型）</summary>
+                  <p className="muted">
+                    仅用于可重复验收：将指定文件替换为以下完整文本，不理解自然语言，不代表真实模型效果。执行仍需审核计划和权限。
+                  </p>
+                  <label className="field">
+                    目标文件相对路径
+                    <Input
+                      value={offlineTarget}
+                      onChange={(event) => setOfflineTarget(event.target.value)}
+                    />
+                  </label>
+                  <label className="field">
+                    替换后的完整文本
+                    <Textarea
+                      value={offlineReplacement}
+                      onChange={(event) => setOfflineReplacement(event.target.value)}
+                    />
+                  </label>
+                  <label className="field">
+                    检查说明
+                    <Input
+                      value={offlineCheck}
+                      onChange={(event) => setOfflineCheck(event.target.value)}
+                    />
+                  </label>
+                  <Button
+                    variant="flat"
+                    disabled={busy || !offlineTarget.trim()}
+                    onClick={() => {
+                      void action("model.offline", {
+                        targetPath: offlineTarget,
+                        replacement: offlineReplacement,
+                        checkDescription: offlineCheck,
+                      }).then((result) => {
+                        if (result) {
+                          setReadPaths(offlineTarget);
+                          setWritePaths(offlineTarget);
+                          setArgs(offlineTarget);
+                        }
+                      });
+                    }}
+                  >
+                    选择离线演示
+                  </Button>
+                </details>
               </Card>
             </details>
             {feature === "planning" && (
