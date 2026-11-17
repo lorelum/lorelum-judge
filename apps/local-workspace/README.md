@@ -4,7 +4,9 @@
 
 ## 准备与运行
 
-使用 Bun 1.4.2 和 Node 22.21.0。在已获 `lorelum/lumen-ui` 私有仓库读取权限的环境：
+使用 Bun 1.4.2 和 Node 22.21.0。先为实际执行命令的环境（Windows 或 WSL）配置能读取 `lorelum/lumen-ui` 的 Git 凭据。HTTPS 可使用 GitHub CLI 的 Git 凭据集成（`gh auth status` 检查当前登录，必要时在终端交互登录并运行 `gh auth setup-git`），也可使用系统 Git Credential Manager；不要把 token 写进仓库、远程 URL 或聊天。凭据必须能访问该私有仓库，组织有 SSO 要求时还需完成相应授权。
+
+然后在 Judge 仓库运行：
 
 ```sh
 bun run prepare:lumen
@@ -12,7 +14,11 @@ bun install --frozen-lockfile
 bun run workspace:local
 ```
 
-准备脚本将组件库固定在 `b95a5409bfaba0e0f8db65c7a82257425f2ca99e`，在忽略的 `.lumen-cache/` 中构建本地包；不提交组件源码或包产物。公开仓库的 CI 需要 `LUMEN_UI_READ_TOKEN` secret 读取该私有仓库；未配置时 CI 无法准备页面依赖。外部消费者也需要组件库读取权限。离线演示运行时不调用外部服务；首次准备依赖仍需要仓库访问与包安装。
+准备脚本首次从 `https://github.com/lorelum/lumen-ui.git` 克隆到被忽略的 `.lumen-cache/source`，检出固定 commit `b95a5409bfaba0e0f8db65c7a82257425f2ca99e` 并构建主题和组件，再把组件发布文件和运行时依赖清单复制到生成目录 `.lumen-cache/lumen-ui-package`。Judge 从该目录安装依赖，不锁定不同环境构建的 tarball 摘要；每次准备会重新创建该生成目录。之后复用源码克隆；已有克隆必须干净且位于指定 commit，脚本不会覆盖源码修改或自动切换版本。组件源码、构建产物和凭据均不提交到 Judge 仓库。首次克隆需要网络及仓库读取权限；构建和安装依赖也可能需要访问包源。
+
+同时修改 LumenUI 和 Judge 时，应在独立的 LumenUI 工作树开发，先提交并推送 LumenUI 变更，再在 Judge 中同时更新 `scripts/prepare-lumen.ts` 的 `revision` 和 `.github/workflows/validate.yml` 的 checkout `ref`。确认 `.lumen-cache/source` 没有需要保留的更改后，在该克隆中执行 `git fetch origin` 和 `git checkout --detach <新 commit>`，再重新准备依赖并运行验证。若 LumenUI 包依赖或版本改变，还须更新 Judge 的 lockfile。不要将开发中的本地覆盖提交为正式依赖；当前准备脚本不提供脏工作树覆盖模式。
+
+CI 在独立 runner 上检出相同 commit，不会读取开发机的克隆。仓库管理员须在 Judge 仓库的 Actions secrets 中配置 `LUMEN_UI_READ_TOKEN`：使用对 `lorelum/lumen-ui` 有效且仅授予必要读取权限的凭据（例如限定该仓库、`Contents: read` 的 fine-grained token），并满足组织授权要求。workflow 使用该 secret 仅检出组件仓库，`persist-credentials: false` 禁止将凭据保留在检出的 Git 配置中；缺少或无权读取的凭据会使该步骤失败。组件未来公开后可移除该读取凭据；在此之前，本地克隆不能替代 CI 授权。
 
 公开 fork 的 pull request 默认拿不到上游仓库的 Actions secrets，因此上述 CI 步骤也不能读取私有组件库；不要使用 `pull_request_target` 或向不可信代码暴露 token 来绕过该限制。
 

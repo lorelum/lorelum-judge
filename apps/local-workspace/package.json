@@ -14,7 +14,7 @@
     "@lorelum/judge-workflow": "workspace:*",
     "@lorelum/provider-openai-compatible": "workspace:*",
     "@lorelum/runtime-bubblewrap": "workspace:*",
-    "@lorelum/lumen-ui": "file:../../.lumen-cache/lorelum-lumen-ui-0.0.1-alpha.0.tgz",
+    "@lorelum/lumen-ui": "file:../../.lumen-cache/lumen-ui-package",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },

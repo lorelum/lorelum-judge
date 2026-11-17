@@ -1,4 +1,4 @@
-import { mkdir, stat } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const repository = resolve(import.meta.dir, "..");
@@ -38,7 +38,13 @@ if (!existing) {
 bun(["install", "--frozen-lockfile"], source);
 bun(["run", "--cwd", "packages/theme", "build"], source);
 bun(["run", "--cwd", "packages/ui", "build"], source);
-bun(
-  ["pm", "pack", "--ignore-scripts", "--quiet", "--destination", cache],
-  resolve(source, "packages/ui"),
-);
+const ui = resolve(source, "packages/ui");
+const prepared = resolve(cache, "lumen-ui-package");
+const manifest = JSON.parse(await readFile(resolve(ui, "package.json"), "utf8"));
+delete manifest.devDependencies;
+await rm(prepared, { recursive: true, force: true });
+await mkdir(prepared, { recursive: true });
+for (const path of ["dist", "registry", "README.md", "THIRD_PARTY_NOTICES.md"]) {
+  await cp(resolve(ui, path), resolve(prepared, path), { recursive: true });
+}
+await writeFile(resolve(prepared, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
