@@ -54,15 +54,27 @@ export async function runWorkflowPlanning() {
     },
   };
   const signal = new AbortController().signal;
-  const disclosureIdentity = session.grantModelDisclosure(model);
-  const first = await session.generate({ model, runId: "initial", signal, disclosureIdentity });
+  // Offline example: the host presents each preview and recipient, then records approval.
+  const initialPreview = session.previewModelDisclosure(model);
+  const initialGrant = session.authorizeModelDisclosure(model, initialPreview.identity);
+  assert(initialGrant.ok, "initial disclosure must be authorized");
+  const first = await session.generate({
+    model,
+    runId: "initial",
+    signal,
+    disclosureIdentity: initialGrant.value,
+  });
   assert(first.ok && !first.value.eligible, "initial plan must await confirmation");
+  const instructions = "使用格式化 JSON";
+  const revisionPreview = session.previewModelDisclosure(model, instructions);
+  const revisionGrant = session.authorizeModelDisclosure(model, revisionPreview.identity);
+  assert(revisionGrant.ok, "revision disclosure must be authorized");
   const revision = await session.generate({
     model,
     runId: "revision",
     signal,
-    disclosureIdentity,
-    instructions: "使用格式化 JSON",
+    disclosureIdentity: revisionGrant.value,
+    instructions,
   });
   assert(revision.ok, "revised plan must be generated");
   assert(

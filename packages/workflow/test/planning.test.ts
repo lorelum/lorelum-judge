@@ -62,11 +62,18 @@ function modelFor(
     },
   };
 }
+function authorize(session: PlanningSession, model: ModelPort, instructions?: string) {
+  const preview = session.previewModelDisclosure(model, instructions);
+  const result = session.authorizeModelDisclosure(model, preview.identity);
+  if (!result.ok) throw new Error("expected disclosure authorization");
+  return result.value;
+}
+
 function generate(session: PlanningSession, model = modelFor(), instructions?: string) {
   return session.generate({
     model,
     runId: "run",
-    disclosureIdentity: session.grantModelDisclosure(model),
+    disclosureIdentity: authorize(session, model, instructions),
     signal,
     ...(instructions === undefined ? {} : { instructions }),
   });
@@ -248,6 +255,7 @@ describe("planning session", () => {
       }),
     ).toEqual({ ok: false, error: { kind: "model", error } });
     expect(session.isEligible(first.value.identity, first.value.revision)).toBe(false);
+    expect(session.confirm(first.value.identity, first.value.revision).ok).toBe(false);
     expect(
       (
         await generate(session, {
@@ -378,7 +386,7 @@ describe("planning session", () => {
       model,
       runId: "run",
       signal: controller.signal,
-      disclosureIdentity: session.grantModelDisclosure(model),
+      disclosureIdentity: authorize(session, model),
     });
     expect(result.ok).toBe(false);
     expect(session.review()).toBeNull();
@@ -425,36 +433,195 @@ describe("planning session", () => {
     expect(calls).toBe(0);
     expect(session.isEligible(first.value.identity, first.value.revision)).toBe(false);
   });
-  test("planning disclosure is explicitly granted to the current model and premises", async () => {
+
+  test("disclosure previews the exact data and binds authorization to recipient and request", async () => {
     const session = new PlanningSession("plan1", inputs);
-    const model = modelFor();
     let calls = 0;
-    const other: ModelPort = {
-      async generate() {
+    const sent: ModelRequest[] = [];
+    const delegate = modelFor();
+    const model: ModelPort = {
+      async generate(request) {
         calls++;
-        throw new Error("must not run");
+        sent.push(request);
+        return delegate.generate(request);
       },
     };
-    const disclosureIdentity = session.grantModelDisclosure(model);
-    const denied = await session.generate({
-      model: other,
-      runId: "run",
-      signal,
-      disclosureIdentity,
+    const other = modelFor();
+    const preview = session.previewModelDisclosure(model);
+    expect(preview.request).toEqual({
+      id: "plan1",
+      revision: 1,
+      task,
+      sources,
+      previousPlan: null,
+      instructions: "",
+      config: null,
     });
-    expect(denied.ok).toBe(false);
+    expect(session.authorizeModelDisclosure(other, preview.identity).ok).toBe(false);
+    const grant = session.authorizeModelDisclosure(model, preview.identity);
+    if (!grant.ok) throw new Error("expected authorization");
+    expect(
+      (
+        await session.generate({
+          model: other,
+          runId: "run",
+          signal,
+          disclosureIdentity: grant.value,
+        })
+      ).ok,
+    ).toBe(false);
     expect(calls).toBe(0);
-    session.updateInputs({ task, sources: [{ ...sources[0]!, version: "changed" }] });
-    const stale = await session.generate({ model, runId: "run", signal, disclosureIdentity });
-    expect(stale.ok).toBe(false);
-    const current = session.grantModelDisclosure(model);
-    session.revokeModelDisclosure();
-    const revoked = await session.generate({
+    const first = await session.generate({
       model,
       runId: "run",
       signal,
-      disclosureIdentity: current,
+      disclosureIdentity: grant.value,
     });
-    expect(revoked.ok).toBe(false);
+    if (!first.ok) throw new Error("expected proposal");
+    expect(JSON.parse(sent[0]!.messages[1]!.content)).toEqual({
+      id: preview.request.id,
+      revision: preview.request.revision,
+      task: preview.request.task,
+      sources: preview.request.sources,
+      previousPlan: preview.request.previousPlan,
+      instructions: preview.request.instructions,
+    });
+    expect(session.confirm(first.value.identity, first.value.revision).ok).toBe(true);
+    const stalePlan = await session.generate({
+      model,
+      runId: "revision",
+      signal,
+      disclosureIdentity: grant.value,
+    });
+    expect(stalePlan.ok).toBe(false);
+    expect(calls).toBe(1);
+    const denied = await session.generate({
+      model,
+      runId: "revision",
+      signal,
+      disclosureIdentity: grant.value,
+      instructions: "New instructions",
+    });
+    expect(denied.ok).toBe(false);
+    expect(calls).toBe(1);
+    expect(session.isEligible(first.value.identity, first.value.revision)).toBe(false);
+    const revision = session.previewModelDisclosure(model, "New instructions");
+    expect(revision.request.previousPlan).toEqual(first.value.plan);
+    expect(revision.request.instructions).toBe("New instructions");
+    expect(revision.identity).not.toBe(preview.identity);
+    const revisedGrant = session.authorizeModelDisclosure(model, revision.identity);
+    if (!revisedGrant.ok) throw new Error("expected revision authorization");
+    const revised = await session.generate({
+      model,
+      runId: "revision",
+      signal,
+      disclosureIdentity: revisedGrant.value,
+      instructions: "New instructions",
+    });
+    expect(revised.ok).toBe(true);
+    expect(calls).toBe(2);
+    expect(JSON.parse(sent[1]!.messages[1]!.content).previousPlan).toEqual(
+      revision.request.previousPlan,
+    );
+  });
+
+  test("disclosure rejects changed instructions, configuration, stale previews and revocation", async () => {
+    const session = new PlanningSession("plan1", inputs);
+    let calls = 0;
+    const delegate = modelFor();
+    const model: ModelPort = {
+      generate(request) {
+        calls++;
+        return delegate.generate(request);
+      },
+    };
+    const config = { model: "model-a", temperature: 0 };
+    const preview = session.previewModelDisclosure(model, "approved", config);
+    expect(preview.request.config).toEqual(config);
+    const grant = session.authorizeModelDisclosure(model, preview.identity);
+    if (!grant.ok) throw new Error("expected authorization");
+    expect(
+      (
+        await session.generate({
+          model,
+          runId: "run",
+          signal,
+          disclosureIdentity: grant.value,
+          instructions: "changed",
+          config,
+        })
+      ).ok,
+    ).toBe(false);
+    expect(
+      (
+        await session.generate({
+          model,
+          runId: "run",
+          signal,
+          disclosureIdentity: grant.value,
+          instructions: "approved",
+          config: { ...config, model: "model-b" },
+        })
+      ).ok,
+    ).toBe(false);
+    expect(calls).toBe(0);
+    const stale = session.previewModelDisclosure(model);
+    session.updateInputs({ task, sources: [{ ...sources[0]!, version: "changed" }] });
+    expect(session.authorizeModelDisclosure(model, stale.identity).ok).toBe(false);
+    const current = session.previewModelDisclosure(model);
+    const currentGrant = session.authorizeModelDisclosure(model, current.identity);
+    if (!currentGrant.ok) throw new Error("expected authorization");
+    session.revokeModelDisclosure();
+    expect(
+      (
+        await session.generate({
+          model,
+          runId: "run",
+          signal,
+          disclosureIdentity: currentGrant.value,
+        })
+      ).ok,
+    ).toBe(false);
+    expect(calls).toBe(0);
+  });
+
+  test("preview snapshots cannot be changed or authorized after concurrent state changes", async () => {
+    const session = new PlanningSession("plan1", inputs);
+    const model = modelFor();
+    const preview = session.previewModelDisclosure(model, "approved");
+    Object.assign(preview.request.sources[0]!, { content: "tampered" });
+    const grant = session.authorizeModelDisclosure(model, preview.identity);
+    if (!grant.ok) throw new Error("expected authorization");
+    const first = await session.generate({
+      model,
+      runId: "run",
+      signal,
+      disclosureIdentity: grant.value,
+      instructions: "approved",
+    });
+    if (!first.ok) throw new Error("expected proposal");
+    expect(first.value.plan.sources[0]?.content).toBe("Print JSON");
+    const stale = session.previewModelDisclosure(model, "revision");
+    session.confirm(first.value.identity, first.value.revision);
+    expect(session.authorizeModelDisclosure(model, stale.identity).ok).toBe(false);
+  });
+
+  test("a preview taken during generation cannot authorize after the plan changes", async () => {
+    const session = new PlanningSession("plan1", inputs);
+    const deferred = Promise.withResolvers<ModelResponse>();
+    let response: JsonValue = null;
+    const model: ModelPort = {
+      generate(request) {
+        response = proposal(
+          JSON.parse(request.messages[1]!.content) as Prompt,
+        ) as unknown as JsonValue;
+        return deferred.promise;
+      },
+    };
+    const pending = generate(session, model);
+    const preview = session.previewModelDisclosure(model, "adjustment");
+    deferred.resolve({ kind: "structured", value: response });
+    expect((await pending).ok).toBe(true);
+    expect(session.authorizeModelDisclosure(model, preview.identity).ok).toBe(false);
   });
 });

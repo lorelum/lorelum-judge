@@ -319,6 +319,14 @@ export async function createWorkspaceSnapshot(
     await closeWorkspaceReview(current);
   }
   const parent = await realpath(tmpdir());
+  const parentFromRoot = relative(captured.root, parent);
+  if (
+    !parentFromRoot ||
+    (parentFromRoot !== ".." &&
+      !parentFromRoot.startsWith(`..${sep}`) &&
+      !isAbsolute(parentFromRoot))
+  )
+    throw new Error("Private snapshot must be outside the original project");
   guard();
   const destination = await mkdtemp(join(parent, "lorelum-workflow-"));
   try {

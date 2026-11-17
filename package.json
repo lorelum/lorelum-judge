@@ -9,10 +9,11 @@
     "node": ">=22.0.0"
   },
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "apps/*"
   ],
   "scripts": {
-    "build": "bun run --filter '@lorelum/judge-protocol' build && bun run --filter '@lorelum/judge-runtime' build && bun run --filter '@lorelum/runtime-bubblewrap' build && bun run --filter '@lorelum/judge' build && bun run --filter '@lorelum/judge-workflow' build && bun run --filter '@lorelum/judge-testing' build && bun run --filter '@lorelum/provider-openai-compatible' build",
+    "build": "bun run --filter '@lorelum/judge-protocol' build && bun run --filter '@lorelum/judge-runtime' build && bun run --filter '@lorelum/runtime-bubblewrap' build && bun run --filter '@lorelum/judge' build && bun run --filter '@lorelum/judge-workflow' build && bun run --filter '@lorelum/judge-testing' build && bun run --filter '@lorelum/provider-openai-compatible' build && bun run --filter '@lorelum/judge-local-workspace' build",
     "check": "biome check .",
     "check:dist": "bun run scripts/check-dist.ts",
     "check:examples": "bun run scripts/check-examples.ts",
@@ -21,8 +22,10 @@
     "check:repository": "bun run scripts/repository-baseline.ts",
     "check:write": "biome check --write .",
     "generate:protocol": "bun run scripts/generate-protocol-types.ts",
+    "prepare:lumen": "bun run scripts/prepare-lumen.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
+    "workspace:local": "bun run build && bun run --filter '@lorelum/judge-local-workspace' start",
     "validate": "bun run check && bun run check:repository && bun run check:layers && bun run check:protocol-types && bun run typecheck && bun run build && bun run test && bun run check:dist && bun run check:examples"
   },
   "devDependencies": {

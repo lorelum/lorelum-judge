@@ -8,6 +8,7 @@ import type { JsonValue, ModelPort, SandboxPort } from "@lorelum/judge-runtime";
 import {
   ControlledExecutionSession,
   discoverWorkspace,
+  type ExecutionLifecycleEvent,
   PlanningSession,
   type VerificationConfiguration,
   verificationIdentity,
@@ -83,11 +84,14 @@ linux("controlled execution", () => {
           };
         },
       };
+      const disclosure = plan.previewModelDisclosure(planningModel);
+      const authorization = plan.authorizeModelDisclosure(planningModel, disclosure.identity);
+      if (!authorization.ok) throw new Error("planning disclosure authorization failed");
       const proposal = await plan.generate({
         model: planningModel,
         runId: "plan",
         signal: new AbortController().signal,
-        disclosureIdentity: plan.grantModelDisclosure(planningModel),
+        disclosureIdentity: authorization.value,
       });
       if (!proposal.ok) throw new Error("planning failed");
       plan.confirm(proposal.value.identity, proposal.value.revision);
@@ -180,12 +184,14 @@ linux("controlled execution", () => {
         checkerSession.authorize(checkerPermission.identity, implementer, "decision", checker),
       ).not.toThrow();
       checkerSession.revoke();
+      const events: ExecutionLifecycleEvent[] = [];
       session.authorize(permission.identity, implementer, "user-decision-1");
       const result = await session.implement({
         model: implementer,
         sandbox,
         runId: "run",
         signal: new AbortController().signal,
+        onEvent: (event) => events.push(event),
       });
       copy = result.workspaceRoot;
       expect(result.status).toBe("failed");
@@ -194,6 +200,16 @@ linux("controlled execution", () => {
       expect(copy).not.toBeNull();
       expect(await readFile(join(copy!, "file.txt"), "utf8")).toBe("changed");
       expect(calls).toBe(2);
+      expect(events.filter((event) => event.kind === "write").map((event) => event.stage)).toEqual([
+        "proposed",
+        "authorization",
+        "started",
+        "result",
+      ]);
+      expect(
+        events.find((event) => event.kind === "write" && event.stage === "result")?.status,
+      ).toBe("completed");
+      expect(events.at(-1)).toMatchObject({ kind: "terminal", status: "failed" });
       expect(result.reason).toContain("verification");
       const failureReport = result.report as { diff: string; unknowns: string[] };
       expect(failureReport.diff).toContain("-dirty");
@@ -246,10 +262,12 @@ linux("controlled execution", () => {
         "decision-cancelled",
         checker,
       );
+      const cancelledEvents: ExecutionLifecycleEvent[] = [];
       const cancelled = await cancelledSession.implement({
         model: doneModel,
         runId: "cancel-after-check",
         signal: controller.signal,
+        onEvent: (event) => cancelledEvents.push(event),
         sandbox: {
           async run() {
             controller.abort();
@@ -267,6 +285,12 @@ linux("controlled execution", () => {
       expect(cancelled.evidence?.checks[0]?.status).toBe("failed");
       expect(cancelled.evidence?.checks[0]?.exitCode).toBe(1);
       expect(cancelled.evidence?.checks[0]?.stdout).toBe("known failure");
+      expect(cancelledEvents).toContainEqual({
+        kind: "check",
+        id: "check",
+        stage: "result",
+        status: "failed",
+      });
       expect(cancelled.evidence?.review).toBeNull();
       const cancelledReport = cancelled.report as {
         checks: string;

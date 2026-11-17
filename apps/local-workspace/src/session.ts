@@ -1,0 +1,1960 @@
+import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { access } from "node:fs/promises";
+import { release } from "node:os";
+import {
+  collectCodeSources,
+  evaluateCode,
+  generateCodeSuggestions,
+  type ProgramChecker,
+  type SourceSession,
+} from "@lorelum/judge";
+import type { CodeEvaluationReport, CodeSuggestionReport } from "@lorelum/judge-protocol";
+import {
+  codeEvaluationReportIdentity,
+  type Identity,
+  identityOf,
+  validateWorkflowSessionEvent,
+  type WorkflowSessionEvent,
+} from "@lorelum/judge-protocol";
+import {
+  isModelPortError,
+  type ModelGenerationConfig,
+  type ModelPort,
+} from "@lorelum/judge-runtime";
+import {
+  ControlledExecutionSession,
+  closeWorkspaceReview,
+  discoverWorkspace,
+  type ExecutionPermission,
+  type ExecutionProposal,
+  type ImplementationResult,
+  type PlanningInputs,
+  PlanningSession,
+  planningModelMessages,
+  type VerificationConfiguration,
+  verificationIdentity,
+  type WorkspaceCandidateReview,
+  type WorkspaceExclusion,
+} from "@lorelum/judge-workflow";
+import {
+  describeEndpoint,
+  OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+  PROVIDER_ADAPTER_VERSION,
+  PROVIDER_LABEL,
+} from "@lorelum/provider-openai-compatible";
+import { createBubblewrapSandbox } from "@lorelum/runtime-bubblewrap";
+import { createConfiguredModel, createOfflineModel } from "./model.js";
+
+type HostModel = {
+  readonly endpoint: string;
+  readonly apiKey?: string;
+  readonly config: ModelGenerationConfig;
+};
+type PendingDisclosure = {
+  readonly identity: Identity;
+  readonly instructions: string;
+  readonly request: unknown;
+  readonly recipient: string;
+  readonly mode: string;
+  authorized: boolean;
+};
+type ModelSelection = {
+  readonly mode: "offline" | "configured";
+  readonly recipient: string;
+  readonly model: ModelPort;
+  readonly config?: ModelGenerationConfig;
+  readonly offline?: { readonly targetPath: string; readonly replacement: string };
+};
+type ChatMessage = { readonly role: "user" | "assistant"; readonly content: string };
+type ChatDisclosure = {
+  readonly identity: string;
+  readonly recipient: string;
+  readonly mode: "configured";
+  readonly request: {
+    readonly messages: readonly ChatMessage[];
+    readonly config: ModelGenerationConfig;
+  };
+  authorized: boolean;
+};
+type ExecutionDisclosure = {
+  readonly identity: string;
+  readonly recipient: string;
+  readonly request: { readonly messages: unknown; readonly config: ModelGenerationConfig };
+  readonly decide: (allowed: boolean) => void;
+  readonly owner: "execution" | "review";
+  readonly expiresAt?: number;
+};
+type ReviewState = {
+  status: "idle" | "running" | "completed" | "partial" | "failed" | "cancelled";
+  report: unknown | null;
+  text: string | null;
+  issues: unknown | null;
+};
+const emptyReview = (): ReviewState => ({ status: "idle", report: null, text: null, issues: null });
+
+function object(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Expected a JSON object");
+  return value as Record<string, unknown>;
+}
+function text(value: unknown, name: string): string {
+  if (typeof value !== "string" || !value.trim())
+    throw new Error(`${name} must be a nonempty string`);
+  return value;
+}
+const PROTOCOL_FIELDS = [
+  "model",
+  "sessionId",
+  "sequence",
+  "workspace",
+  "diagnostics",
+  "plan",
+  "disclosure",
+  "chat",
+  "chatDisclosure",
+  "execution",
+  "executionDisclosure",
+  "evaluation",
+  "suggestions",
+  "issues",
+  "status",
+  "recipient",
+  "config",
+  "identity",
+  "request",
+  "messages",
+  "role",
+  "content",
+  "authorized",
+  "result",
+  "proposal",
+  "error",
+  "path",
+  "origin",
+  "exclusionReason",
+  "mode",
+  "size",
+  "revision",
+  "eligible",
+  "acceptanceProposed",
+  "goal",
+  "scope",
+  "task",
+  "acceptance",
+  "id",
+  "text",
+  "source",
+  "ref",
+  "steps",
+  "description",
+  "acceptanceIds",
+  "checks",
+  "nonGoals",
+  "missing",
+  "conflicts",
+  "sourceIds",
+  "root",
+  "gitIdentity",
+  "candidates",
+  "temperature",
+  "topP",
+  "maxTokens",
+  "seed",
+  "permission",
+  "verification",
+  "reason",
+  "workspaceRoot",
+  "evidence",
+  "candidateIdentity",
+  "review",
+  "reviewStatus",
+  "stopReason",
+  "completeness",
+  "report",
+  "diff",
+  "diffUnavailable",
+  "quality",
+  "diffAvailable",
+  "diffRevealed",
+  "actions",
+  "planIdentity",
+  "planRevision",
+  "workspaceIdentity",
+  "readPaths",
+  "commandReadPaths",
+  "writePaths",
+  "writablePaths",
+  "commands",
+  "disclosures",
+  "modelRecipient",
+  "limits",
+  "expiresAt",
+  "isolation",
+  "verificationIdentity",
+  "executable",
+  "args",
+  "cwd",
+  "totalTimeMs",
+  "commandTimeMs",
+  "modelCalls",
+  "outputBytes",
+];
+function conflictsWithProtocol(secret: string): boolean {
+  return PROTOCOL_FIELDS.some((key) => key.includes(secret));
+}
+function secretForms(secret: string, limit: number): string[] {
+  const forms = [secret];
+  let previous = secret;
+  while (previous.length <= limit) {
+    const encoded = JSON.stringify(previous).slice(1, -1);
+    if (encoded === previous || encoded.length > limit) break;
+    forms.push(encoded);
+    previous = encoded;
+  }
+  return forms.reverse();
+}
+function decodesToSecret(value: string, secret: string): boolean {
+  for (;;) {
+    if (value.includes(secret)) return true;
+    const decoded = value
+      .replace(/\\u([0-9a-f]{4})/gi, (_, hex: string) =>
+        String.fromCharCode(Number.parseInt(hex, 16)),
+      )
+      .replace(/\\\\/g, "\\");
+    if (decoded === value) return false;
+    value = decoded;
+  }
+}
+function maskSecret(value: string, secret: string): string {
+  for (const form of secretForms(secret, value.length))
+    value = value.split(form).join("[redacted]");
+  if (decodesToSecret(value, secret)) return "[redacted]";
+  return value;
+}
+function containsSecret(value: unknown, secret: string): boolean {
+  if (typeof value === "string")
+    return (
+      secretForms(secret, value.length).some((form) => value.includes(form)) ||
+      decodesToSecret(value, secret)
+    );
+  if (Array.isArray(value)) return value.some((item) => containsSecret(item, secret));
+  if (value && typeof value === "object")
+    return Object.values(value).some((item) => containsSecret(item, secret));
+  return false;
+}
+function containsSecretKey(value: unknown, secret: string): boolean {
+  if (Array.isArray(value)) return value.some((item) => containsSecretKey(item, secret));
+  if (value && typeof value === "object")
+    return Object.entries(value).some(
+      ([key, item]) => containsSecret(key, secret) || containsSecretKey(item, secret),
+    );
+  return false;
+}
+function redact(value: unknown, secret: string): unknown {
+  if (!secret) return value;
+  if (typeof value === "string") return maskSecret(value, secret);
+  if (Array.isArray(value)) return value.map((item) => redact(item, secret));
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        PROTOCOL_FIELDS.includes(key) ? key : maskSecret(key, secret),
+        redact(item, secret),
+      ]),
+    );
+  return value;
+}
+function json(value: unknown): void {
+  const visit = (item: unknown): void => {
+    if (item === null || typeof item === "string" || typeof item === "boolean") return;
+    if (typeof item === "number" && Number.isFinite(item)) return;
+    if (Array.isArray(item)) {
+      for (const entry of item) visit(entry);
+      return;
+    }
+    if (typeof item === "object" && Object.getPrototypeOf(item) === Object.prototype) {
+      for (const entry of Object.values(item as Record<string, unknown>)) visit(entry);
+      return;
+    }
+    throw new Error("Only JSON values are accepted");
+  };
+  visit(value);
+}
+
+/** In-memory composition root. JSON proposals never become capabilities without a separate decision. */
+export class SessionRouter {
+  readonly #id = randomUUID();
+  #hostModel: HostModel | undefined;
+  readonly #secrets = new Set<string>();
+  readonly #listeners = new Set<(event: unknown) => void>();
+  #sequence = 0;
+  #generation = 0;
+  #workspace: WorkspaceCandidateReview | undefined;
+  #sandboxAvailable: boolean | null = null;
+  #model: ModelSelection | undefined;
+  #plan: PlanningSession | undefined;
+  #disclosure: PendingDisclosure | undefined;
+  #chatDisclosure: ChatDisclosure | undefined;
+  #executionDisclosure: ExecutionDisclosure | undefined;
+  #evaluation: ReviewState = emptyReview();
+  #suggestions: ReviewState = emptyReview();
+  #reviewController: AbortController | undefined;
+  #reviewKind: "evaluation" | "suggestions" | undefined;
+  #chatModel: ModelSelection | undefined;
+  #chatMessages: readonly ChatMessage[] = [];
+  #chatStatus: "idle" | "running" | "completed" | "failed" = "idle";
+  #chatGeneration = 0;
+  #chatController: AbortController | undefined;
+  #execution: ControlledExecutionSession | undefined;
+  #proposal: ExecutionProposal | undefined;
+  #executionStatus:
+    | "idle"
+    | "proposed"
+    | "authorized"
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "timed_out" = "idle";
+  #result: unknown = null;
+  #controller: AbortController | undefined;
+  #verification: unknown = null;
+  #checker: ProgramChecker | undefined;
+  readonly #actionIds = new Map<string, string>();
+  readonly #actions = new Map<string, WorkflowSessionEvent>();
+  readonly #actionDetails = new Map<string, { path?: string; commandIndex?: number }>();
+  readonly #previousResults: unknown[] = [];
+  #pendingDiff: string | null = null;
+  #diffRevealed = false;
+
+  constructor(options: { readonly configuredModel?: HostModel } = {}) {
+    this.#hostModel = options.configuredModel
+      ? structuredClone(options.configuredModel)
+      : undefined;
+    if (this.#hostModel?.apiKey && conflictsWithProtocol(this.#hostModel.apiKey))
+      throw new Error("API key conflicts with the session protocol");
+    if (this.#hostModel?.apiKey) this.#secrets.add(this.#hostModel.apiKey);
+  }
+
+  #safe(value: unknown): unknown {
+    if (typeof value === "string") {
+      let sanitized = value;
+      for (const secret of this.#secrets) sanitized = maskSecret(sanitized, secret);
+      return sanitized;
+    }
+    if (Array.isArray(value)) return value.map((item) => this.#safe(item));
+    if (value && typeof value === "object")
+      return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => {
+          for (const secret of this.#secrets) key = maskSecret(key, secret);
+          return [key, this.#safe(item)];
+        }),
+      );
+    return value;
+  }
+  #emit(
+    kind: string,
+    stage: string,
+    status: string,
+    internalId?: string,
+    reason: WorkflowSessionEvent["reason"] = null,
+    details?: { path?: string; commandIndex?: number },
+  ): void {
+    const key = `${kind}\0${internalId ?? kind}`;
+    let actionId = this.#actionIds.get(key);
+    if (!actionId) {
+      actionId = randomUUID();
+      this.#actionIds.set(key, actionId);
+    }
+    const actionKind: WorkflowSessionEvent["actionKind"] =
+      kind === "read" ||
+      kind === "write" ||
+      kind === "command" ||
+      kind === "model" ||
+      kind === "check" ||
+      kind === "review"
+        ? kind
+        : "unknown";
+    const terminal = kind === "terminal";
+    const projectedStatus =
+      kind === "check" && stage === "result" && status === "completed"
+        ? "passed"
+        : status === "created"
+          ? "completed"
+          : status;
+    const projectedStage = terminal
+      ? "terminal"
+      : (kind === "check" || kind === "review") &&
+          stage === "result" &&
+          (projectedStatus === "passed" ||
+            projectedStatus === "failed" ||
+            projectedStatus === "cancelled" ||
+            projectedStatus === "timed_out" ||
+            projectedStatus === "truncated" ||
+            projectedStatus === "unavailable" ||
+            projectedStatus === "unknown")
+        ? "check"
+        : stage;
+    const event = {
+      schema: "workflow-session-event/v1",
+      sessionId: this.#id,
+      sequence: this.#sequence + 1,
+      stage: projectedStage,
+      actionId: terminal ? null : actionId,
+      actionKind: terminal ? null : actionKind,
+      status: projectedStatus,
+      reason,
+    };
+    const checked = validateWorkflowSessionEvent(event);
+    if (!checked.ok) return;
+    this.#sequence++;
+    if (checked.value.actionId) this.#actions.set(checked.value.actionId, checked.value);
+    if (checked.value.actionId && details) this.#actionDetails.set(checked.value.actionId, details);
+    for (const listener of this.#listeners) {
+      try {
+        listener(checked.value);
+      } catch {
+        /* observers cannot affect authority */
+      }
+    }
+  }
+  subscribe(listener: (event: unknown) => void): () => void {
+    this.#listeners.add(listener);
+    return () => {
+      this.#listeners.delete(listener);
+    };
+  }
+  snapshot(): unknown {
+    return this.#safe(
+      structuredClone({
+        sessionId: this.#id,
+        sequence: this.#sequence,
+        workspace: this.#workspace ?? null,
+        diagnostics: {
+          platform: process.platform,
+          secureDiscovery: this.#workspace ? "passed" : "not_checked",
+          bubblewrap:
+            this.#sandboxAvailable === null
+              ? "not_checked"
+              : this.#sandboxAvailable
+                ? "present"
+                : "unavailable",
+          isolation: "not_checked_until_execution",
+        },
+        model: this.#model
+          ? {
+              mode: this.#model.mode,
+              recipient: this.#model.recipient,
+              config: this.#model.config ?? null,
+            }
+          : null,
+        plan: this.#plan?.review() ?? null,
+        disclosure: this.#disclosure ?? null,
+        chatDisclosure: this.#chatDisclosure ?? null,
+        executionDisclosure: this.#executionDisclosure
+          ? {
+              identity: this.#executionDisclosure.identity,
+              recipient: this.#executionDisclosure.recipient,
+              request: this.#executionDisclosure.request,
+            }
+          : null,
+        chat: { messages: this.#chatMessages, status: this.#chatStatus },
+        evaluation: this.#evaluation,
+        suggestions: this.#suggestions,
+        execution: {
+          status: this.#executionStatus,
+          proposal: this.#proposal ?? null,
+          verification: this.#verification,
+          result: this.#result,
+          diffAvailable: this.#pendingDiff !== null,
+          diffRevealed: this.#diffRevealed,
+          previousResults: this.#previousResults,
+          actions: [...this.#actions.values()].map((event) => ({
+            event,
+            ...this.#actionDetails.get(event.actionId ?? ""),
+          })),
+        },
+      }),
+    );
+  }
+  #clearExecution(): void {
+    if (this.#executionDisclosure?.owner === "execution") this.#executionDisclosure.decide(false);
+    if (this.#executionStatus === "running") this.#workspace = undefined;
+    this.#controller?.abort();
+    this.#execution?.revoke();
+    this.#execution = undefined;
+    if (this.#result !== null) this.#previousResults.push(this.#result);
+    this.#proposal = undefined;
+    this.#pendingDiff = null;
+    this.#diffRevealed = false;
+    this.#verification = null;
+    this.#checker = undefined;
+    this.#controller = undefined;
+    this.#executionStatus = "idle";
+    this.#result = null;
+  }
+  #invalidateChat(): void {
+    this.#chatGeneration++;
+    this.#chatController?.abort();
+    this.#chatController = undefined;
+    this.#chatDisclosure = undefined;
+    this.#chatModel = undefined;
+    if (this.#chatStatus === "running") this.#chatStatus = "idle";
+  }
+  #invalidate(): void {
+    this.#generation++;
+    this.#cancelReview();
+    this.#reviewController = undefined;
+    this.#invalidateChat();
+    this.#controller?.abort();
+    this.#clearExecution();
+    this.#disclosure = undefined;
+    this.#plan?.revokeModelDisclosure();
+  }
+  #selectedPathsSource(value: unknown, expectedWorkspace: unknown) {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value) || value.some((path) => typeof path !== "string"))
+      throw new Error("Invalid selected project paths");
+    const workspace = this.#workspace;
+    if (!value.length) return undefined;
+    if (
+      !workspace ||
+      expectedWorkspace !== workspace.identity ||
+      value.some(
+        (path) =>
+          !workspace.candidates.some(
+            (item) => item.path === path && item.status === "present" && !item.exclusionReason,
+          ),
+      )
+    )
+      throw new Error("Invalid selected project paths");
+    return {
+      id: "project-paths",
+      kind: "reference" as const,
+      locator: "selected-workspace",
+      version: workspace.identity,
+      content: JSON.stringify({
+        paths: workspace.candidates
+          .filter((item) => value.includes(item.path))
+          .map((item) => ({ path: item.path, contentIdentity: item.contentIdentity })),
+      }),
+      status: "available" as const,
+    };
+  }
+  #selectConfigured(hostModel: HostModel): void {
+    const selected = createConfiguredModel(hostModel);
+    if (hostModel.apiKey) new Headers({ authorization: `Bearer ${hostModel.apiKey}` });
+    const secret = hostModel.apiKey;
+    if (secret && conflictsWithProtocol(secret))
+      throw new Error("API key conflicts with the session protocol");
+    const protectedKeys = secret ? [...this.#secrets, secret] : [...this.#secrets];
+    let recipient = selected.recipient;
+    for (;;) {
+      if (protectedKeys.some((key) => recipient.includes(key)))
+        throw new Error("Model recipient or configuration cannot be safely displayed");
+      const decoded = recipient.replace(/(?:%[0-9a-f]{2})+/gi, (part) => {
+        try {
+          return decodeURIComponent(part);
+        } catch {
+          return part.replace(/%([0-9a-f]{2})/gi, (_, hex: string) =>
+            String.fromCharCode(Number.parseInt(hex, 16)),
+          );
+        }
+      });
+      if (decoded === recipient) break;
+      recipient = decoded;
+    }
+    if (protectedKeys.some((key) => containsSecret(selected.config, key)))
+      throw new Error("Model recipient or configuration cannot be safely displayed");
+    const model: ModelPort = {
+      generate: async (request) => {
+        if ([...this.#secrets].some((key) => containsSecret(request.messages, key)))
+          throw new Error("Credential disclosure refused");
+        if (
+          this.#executionStatus === "running" &&
+          request.signal !== this.#chatController?.signal
+        ) {
+          const permission = this.#proposal?.permission;
+          if (
+            !permission ||
+            this.#executionDisclosure ||
+            request.signal.aborted ||
+            Date.now() >= permission.expiresAt
+          )
+            throw new Error("Execution disclosure unavailable");
+          const messages = structuredClone(request.messages);
+          const generation = this.#generation;
+          const approved = await new Promise<boolean>((resolve) => {
+            let settled = false;
+            const finish = (allowed: boolean) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              request.signal.removeEventListener("abort", abort);
+              if (this.#executionDisclosure === pending) this.#executionDisclosure = undefined;
+              resolve(allowed);
+            };
+            const abort = () => {
+              finish(false);
+              this.#emit("model", "result", "cancelled", pending.identity);
+            };
+            const timer = setTimeout(
+              abort,
+              Math.min(2_147_483_647, Math.max(0, permission.expiresAt - Date.now())),
+            );
+            const pending: ExecutionDisclosure = {
+              owner: "execution",
+              expiresAt: permission.expiresAt,
+              identity: randomUUID(),
+              recipient: selected.recipient,
+              request: { messages, config: structuredClone(request.config ?? selected.config) },
+              decide: finish,
+            };
+            this.#executionDisclosure = pending;
+            request.signal.addEventListener("abort", abort, { once: true });
+            if (request.signal.aborted) abort();
+            else this.#emit("model", "proposed", "proposed", pending.identity);
+          });
+          if (
+            !approved ||
+            request.signal.aborted ||
+            generation !== this.#generation ||
+            this.#executionStatus !== "running" ||
+            Date.now() >= permission.expiresAt
+          )
+            throw new Error("Execution disclosure denied or expired");
+          return selected.model.generate({ ...request, messages });
+        }
+        return selected.model.generate(request);
+      },
+    };
+    this.#invalidate();
+    if (secret) this.#secrets.add(secret);
+    this.#hostModel = hostModel;
+    this.#chatMessages = [];
+    this.#chatStatus = "idle";
+    this.#model = { mode: "configured", ...selected, model };
+  }
+  #cancelReview(preserveResult = false): void {
+    const kind = this.#reviewKind;
+    if (!kind) return;
+    this.#reviewKind = undefined;
+    this.#reviewController?.abort();
+    if (!preserveResult) this.#reviewController = undefined;
+    if (this.#executionDisclosure?.owner === "review") this.#executionDisclosure.decide(false);
+    const state = kind === "evaluation" ? this.#evaluation : this.#suggestions;
+    state.status = "cancelled";
+    this.#emit("model", "result", "cancelled");
+  }
+  #startReview(
+    kind: "evaluation" | "suggestions",
+    target?: string | { kind: "snippet"; text: string },
+    request?: string,
+  ): void {
+    const selected = this.#requireModel();
+    if (selected.mode !== "configured" || !selected.config || !this.#hostModel)
+      throw new Error("Configured model is required for review");
+    if (this.#reviewKind || this.#executionStatus === "running" || this.#controller)
+      throw new Error("Another background operation is running");
+    const evaluation = this.#evaluation.report as CodeEvaluationReport | null;
+    if (
+      kind === "suggestions" &&
+      (!evaluation || !["completed", "partial"].includes(this.#evaluation.status))
+    )
+      throw new Error("A completed evaluation is required");
+    const config = selected.config;
+    const { model: modelName, ...decoding } = config;
+    const method = {
+      kind: "llm" as const,
+      provider: {
+        protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+        adapterVersion: PROVIDER_ADAPTER_VERSION,
+      },
+      endpointIdentity: describeEndpoint(this.#hostModel.endpoint).identity,
+      model: { provider: PROVIDER_LABEL, name: modelName },
+      ...(Object.keys(decoding).length ? { decoding } : {}),
+    };
+    this.#invalidate();
+    this.#plan = undefined;
+    const controller = new AbortController();
+    this.#reviewController = controller;
+    this.#reviewKind = kind;
+    if (kind === "evaluation") {
+      this.#evaluation = { ...emptyReview(), status: "running" };
+      this.#suggestions = emptyReview();
+    } else this.#suggestions = { ...emptyReview(), status: "running" };
+    let queue = Promise.resolve();
+    const model: ModelPort = {
+      generate: (modelRequest) => {
+        const run = async () => {
+          if (
+            controller.signal.aborted ||
+            modelRequest.signal.aborted ||
+            this.#reviewController !== controller
+          )
+            throw new Error("Review cancelled");
+          if ([...this.#secrets].some((key) => containsSecret(modelRequest.messages, key)))
+            throw new Error("Credential disclosure refused");
+          if (this.#executionDisclosure) throw new Error("Disclosure unavailable");
+          const messages = structuredClone(modelRequest.messages);
+          const { promise, resolve } = Promise.withResolvers<boolean>();
+          let settled = false;
+          const finish = (allowed: boolean) => {
+            if (settled) return;
+            settled = true;
+            controller.signal.removeEventListener("abort", abort);
+            modelRequest.signal.removeEventListener("abort", abort);
+            if (this.#executionDisclosure === pending) this.#executionDisclosure = undefined;
+            resolve(allowed);
+          };
+          const abort = () => finish(false);
+          const pending: ExecutionDisclosure = {
+            owner: "review",
+            identity: randomUUID(),
+            recipient: selected.recipient,
+            request: { messages, config: structuredClone(modelRequest.config ?? config) },
+            decide: finish,
+          };
+          this.#executionDisclosure = pending;
+          controller.signal.addEventListener("abort", abort, { once: true });
+          modelRequest.signal.addEventListener("abort", abort, { once: true });
+          if (controller.signal.aborted || modelRequest.signal.aborted) abort();
+          else this.#emit("model", "proposed", "proposed", pending.identity);
+          const approved = await promise;
+          if (
+            !approved ||
+            controller.signal.aborted ||
+            modelRequest.signal.aborted ||
+            this.#reviewController !== controller
+          )
+            throw new Error("Review disclosure denied or cancelled");
+          return selected.model.generate({ ...modelRequest, messages });
+        };
+        const result = queue.then(run);
+        queue = result.then(
+          () => undefined,
+          () => undefined,
+        );
+        return result;
+      },
+    };
+    const ports = { model, method, signal: controller.signal, allowModelDisclosure: true };
+    this.#emit("model", "started", "started");
+    const repository =
+      typeof target === "string"
+        ? new URL(target).pathname.split("/").slice(1, 3).join("/")
+        : undefined;
+    const work =
+      kind === "evaluation"
+        ? (async () => {
+            let repositories: string[] | undefined;
+            if (typeof target === "string" && repository) {
+              const number = new URL(target).pathname.split("/")[4];
+              const response = await fetch(
+                `https://api.github.com/repos/${repository}/pulls/${number}`,
+                {
+                  headers: { Accept: "application/vnd.github+json" },
+                  redirect: "error",
+                  signal: controller.signal,
+                },
+              );
+              if (!response.ok) throw new Error("GitHub PR metadata unavailable");
+              const metadata = object(await response.json());
+              const base = object(object(metadata.base).repo).full_name;
+              const head = object(object(metadata.head).repo).full_name;
+              if (
+                typeof base !== "string" ||
+                base.toLowerCase() !== repository.toLowerCase() ||
+                typeof head !== "string" ||
+                !/^(?!\.{1,2}\/)[\w.-]+\/(?!\.{1,2}$)[\w.-]+$/.test(head)
+              )
+                throw new Error("GitHub PR metadata invalid");
+              repositories = [repository, head];
+            }
+            return evaluateCode(
+              { target: target!, ...(request === undefined ? {} : { request }) },
+              { ...ports, ...(repositories ? { sources: { github: { repositories } } } : {}) },
+            );
+          })()
+        : generateCodeSuggestions({ evaluation: evaluation! }, ports);
+    void work
+      .then((result) => {
+        if (this.#reviewController !== controller) return;
+        if (controller.signal.aborted && (!result.ok || result.value.status !== "cancelled")) {
+          this.#reviewController = undefined;
+          return;
+        }
+        const state: ReviewState = result.ok
+          ? { status: result.value.status, report: result.value, text: result.text, issues: null }
+          : { status: "failed", report: null, text: null, issues: result.issues };
+        if (kind === "evaluation") this.#evaluation = state;
+        else this.#suggestions = state;
+        this.#reviewController = undefined;
+        this.#reviewKind = undefined;
+        this.#emit(
+          "model",
+          "result",
+          state.status === "cancelled"
+            ? "cancelled"
+            : state.status === "failed"
+              ? "failed"
+              : "completed",
+        );
+      })
+      .catch((error: unknown) => {
+        if (this.#reviewController !== controller) return;
+        if (controller.signal.aborted) {
+          this.#reviewController = undefined;
+          return;
+        }
+        const state: ReviewState = {
+          status: "failed",
+          report: null,
+          text: null,
+          issues: [
+            {
+              code:
+                error instanceof Error && error.message.startsWith("GitHub PR metadata")
+                  ? "github_pr_unavailable"
+                  : "review_failed",
+              message:
+                error instanceof Error && error.message.startsWith("GitHub PR metadata")
+                  ? "无法读取 PR 信息，请检查链接、公开访问权限及 GitHub 速率限制。"
+                  : "评价未完成，请检查模型配置和来源。",
+            },
+          ],
+        };
+        if (kind === "evaluation") this.#evaluation = state;
+        else this.#suggestions = state;
+        this.#reviewController = undefined;
+        this.#reviewKind = undefined;
+        this.#emit("model", "result", "failed");
+      });
+  }
+  #requirePlan(): PlanningSession {
+    if (!this.#plan) throw new Error("Create a planning session first");
+    return this.#plan;
+  }
+  #requireModel(): ModelSelection {
+    if (!this.#model) throw new Error("Select a model first");
+    return this.#model;
+  }
+  #unwrap<T>(result: { ok: true; value: T } | { ok: false; error: unknown }): T {
+    if (!result.ok) {
+      const error = result.error;
+      if (
+        error &&
+        typeof error === "object" &&
+        "kind" in error &&
+        error.kind === "model" &&
+        "error" in error &&
+        isModelPortError(error.error)
+      ) {
+        throw new Error("Configured model request failed");
+      }
+      throw new Error(`Planning failed: ${JSON.stringify(this.#safe(error))}`);
+    }
+    return result.value;
+  }
+  #projectResult(
+    result: ImplementationResult,
+    permission: ExecutionPermission,
+    terminalReason: WorkflowSessionEvent["reason"],
+  ): unknown {
+    const reason = (value: string | null | undefined): string | null => {
+      if (!value) return null;
+      const lower = value
+        .toLowerCase()
+        .replace(/^authorization(?:, budget, or review| or budget):\s*/, "");
+      if (lower.includes("permission revoked, expired, cancelled or plan changed")) {
+        if (terminalReason === "expired") return "expired";
+        if (terminalReason === "precondition_changed") return "precondition_changed";
+        return "cancelled_or_revoked";
+      }
+      if (lower.includes("invalid authorization record")) return "verification_unavailable";
+      if (lower.includes("expir")) return "expired";
+      if (lower.includes("revok") || lower.includes("cancel") || lower.includes("abort"))
+        return "cancelled_or_revoked";
+      if (lower.includes("budget") || lower.includes("limit") || lower.includes("timed"))
+        return "budget_or_timeout";
+      if (
+        lower.includes("workspace") ||
+        lower.includes("precondition") ||
+        lower.includes("changed")
+      )
+        return "precondition_changed";
+      if (lower.includes("authoriz") || lower.includes("permission")) return "authorization_denied";
+      if (lower.includes("review") || lower.includes("evidence") || lower.includes("verification"))
+        return "verification_unavailable";
+      return "error_or_unavailable";
+    };
+    const source =
+      result.report && typeof result.report === "object"
+        ? (result.report as Record<string, unknown>)
+        : {};
+    const report = {
+      candidateIdentity:
+        typeof source.candidateIdentity === "string" ? source.candidateIdentity : null,
+      quality: typeof source.quality === "string" ? source.quality : "unknown",
+      checks:
+        result.evidence?.completeness ??
+        (typeof source.checks === "string" ? source.checks : "incomplete"),
+      enforcement: typeof source.enforcement === "string" ? source.enforcement : "unknown",
+      diff: null,
+      diffUnavailable:
+        typeof source.diff === "string"
+          ? "Explicit local diff reveal required"
+          : "Candidate diff unavailable",
+    };
+    const evidence = result.evidence
+      ? {
+          candidateIdentity: result.evidence.candidateIdentity,
+          candidateEvidenceAvailable: result.evidence.candidateEvidenceAvailable,
+          checks: result.evidence.checks.map(({ error, stdout, stderr, ...check }) => ({
+            ...check,
+            error: reason(error),
+            stdout: permission.disclosures.includes("command-output") ? stdout : null,
+            stderr: permission.disclosures.includes("command-output") ? stderr : null,
+          })),
+          review: result.evidence.review?.ok ? result.evidence.review : null,
+          gate: result.evidence.gate?.ok ? result.evidence.gate : null,
+          completeness: result.evidence.completeness,
+          enforcement: result.evidence.enforcement,
+          stopReason: reason(result.evidence.stopReason),
+          reviewStatus:
+            result.evidence.review === null
+              ? "unavailable"
+              : result.evidence.review.ok
+                ? "completed"
+                : "failed",
+          gateStatus:
+            result.evidence.gate === null
+              ? "unavailable"
+              : result.evidence.gate.ok
+                ? "completed"
+                : "failed",
+          usage: result.evidence.usage,
+        }
+      : null;
+    return this.#safe({
+      status: result.status,
+      reason: result.status === "completed" ? null : reason(result.reason),
+      workspaceRoot: result.workspaceRoot,
+      usage: result.usage,
+      evidence,
+      report,
+    });
+  }
+  async dispatch(action: string, payload: unknown): Promise<unknown> {
+    let candidateSecret = "";
+    try {
+      if (
+        action === "model.configure" &&
+        payload &&
+        typeof payload === "object" &&
+        "apiKey" in payload &&
+        typeof payload.apiKey === "string"
+      )
+        candidateSecret = payload.apiKey;
+      json(payload);
+      const data = object(payload);
+      if (action === "evaluation.start") {
+        const target = data.target;
+        if (typeof target === "string") {
+          if (
+            !/^https:\/\/github\.com\/(?!\.{1,2}\/)[\w.-]+\/(?!\.{1,2}\/)[\w.-]+\/pull\/[1-9]\d*\/?$/i.test(
+              target,
+            )
+          )
+            throw new Error("Target must be a GitHub pull request URL or code snippet");
+        } else {
+          const snippet = object(target);
+          if (
+            snippet.kind !== "snippet" ||
+            typeof snippet.text !== "string" ||
+            !snippet.text.trim() ||
+            Object.keys(snippet).some((key) => key !== "kind" && key !== "text")
+          )
+            throw new Error("Target must be a GitHub pull request URL or code snippet");
+        }
+        if (
+          data.request !== undefined &&
+          (typeof data.request !== "string" || !data.request.trim())
+        )
+          throw new Error("Request must be nonempty text");
+        this.#startReview(
+          "evaluation",
+          target as string | { kind: "snippet"; text: string },
+          data.request as string | undefined,
+        );
+        return { ok: true, state: this.snapshot() };
+      }
+      if (action === "suggestions.start") {
+        this.#startReview("suggestions");
+        return { ok: true, state: this.snapshot() };
+      }
+      if (action === "evaluation.cancel" || action === "suggestions.cancel") {
+        if (this.#reviewKind !== (action === "evaluation.cancel" ? "evaluation" : "suggestions"))
+          throw new Error("No matching review to cancel");
+        this.#cancelReview(action === "evaluation.cancel");
+        return { ok: true, state: this.snapshot() };
+      }
+      switch (action) {
+        case "workspace.discover": {
+          let root = text(data.root, "root");
+          if (/^[A-Za-z]:[\\/]/.test(root)) {
+            if (process.platform !== "linux" || !/microsoft/i.test(release()))
+              throw new Error("Windows paths require WSL and wslpath");
+            try {
+              root = execFileSync("wslpath", ["-u", root], {
+                encoding: "utf8",
+                timeout: 5000,
+                maxBuffer: 65536,
+              }).replace(/\r?\n$/, "");
+              if (!root.startsWith("/")) throw new Error("invalid path");
+            } catch {
+              throw new Error("Windows path could not be converted by wslpath");
+            }
+          }
+          if (!Array.isArray(data.exclusions)) throw new Error("exclusions must be an array");
+          this.#invalidate();
+          this.#plan = undefined;
+          const generation = this.#generation;
+          this.#sandboxAvailable = null;
+          const old = this.#workspace;
+          this.#workspace = undefined;
+          if (old) await closeWorkspaceReview(old);
+          const review = await discoverWorkspace(root, data.exclusions as WorkspaceExclusion[]);
+          if (generation !== this.#generation) {
+            await closeWorkspaceReview(review);
+            throw new Error("Workspace discovery was superseded");
+          }
+          const sandboxAvailable =
+            process.platform === "linux" &&
+            (await access("/usr/bin/bwrap").then(
+              () => true,
+              () => false,
+            ));
+          if (generation !== this.#generation) {
+            await closeWorkspaceReview(review);
+            throw new Error("Workspace discovery was superseded");
+          }
+          this.#sandboxAvailable = sandboxAvailable;
+          this.#workspace = review;
+          this.#emit("workspace", "result", "completed");
+          break;
+        }
+        case "model.offline": {
+          const targetPath = text(data.targetPath, "targetPath");
+          if (typeof data.replacement !== "string") throw new Error("replacement must be a string");
+          const checkDescription = text(data.checkDescription, "checkDescription");
+          const model = createOfflineModel({
+            targetPath,
+            replacement: data.replacement,
+            checkDescription,
+          });
+          this.#invalidate();
+          this.#model = {
+            mode: "offline",
+            recipient: "offline (local deterministic model)",
+            model,
+            offline: { targetPath, replacement: data.replacement },
+          };
+          this.#emit("model", "result", "completed");
+          break;
+        }
+        case "model.configure": {
+          const endpoint = text(data.endpoint, "endpoint");
+          const model = text(data.model, "model");
+          if (typeof data.apiKey !== "string") throw new Error("apiKey must be a string");
+          this.#selectConfigured({
+            endpoint,
+            ...(data.apiKey ? { apiKey: data.apiKey } : {}),
+            config: { model },
+          });
+          this.#emit("model", "result", "completed");
+          break;
+        }
+        case "model.configured": {
+          if (!this.#hostModel) throw new Error("No configured model is available from the host");
+          this.#selectConfigured(this.#hostModel);
+          this.#emit("model", "result", "completed");
+          break;
+        }
+        case "chat.preview": {
+          const model = this.#requireModel();
+          if (model.mode !== "configured" || !model.config)
+            throw new Error("Offline model does not support chat");
+          if (!Array.isArray(data.messages) || data.messages.length === 0)
+            throw new Error("Chat messages must be a nonempty array");
+          const messages: ChatMessage[] = data.messages.map((entry: unknown) => {
+            const message = object(entry);
+            if (
+              (message.role !== "user" && message.role !== "assistant") ||
+              typeof message.content !== "string" ||
+              !message.content.trim() ||
+              Object.keys(message).some((key) => key !== "role" && key !== "content")
+            )
+              throw new Error("Invalid chat message");
+            return { role: message.role, content: message.content };
+          });
+          if (messages[messages.length - 1]?.role !== "user")
+            throw new Error("Chat must end with a user message");
+          if ([...this.#secrets].some((key) => containsSecret(messages, key)))
+            throw new Error("Credential disclosure refused");
+          this.#invalidateChat();
+          this.#chatDisclosure = {
+            identity: randomUUID(),
+            recipient: model.recipient,
+            mode: "configured",
+            request: { messages, config: structuredClone(model.config) },
+            authorized: false,
+          };
+          this.#chatModel = model;
+          this.#emit("model", "proposed", "proposed", this.#chatDisclosure.identity);
+          break;
+        }
+        case "chat.authorize": {
+          const pending = this.#chatDisclosure;
+          if (!pending || pending.identity !== data.identity || this.#chatModel !== this.#model)
+            throw new Error("Disclosure preview does not match");
+          pending.authorized = true;
+          this.#emit("model", "authorization", "allowed", pending.identity);
+          break;
+        }
+        case "chat.generate": {
+          const pending = this.#chatDisclosure;
+          const model = this.#chatModel;
+          if (
+            !pending?.authorized ||
+            pending.identity !== data.identity ||
+            !model ||
+            model !== this.#model
+          )
+            throw new Error("Explicit authorization of this disclosure is required");
+          this.#chatDisclosure = undefined;
+          this.#chatModel = undefined;
+          const generation = ++this.#chatGeneration;
+          const controller = new AbortController();
+          this.#chatController = controller;
+          this.#chatStatus = "running";
+          this.#emit("model", "started", "started", pending.identity);
+          try {
+            if (generation !== this.#chatGeneration || controller.signal.aborted)
+              throw new Error("Chat was superseded");
+            const response = await model.model.generate({
+              runId: randomUUID(),
+              stepIndex: 0,
+              messages: pending.request.messages,
+              tools: [],
+              config: pending.request.config,
+              signal: controller.signal,
+            });
+            if (generation !== this.#chatGeneration) throw new Error("Chat was superseded");
+            if (response.kind !== "message") throw new Error("Configured model request failed");
+            this.#chatMessages = [
+              ...pending.request.messages,
+              { role: "assistant", content: response.content },
+            ];
+            this.#chatStatus = "completed";
+            this.#emit("model", "result", "completed", pending.identity);
+          } catch {
+            if (generation !== this.#chatGeneration) throw new Error("Chat was superseded");
+            this.#chatStatus = "failed";
+            this.#emit("model", "result", "failed", pending.identity, "error");
+            throw new Error("Configured model request failed");
+          } finally {
+            if (generation === this.#chatGeneration) this.#chatController = undefined;
+          }
+          break;
+        }
+        case "chat.cancel": {
+          this.#invalidateChat();
+          this.#emit("model", "result", "cancelled");
+          break;
+        }
+        case "planning.fromPullRequest": {
+          const id = text(data.id, "id");
+          const instruction = text(data.text, "text");
+          const url = text(data.url, "url");
+          if (
+            !/^https:\/\/github\.com\/(?!\.{1,2}\/)[\w.-]+\/(?!\.{1,2}\/)[\w.-]+\/pull\/[1-9]\d*\/?$/i.test(
+              url,
+            )
+          )
+            throw new Error("Target must be a public GitHub pull request URL");
+          const projectSource = this.#selectedPathsSource(data.paths, data.workspaceIdentity);
+          const materials = data.materials === undefined ? "" : text(data.materials, "materials");
+          this.#invalidate();
+          this.#plan = undefined;
+          this.#evaluation = emptyReview();
+          this.#suggestions = emptyReview();
+          const generation = this.#generation;
+          const controller = new AbortController();
+          this.#controller = controller;
+          let source: SourceSession;
+          try {
+            source = await collectCodeSources(
+              { kind: "github", url },
+              { signal: controller.signal },
+            );
+            await source.verify();
+            if (generation !== this.#generation || controller.signal.aborted)
+              throw new Error("Pull request planning was superseded");
+          } finally {
+            if (this.#controller === controller) this.#controller = undefined;
+          }
+          const snapshot = source.snapshot;
+          if (
+            !snapshot.consistent ||
+            snapshot.issues.some(
+              (issue) => issue.fatal || issue.code === "verification_unavailable",
+            )
+          )
+            throw new Error("Pull request source could not be read and verified");
+          if (!snapshot.items.some((item) => item.role === "target"))
+            throw new Error("Pull request has no readable changed code");
+          const identity = identityOf(snapshot.schema, snapshot);
+          if (!identity.ok) throw new Error("Pull request source identity unavailable");
+          const plan = new PlanningSession(id, {
+            task: {
+              schema: "lorelum.judge.task-contract/v1",
+              id,
+              taskClass: "code",
+              text: instruction,
+            },
+            sources: [
+              {
+                id: "request",
+                kind: "user",
+                locator: "user",
+                version: "1",
+                content: instruction,
+                status: "available",
+              },
+              {
+                id: "pull-request",
+                kind: "reference",
+                locator: url,
+                version: identity.identity,
+                content: JSON.stringify(snapshot),
+                status:
+                  snapshot.omitted.length ||
+                  snapshot.items.some((item) => !item.complete) ||
+                  snapshot.issues.length
+                    ? "truncated"
+                    : "available",
+              },
+              ...(materials
+                ? [
+                    {
+                      id: "material",
+                      kind: "reference" as const,
+                      locator: "local-user-material",
+                      version: "1",
+                      content: materials,
+                      status: "available" as const,
+                    },
+                  ]
+                : []),
+              ...(projectSource ? [projectSource] : []),
+            ],
+          });
+          this.#plan = plan;
+          this.#emit("planning", "result", "created");
+          break;
+        }
+        case "planning.fromEvaluation": {
+          const id = text(data.id, "id");
+          const instruction = text(data.text, "text");
+          if (/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/[1-9]\d*/i.test(instruction))
+            throw new Error(
+              "A pull request must be read as the planning source, not paired with a previous evaluation",
+            );
+          const report = this.#evaluation.report as CodeEvaluationReport | null;
+          if (
+            !report ||
+            !["completed", "partial"].includes(this.#evaluation.status) ||
+            !report.result ||
+            !report.source.items.some((item) => item.role === "target")
+          )
+            throw new Error("A usable evaluation is required for planning");
+          if (data.evaluationId !== report.id || data.sourceIdentity !== report.sourceIdentity)
+            throw new Error("Evaluation identity does not match the current planning source");
+          const evaluationIdentity = codeEvaluationReportIdentity(report);
+          const advice = this.#suggestions.report as CodeSuggestionReport | null;
+          const linkedAdvice =
+            evaluationIdentity.ok &&
+            advice &&
+            ["completed", "partial"].includes(this.#suggestions.status) &&
+            advice.evaluationIdentity === evaluationIdentity.identity
+              ? advice
+              : null;
+          const projectSource = this.#selectedPathsSource(data.paths, data.workspaceIdentity);
+          const conversation =
+            data.conversation === undefined ? "" : text(data.conversation, "conversation");
+          const materials = data.materials === undefined ? "" : text(data.materials, "materials");
+          const plan = new PlanningSession(id, {
+            task: {
+              schema: "lorelum.judge.task-contract/v1",
+              id,
+              taskClass: "code",
+              text: instruction,
+            },
+            sources: [
+              {
+                id: "request",
+                kind: "user",
+                locator: "user",
+                version: "1",
+                content: instruction,
+                status: "available",
+              },
+              {
+                id: "evaluation",
+                kind: "reference",
+                locator: `evaluation:${report.id}`,
+                version: report.sourceIdentity,
+                content: JSON.stringify({
+                  status: report.status,
+                  request: report.request,
+                  source: report.source,
+                  result: report.result,
+                  issues: report.issues,
+                  limitations: report.limitations,
+                }),
+                status:
+                  report.source.omitted.length > 0 ||
+                  report.source.items.some((item) => !item.complete)
+                    ? "truncated"
+                    : "available",
+              },
+              ...(linkedAdvice
+                ? [
+                    {
+                      id: "suggestions",
+                      kind: "reference" as const,
+                      locator: "evaluation-suggestions",
+                      version: linkedAdvice.evaluationIdentity,
+                      content: JSON.stringify({
+                        status: linkedAdvice.status,
+                        result: linkedAdvice.result,
+                        gaps: linkedAdvice.gaps,
+                        limitations: linkedAdvice.limitations,
+                      }),
+                      status: "available" as const,
+                    },
+                  ]
+                : []),
+              ...(materials
+                ? [
+                    {
+                      id: "material",
+                      kind: "reference" as const,
+                      locator: "local-user-material",
+                      version: "1",
+                      content: materials,
+                      status: "available" as const,
+                    },
+                  ]
+                : []),
+              ...(projectSource ? [projectSource] : []),
+              ...(conversation
+                ? [
+                    {
+                      id: "conversation",
+                      kind: "reference" as const,
+                      locator: "visible-conversation",
+                      version: "1",
+                      content: conversation,
+                      status: "available" as const,
+                    },
+                  ]
+                : []),
+            ],
+          });
+          this.#invalidate();
+          this.#plan = plan;
+          this.#emit("planning", "result", "created");
+          break;
+        }
+        case "planning.create": {
+          const id = text(data.id, "id");
+          const inputs = data.inputs as PlanningInputs;
+          const projectSource = this.#selectedPathsSource(data.paths, data.workspaceIdentity);
+          const plan = new PlanningSession(
+            id,
+            projectSource ? { ...inputs, sources: [...inputs.sources, projectSource] } : inputs,
+          );
+          this.#invalidate();
+          this.#plan = plan;
+          this.#emit("planning", "result", "created");
+          break;
+        }
+        case "planning.preview": {
+          const plan = this.#requirePlan();
+          const model = this.#requireModel();
+          if (data.instructions !== undefined && typeof data.instructions !== "string")
+            throw new Error("instructions must be a string");
+          const instructions = (data.instructions as string | undefined) ?? "";
+          const preview = plan.previewModelDisclosure(model.model, instructions, model.config);
+          const messages = planningModelMessages(preview.request);
+          if (
+            [...this.#secrets].some(
+              (key) =>
+                containsSecret(preview.request, key) ||
+                containsSecret(messages, key) ||
+                containsSecretKey(preview.request.task, key) ||
+                containsSecretKey(preview.request.sources, key) ||
+                containsSecretKey(preview.request.previousPlan, key),
+            )
+          )
+            throw new Error("Credential disclosure refused");
+          this.#disclosure = {
+            ...preview,
+            request: { ...preview.request, messages },
+            instructions,
+            recipient: model.recipient,
+            mode: model.mode,
+            authorized: false,
+          };
+          this.#emit("disclosure", "proposed", "proposed");
+          break;
+        }
+        case "planning.authorize": {
+          const pending = this.#disclosure;
+          const model = this.#requireModel();
+          if (!pending || pending.identity !== data.identity)
+            throw new Error("Disclosure preview does not match");
+          this.#unwrap(this.#requirePlan().authorizeModelDisclosure(model.model, pending.identity));
+          pending.authorized = true;
+          this.#emit("disclosure", "authorization", "allowed");
+          break;
+        }
+        case "planning.generate": {
+          const pending = this.#disclosure;
+          const model = this.#requireModel();
+          const plan = this.#requirePlan();
+          if (!pending?.authorized || pending.identity !== data.identity)
+            throw new Error("Explicit authorization of this disclosure is required");
+          this.#invalidateChat();
+          this.#clearExecution();
+          const generation = ++this.#generation;
+          const controller = new AbortController();
+          this.#controller = controller;
+          this.#disclosure = undefined;
+          this.#emit("planning", "started", "started");
+          const result = await plan.generate({
+            model: model.model,
+            runId: randomUUID(),
+            signal: controller.signal,
+            disclosureIdentity: pending.identity,
+            instructions: pending.instructions,
+            ...(model.config ? { config: model.config } : {}),
+          });
+          if (generation !== this.#generation) throw new Error("Planning was superseded");
+          this.#controller = undefined;
+          this.#unwrap(result);
+          this.#invalidateChat();
+          this.#emit("planning", "result", "completed");
+          break;
+        }
+        case "planning.confirm": {
+          if (!Number.isSafeInteger(data.revision)) throw new Error("revision must be an integer");
+          this.#unwrap(
+            this.#requirePlan().confirm(
+              text(data.identity, "identity") as Identity,
+              data.revision as number,
+            ),
+          );
+          this.#invalidateChat();
+          this.#emit("planning", "authorization", "allowed");
+          break;
+        }
+        case "planning.reject": {
+          const plan = this.#requirePlan();
+          const review = plan.review();
+          if (!review) throw new Error("No plan to reject");
+          this.#clearExecution();
+          this.#unwrap(review.status === "confirmed" ? plan.revoke() : plan.invalidate());
+          this.#invalidateChat();
+          this.#disclosure = undefined;
+          this.#emit("planning", "authorization", "denied");
+          break;
+        }
+        case "planning.revokeDisclosure": {
+          this.#invalidate();
+          this.#emit("disclosure", "authorization", "denied");
+          break;
+        }
+        case "execution.propose": {
+          const plan = this.#requirePlan();
+          const model = this.#requireModel();
+          if (!this.#workspace) throw new Error("Discover a workspace first");
+          if (!this.#sandboxAvailable) throw new Error("Linux bubblewrap is unavailable");
+          this.#clearExecution();
+          if (!this.#workspace) throw new Error("Discover a workspace first");
+          const permissionData = object(data.permission);
+          const permissionKeys = [
+            "planIdentity",
+            "planRevision",
+            "workspaceIdentity",
+            "readPaths",
+            "commandReadPaths",
+            "writePaths",
+            "writablePaths",
+            "commands",
+            "disclosures",
+            "modelRecipient",
+            "limits",
+            "expiresAt",
+            "isolation",
+            "verificationIdentity",
+          ];
+          if (Object.keys(permissionData).some((key) => !permissionKeys.includes(key)))
+            throw new Error("Unsupported permission or resource limit");
+          if (data.verification === undefined)
+            throw new Error("Independent verification is required");
+          let permission = data.permission as ExecutionPermission;
+          if (!permission || permission.modelRecipient !== model.recipient)
+            throw new Error("Model recipient does not match selected model");
+          let verification: VerificationConfiguration | undefined;
+          if (data.verification !== undefined) {
+            const v = object(data.verification);
+            if (!Array.isArray(v.checks)) throw new Error("checks must be an array");
+            if (model.offline) {
+              if (v.review !== undefined)
+                throw new Error("Offline review uses only the fixed local checker");
+              const offline = model.offline;
+              if (
+                permission.readPaths.length !== 1 ||
+                permission.readPaths[0] !== offline.targetPath ||
+                !permission.disclosures.includes("file-content")
+              )
+                throw new Error(
+                  "Offline review requires file-content disclosure for exactly the selected file",
+                );
+              if (v.checks.length !== 1)
+                throw new Error("Offline review requires exactly one independent check");
+              const definition = {
+                schema: "lorelum.judge.measurement-definition/v2",
+                id: "offline-replacement-review",
+                criteria: [
+                  {
+                    schema: "lorelum.judge.criterion/v1",
+                    id: "offline-result",
+                    kind: "contract",
+                    description:
+                      "Selected file exactly matches the supplied replacement and the independent check passes",
+                    mandatory: true,
+                    source: { origin: "contract", ref: "offline-replacement" },
+                    anchors: [
+                      { verdict: "met", description: "Both observations are satisfied" },
+                      { verdict: "unmet", description: "An observation is not satisfied" },
+                    ],
+                    evidence: [
+                      { evidenceId: "candidate-1", role: "primary" },
+                      { evidenceId: "check-1", role: "primary" },
+                    ],
+                  },
+                ],
+                metadata: [
+                  {
+                    criterionId: "offline-result",
+                    role: "decisive",
+                    covers: [],
+                    appliesTo: [plan.review()?.plan.task.taskClass ?? "code"],
+                  },
+                ],
+              };
+              const checker: ProgramChecker = ({ evidence, signal }) => {
+                signal.throwIfAborted();
+                const candidate = evidence.find((item) => item.id === "candidate-1");
+                const check = evidence.find((item) => item.id === "check-1");
+                let verdict = "insufficient";
+                if (
+                  candidate?.status === "present" &&
+                  check?.status === "present" &&
+                  typeof candidate.text === "string" &&
+                  typeof check.text === "string"
+                ) {
+                  const file = JSON.parse(candidate.text) as { path?: unknown; content?: unknown };
+                  const observed = JSON.parse(check.text) as {
+                    status?: unknown;
+                    exitCode?: unknown;
+                  };
+                  if (
+                    file.path === offline.targetPath &&
+                    typeof file.content === "string" &&
+                    (observed.status === "passed" || observed.status === "failed")
+                  )
+                    verdict =
+                      file.content === offline.replacement &&
+                      observed.status === "passed" &&
+                      observed.exitCode === 0
+                        ? "met"
+                        : "unmet";
+                }
+                return {
+                  verdicts: [
+                    {
+                      schema: "lorelum.judge.verdict/v1",
+                      criterionId: "offline-result",
+                      verdict,
+                      evidenceIds: verdict === "insufficient" ? [] : ["candidate-1", "check-1"],
+                    },
+                  ],
+                };
+              };
+              this.#checker = checker;
+              verification = {
+                checks: v.checks as VerificationConfiguration["checks"],
+                review: {
+                  input: {
+                    definition,
+                    method: {
+                      kind: "program",
+                      checker: { id: "local-offline-replacement", version: "1" },
+                    },
+                  },
+                  ports: { checker },
+                },
+              };
+            } else {
+              const config = model.config;
+              if (!config || !this.#hostModel) throw new Error("Configured model is unavailable");
+              const { model: modelName, ...decoding } = config;
+              const method = {
+                kind: "llm" as const,
+                provider: {
+                  protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+                  adapterVersion: PROVIDER_ADAPTER_VERSION,
+                },
+                endpointIdentity: describeEndpoint(this.#hostModel.endpoint).identity,
+                model: { provider: PROVIDER_LABEL, name: modelName },
+                ...(Object.keys(decoding).length ? { decoding } : {}),
+              };
+              const planned = plan.review()?.plan;
+              if (!planned || v.checks.length === 0)
+                throw new Error("At least one approved check is required");
+              const criteria = v.checks.map((raw, index) => {
+                const check = object(raw);
+                const id = text(check.id, "check id");
+                return {
+                  schema: "lorelum.judge.criterion/v1",
+                  id: `check-criterion-${index + 1}`,
+                  kind: "contract",
+                  description: `Independent check ${id} passes`,
+                  mandatory: true,
+                  source: { origin: "contract", ref: id },
+                  anchors: [
+                    { verdict: "met", description: "The independent check passed" },
+                    { verdict: "unmet", description: "The independent check failed" },
+                  ],
+                  evidence: [{ evidenceId: `check-${index + 1}`, role: "primary" }],
+                };
+              });
+              const definition = {
+                schema: "lorelum.judge.measurement-definition/v2",
+                id: "approved-checks-review",
+                criteria,
+                metadata: criteria.map((criterion) => ({
+                  criterionId: criterion.id,
+                  role: "decisive",
+                  covers: [],
+                  appliesTo: [planned.task.taskClass],
+                })),
+              };
+              const review = v.review === undefined ? {} : object(v.review);
+              const input = review.input === undefined ? {} : object(review.input);
+              if (input.method !== undefined) {
+                const requested = identityOf("local-review-method/v1", input.method);
+                const actual = identityOf("local-review-method/v1", method);
+                if (!requested.ok || !actual.ok || requested.identity !== actual.identity)
+                  throw new Error("Review method differs from the host model");
+              }
+              verification = {
+                checks: v.checks as VerificationConfiguration["checks"],
+                review: {
+                  input: {
+                    ...input,
+                    definition: input.definition ?? definition,
+                    method,
+                  } as VerificationConfiguration["review"]["input"],
+                  ports: { model: model.model },
+                  ...(review.gate === undefined
+                    ? {}
+                    : {
+                        gate: review.gate as NonNullable<
+                          VerificationConfiguration["review"]["gate"]
+                        >,
+                      }),
+                },
+              };
+            }
+            const identity = verificationIdentity(verification);
+            if (
+              permission.verificationIdentity !== undefined &&
+              permission.verificationIdentity !== identity
+            )
+              throw new Error("Verification identity does not match configuration");
+            permission = { ...permission, verificationIdentity: identity };
+          }
+          const execution = new ControlledExecutionSession(plan, this.#workspace);
+          this.#proposal = execution.propose(permission, verification);
+          this.#execution = execution;
+          this.#verification = verification
+            ? {
+                checks: verification.checks,
+                review: {
+                  input: verification.review.input,
+                  ...(verification.review.gate === undefined
+                    ? {}
+                    : { gate: verification.review.gate }),
+                },
+              }
+            : null;
+          this.#executionStatus = "proposed";
+          this.#emit("execution", "proposed", "proposed");
+          break;
+        }
+        case "execution.authorize": {
+          if (!this.#execution || !this.#proposal || this.#executionStatus !== "proposed")
+            throw new Error("No execution proposal");
+          this.#execution.authorize(
+            text(data.identity, "identity") as Identity,
+            this.#requireModel().model,
+            text(data.decisionRef, "decisionRef"),
+            this.#checker,
+          );
+          this.#executionStatus = "authorized";
+          this.#emit("execution", "authorization", "allowed");
+          break;
+        }
+        case "execution.run": {
+          if (this.#reviewKind) throw new Error("Another background operation is running");
+          if (!this.#execution || !this.#proposal || this.#executionStatus !== "authorized")
+            throw new Error("Execution has not been authorized");
+          const execution = this.#execution;
+          const permission = this.#proposal.permission;
+          const model = this.#requireModel();
+          const generation = this.#generation;
+          const controller = new AbortController();
+          this.#controller = controller;
+          this.#executionStatus = "running";
+          this.#emit("execution", "started", "started");
+          const runId = randomUUID();
+          let terminalReason: WorkflowSessionEvent["reason"] = null;
+          let terminalStatus: string | undefined;
+          try {
+            const result = await execution.implement({
+              model: model.model,
+              sandbox: createBubblewrapSandbox(),
+              runId,
+              signal: controller.signal,
+              onEvent: (event) => {
+                if (event.kind === "terminal") {
+                  terminalReason = event.reason ?? null;
+                  terminalStatus = event.status;
+                  return;
+                }
+                const details: { path?: string; commandIndex?: number } = {};
+                if (
+                  event.path &&
+                  ((event.kind === "read" && permission.readPaths.includes(event.path)) ||
+                    (event.kind === "write" && permission.writePaths.includes(event.path)))
+                )
+                  details.path = event.path;
+                if (
+                  event.kind === "command" &&
+                  event.commandIndex !== undefined &&
+                  Number.isSafeInteger(event.commandIndex) &&
+                  event.commandIndex >= 0 &&
+                  event.commandIndex < permission.commands.length
+                )
+                  details.commandIndex = event.commandIndex;
+                this.#emit(
+                  event.kind,
+                  event.stage,
+                  event.status,
+                  `${runId}:${event.id}`,
+                  event.reason ?? null,
+                  details,
+                );
+              },
+            });
+            const projected = this.#projectResult(result, permission, terminalReason);
+            if (generation === this.#generation && this.#execution === execution) {
+              const report = result.report;
+              this.#pendingDiff =
+                report &&
+                typeof report === "object" &&
+                "diff" in report &&
+                typeof report.diff === "string"
+                  ? report.diff
+                  : null;
+              this.#controller = undefined;
+              this.#executionStatus = result.status;
+              this.#result = projected;
+              const consumedWorkspace = this.#workspace;
+              this.#workspace = undefined;
+              if (consumedWorkspace) await closeWorkspaceReview(consumedWorkspace);
+            } else this.#previousResults.push(projected);
+            if (terminalStatus)
+              this.#emit("terminal", "terminal", terminalStatus, undefined, terminalReason);
+          } catch (error) {
+            if (this.#execution === execution) {
+              this.#controller = undefined;
+              this.#executionStatus = controller.signal.aborted ? "cancelled" : "failed";
+              this.#result = { status: this.#executionStatus, report: null, evidence: null };
+            }
+            this.#emit(
+              "terminal",
+              "terminal",
+              controller.signal.aborted ? "cancelled" : "failed",
+              undefined,
+              controller.signal.aborted ? "revoked" : "error",
+            );
+            throw error;
+          }
+          break;
+        }
+        case "execution.disclosure.allow":
+        case "execution.disclosure.deny": {
+          const pending = this.#executionDisclosure;
+          if (
+            !pending ||
+            pending.identity !== data.identity ||
+            (pending.owner === "execution" && this.#executionStatus !== "running") ||
+            (pending.owner === "review" && !this.#reviewKind)
+          )
+            throw new Error("Disclosure preview does not match");
+          if (pending.expiresAt !== undefined && Date.now() >= pending.expiresAt) {
+            pending.decide(false);
+            this.#emit("model", "authorization", "denied", pending.identity);
+            throw new Error("Disclosure preview does not match");
+          }
+          const allowed = action === "execution.disclosure.allow";
+          pending.decide(allowed);
+          this.#emit("model", "authorization", allowed ? "allowed" : "denied", pending.identity);
+          break;
+        }
+        case "execution.cancel": {
+          if (!this.#execution || this.#executionStatus === "idle")
+            throw new Error("No execution to cancel");
+          if (this.#executionDisclosure?.owner === "execution")
+            this.#executionDisclosure.decide(false);
+          this.#controller?.abort();
+          this.#execution.revoke();
+          if (this.#executionStatus !== "running") this.#executionStatus = "cancelled";
+          this.#emit("execution", "authorization", "denied");
+          break;
+        }
+        case "report.reveal": {
+          if (
+            data.allowFullCandidateDiff !== true ||
+            this.#pendingDiff === null ||
+            !this.#result ||
+            typeof this.#result !== "object"
+          )
+            throw new Error("Explicit local diff approval is required");
+          const result = this.#result as Record<string, unknown>;
+          const report = object(result.report);
+          this.#result = {
+            ...result,
+            report: { ...report, diff: this.#safe(this.#pendingDiff), diffUnavailable: null },
+          };
+          this.#diffRevealed = true;
+          this.#emit("disclosure", "authorization", "allowed");
+          break;
+        }
+        default:
+          throw new Error("Unknown action");
+      }
+      return { ok: true, state: this.snapshot() };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      const safe = [
+        "Windows paths require WSL and wslpath",
+        "Windows path could not be converted by wslpath",
+        "Target must be a GitHub pull request URL or code snippet",
+        "Target must be a public GitHub pull request URL",
+        "Pull request planning was superseded",
+        "Pull request source could not be read and verified",
+        "Pull request has no readable changed code",
+        "Pull request source identity unavailable",
+        "A pull request must be read as the planning source, not paired with a previous evaluation",
+        "Request must be nonempty text",
+        "Configured model is required for review",
+        "Another background operation is running",
+        "A completed evaluation is required",
+        "A usable evaluation is required for planning",
+        "Evaluation identity does not match the current planning source",
+        "Invalid selected project paths",
+        "No matching review to cancel",
+        "Configured model request failed",
+        "API key conflicts with the session protocol",
+        "Secure source reading requires Linux openat2",
+        "Project root must be absolute",
+        "Project root must not traverse symbolic links",
+        "Expected Git project root",
+        "Invalid exclusion",
+        "Unmerged Git index entries are unsupported",
+        "Git index contains assume-unchanged or skip-worktree entries",
+        "Project root changed during discovery",
+        "Git metadata changed during discovery",
+        "No configured model is available from the host",
+        "Create a planning session first",
+        "Linux bubblewrap is unavailable",
+        "Select a model first",
+        "Discover a workspace first",
+        "Disclosure preview does not match",
+        "Explicit authorization of this disclosure is required",
+        "No execution proposal",
+        "Execution has not been authorized",
+        "No execution to cancel",
+        "Unknown action",
+        "Workspace discovery was superseded",
+        "Planning was superseded",
+        "Offline model does not support chat",
+        "Chat messages must be a nonempty array",
+        "Invalid chat message",
+        "Chat must end with a user message",
+        "Credential disclosure refused",
+        "Chat was superseded",
+        "Only JSON values are accepted",
+        "Expected a JSON object",
+        "Offline review requires file-content disclosure for exactly the selected file",
+        "Offline review requires exactly one independent check",
+        "Verification identity does not match configuration",
+        "Unsupported permission or resource limit",
+        "Unsupported or missing limits",
+        "All supported limits must be positive safe integers",
+        "Invalid or expired permission",
+        "Independent verification is required",
+        "At least one approved check is required",
+        "Offline review uses only the fixed local checker",
+        "Review method differs from the host model",
+        "Explicit local diff approval is required",
+        "Permission identity mismatch",
+        "Plan or workspace is not current",
+        "Plan is no longer eligible",
+        "A real user decision reference is required",
+        "Model recipient does not match selected model",
+      ];
+      return redact(
+        {
+          ok: false,
+          error: {
+            kind: "rejected",
+            message: safe.includes(message)
+              ? message
+              : "Action rejected: invalid input, unavailable prerequisite, or authorization mismatch",
+          },
+          state: this.snapshot(),
+        },
+        candidateSecret,
+      );
+    }
+  }
+}

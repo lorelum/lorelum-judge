@@ -21,3 +21,4 @@ export type { IssueCode, ValidationIssue, ValidationResult } from "./validation.
 export { SHA256_IDENTITY, snapshot } from "./validation.js";
 export * from "./workflow-execution.js";
 export * from "./workflow-plan.js";
+export * from "./workflow-session-event.js";

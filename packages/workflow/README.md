@@ -27,11 +27,21 @@ Git metadata snapshot and does not prove resistance to transient malicious chang
 and a separate host `authorize` call over the exact permission identity. Its
 structured model actions can read and write only approved paths, require an
 expected old-content hash for writes, and never write back to the source project.
+The resolved temporary parent must be outside the original project; otherwise
+snapshot creation is rejected before creating a directory.
 Writes are staged in a private temporary file; the target's previous content and
 current authorization are rechecked immediately before atomic replacement.
 Cancelled or conflicting writes remove the staged file without replacing the target.
 Plan invalidation, revocation, expiration and cancellation stop subsequent actions.
 The host must keep these objects and the snapshot under its own control.
+
+`implement` accepts an optional `onEvent` observer for actual model, action,
+check, review and termination checkpoints. Events contain metadata, not file
+contents or command output; path and command references may still require
+filtering. The trusted host assigns session identity and sequence and projects
+only data permitted for display. Observer exceptions do not grant authority,
+and authority is rechecked after callbacks before side effects. Events are
+in-memory observations, not a persistent history or proof of model reasoning.
 
 For a program-based judge review, the trusted host must also pass the exact
 `verification.review.ports.checker` function as the fourth `authorize` argument.
@@ -70,11 +80,13 @@ host-provided source. Candidate origin labels are constrained by source kind; a
 model cannot assert a prior user decision. References alone do not establish that
 the source actually supports the proposed text: the user must review it.
 
-Before planning, the trusted host must obtain a user disclosure decision for the
-current task and sources to the intended model, then call
-`grantModelDisclosure(model)` and pass its identity as `disclosureIdentity` to
-`generate`. The grant is bound to that model object and the current premises;
-changed inputs or `revokeModelDisclosure()` invalidate it.
+Before planning, the trusted host presents `previewModelDisclosure(model, instructions?, config?)`
+to the user and obtains an explicit disclosure decision for its complete request,
+including the task, sources, previous plan, revision instructions and model configuration.
+After approval, call `authorizeModelDisclosure(model, preview.identity)` and pass its
+identity as `disclosureIdentity` to `generate` with the same instructions and config.
+The grant is bound to the model object and exact request; changed inputs or
+`revokeModelDisclosure()` invalidate it.
 `generate({ model, runId, signal, disclosureIdentity, instructions?, config? })`
 asks the model for a proposal with no tools; it accepts a JSON message or structured response, validates
 the complete protocol plan and provenance, and rejects changes to the supplied task
@@ -96,7 +108,11 @@ import { PlanningSession } from "@lorelum/judge-workflow";
 
 // task, sources and model are supplied by the host.
 const session = new PlanningSession("plan-1", { task, sources });
-const disclosureIdentity = session.grantModelDisclosure(model);
+const preview = session.previewModelDisclosure(model);
+// Present preview.request and the model recipient; proceed only after explicit approval.
+const authorization = session.authorizeModelDisclosure(model, preview.identity);
+if (!authorization.ok) throw authorization.error;
+const disclosureIdentity = authorization.value;
 const proposal = await session.generate({ model, runId: "planning-1", signal, disclosureIdentity });
 if (!proposal.ok) throw proposal.error;
 

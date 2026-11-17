@@ -35,6 +35,28 @@ If execution stops before a candidate exists, evidence and report retain a null 
 such a report cannot be enforcement eligible. Reports keep quality, check completeness and
 enforcement eligibility separate.
 
+## Session lifecycle events
+
+`WorkflowSessionEvent` (`workflow-session-event/v1`) is a metadata-only projection of
+an observed workflow lifecycle, not an authorization or an execution record. Each event
+has an opaque `sessionId`, a positive safe-integer `sequence`, a `stage`, a `status`, and
+an optional categorical `reason` represented by null when absent. Non-terminal events
+carry an opaque `actionId` and `actionKind`; a terminal event has neither. IDs are
+limited to 1–128 ASCII letters, digits, underscores or hyphens. Reuse the same action
+ID for its proposed, authorization, started and result events. Check and review
+statuses use the `check` stage and their own action ID. Events contain no paths,
+commands, file content, output, error text or arbitrary extension fields.
+
+`validateWorkflowSessionEvent` validates the shape and stage/status combinations.
+`validateWorkflowSessionEvents` additionally requires one session and strictly increasing
+sequence numbers within a batch; gaps are allowed. Neither validates a complete history,
+authenticates the producer, establishes that an action actually occurred or prevents
+sensitive values being placed in identifiers. The trusted host must create opaque IDs,
+allocate increasing session-wide sequences, observe real checkpoints, and whitelist
+and authorize every projection. No event replay or persistence is implied.
+Failed, denied, cancelled, timed-out, truncated, unavailable, not-started and unknown
+states remain distinct from success. A missing event is not evidence that an action ran.
+
 
 Owns versioned records that cross process, package, repository, or persistence
 boundaries. The package contains canonical primitives and contract schemas only.

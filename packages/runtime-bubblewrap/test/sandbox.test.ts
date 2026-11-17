@@ -339,6 +339,30 @@ linux("bubblewrap isolation", () => {
       Buffer.byteLength(truncated.stdout) + Buffer.byteLength(truncated.stderr),
     ).toBeLessThanOrEqual(64);
   }, 60000);
+  test("UTF-8 output remains within the shared byte budget", async () => {
+    const request = await fixture();
+    for (const budget of [1, 2, 3, 4, 5, 6, 7]) {
+      const result = await createBubblewrapSandbox().run({
+        ...request,
+        maxOutputBytes: budget,
+        args: ["-c", "printf '中'; printf '😀' >&2; printf '\\377'"],
+      });
+      expect(
+        Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr),
+      ).toBeLessThanOrEqual(budget);
+      expect(result.status).toBe("truncated");
+    }
+  }, 120000);
+  test("combines UTF-8 bytes split across output chunks", async () => {
+    const request = await fixture();
+    const result = await createBubblewrapSandbox().run({
+      ...request,
+      maxOutputBytes: 3,
+      args: ["-c", "printf '\\344'; /usr/bin/sleep 0.1; printf '\\270\\255'"],
+    });
+    expect(result.status).toBe("completed");
+    expect(result.stdout).toBe("中");
+  }, 60000);
 });
 
 test("rejects unsupported platforms", async () => {

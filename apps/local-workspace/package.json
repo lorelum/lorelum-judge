@@ -1,0 +1,28 @@
+{
+  "name": "@lorelum/judge-local-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "start": "bun run src/main.ts"
+  },
+  "dependencies": {
+    "@lorelum/judge": "workspace:*",
+    "@lorelum/judge-protocol": "workspace:*",
+    "@lorelum/judge-runtime": "workspace:*",
+    "@lorelum/judge-workflow": "workspace:*",
+    "@lorelum/provider-openai-compatible": "workspace:*",
+    "@lorelum/runtime-bubblewrap": "workspace:*",
+    "@lorelum/lumen-ui": "file:../../.lumen-cache/lumen-ui-package",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "tailwindcss": "4.3.5",
+    "vite": "8.3.4"
+  }
+}

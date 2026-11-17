@@ -124,6 +124,20 @@ describe("endpoint identity", () => {
 });
 
 describe("OpenAI-compatible transport", () => {
+  test("does not forward an authorized request to a redirect target", async () => {
+    const target = await harness((_body, response) => response.end(content("unexpected")));
+    const source = await harness((_body, response) => {
+      response.writeHead(307, { location: `${target.url}/chat/completions` });
+      response.end();
+    });
+    const model = createOpenAiCompatibleModel({ endpoint: source.url });
+    await expect(model.generate(request({ model: "model-1" }))).rejects.toBeInstanceOf(
+      ProviderTransportError,
+    );
+    expect(source.requests.length).toBe(1);
+    expect(target.requests.length).toBe(0);
+  });
+
   test("sends exactly the configured model and parameters", async () => {
     const server = await harness((_body, response) => {
       response.writeHead(200, { "content-type": "application/json" });

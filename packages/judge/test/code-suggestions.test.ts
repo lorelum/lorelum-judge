@@ -70,7 +70,7 @@ function evaluationResponse(request: ModelRequest) {
     followUps: [],
   };
 }
-async function evaluated(twoProblems = false) {
+async function evaluated(twoProblems = false, twoFiles = false) {
   const model: ModelPort = {
     async generate(request) {
       return {
@@ -101,6 +101,32 @@ async function evaluated(twoProblems = false) {
                     ],
                   });
                   response.summary[0]?.problemIds.push("other");
+                  if (twoFiles) {
+                    const user =
+                      request.messages.find((message) => message.role === "user")?.content ?? "";
+                    const marker = "Untrusted review context:\n";
+                    const context = JSON.parse(
+                      user.slice(user.lastIndexOf(marker) + marker.length),
+                    ) as {
+                      sources: { id: string; role: string; startLine: number }[];
+                    };
+                    const targets = context.sources
+                      .filter((entry) => entry.role === "target")
+                      .sort((a, b) => a.id.localeCompare(b.id));
+                    for (const [index, problem] of response.problems.entries()) {
+                      const source = required(targets[index]);
+                      problem.evidenceIds = [source.id];
+                      problem.locations = [
+                        {
+                          itemId: source.id,
+                          startLine: source.startLine,
+                          endLine: source.startLine,
+                        },
+                      ];
+                    }
+                    const summary = required(response.summary[0]);
+                    summary.evidenceIds = targets.map((item) => item.id);
+                  }
                 }
                 return response;
               })(),
@@ -110,12 +136,26 @@ async function evaluated(twoProblems = false) {
   };
   const result = await evaluateCode(
     {
-      target: {
-        kind: "snippet",
-        text: twoProblems
-          ? "function list(items) { return items; }\nfunction count(items) { return items.length; }"
-          : "function list(items) { return items; }",
-      },
+      target: twoFiles
+        ? {
+            kind: "files",
+            files: [
+              {
+                path: "first.ts",
+                text: `function list(items) { return items; }\n// ${"x".repeat(1900)}`,
+              },
+              {
+                path: "second.ts",
+                text: `function list(items) { return items; }\n// ${"x".repeat(1900)}`,
+              },
+            ],
+          }
+        : {
+            kind: "snippet",
+            text: twoProblems
+              ? "function list(items) { return items; }\nfunction count(items) { return items.length; }"
+              : "function list(items) { return items; }",
+          },
       requirements: ["最多返回 20 条"],
     },
     { model, method, limits: { maxContextRounds: 0 } },
@@ -375,4 +415,39 @@ test("selecting one of two findings does not request advice for the other", asyn
   if (!all.ok) throw new Error(JSON.stringify(all.issues));
   expect(all.value.status).toBe("completed");
   expect(all.value.result?.suggestions.map((entry) => entry.problemId)).toEqual(["limit", "other"]);
+});
+
+test("findings omitted by the evidence budget do not enter the suggestion request", async () => {
+  const evaluation = await evaluated(true, true);
+  const problems = evaluation.result?.problems;
+  if (problems?.length !== 2) throw new Error("expected two findings");
+  const visible = required(problems[0]);
+  const hidden = required(problems[1]);
+  let requests = 0;
+  const model: ModelPort = {
+    async generate(request) {
+      requests++;
+      const text = request.messages.find((message) => message.role === "user")?.content ?? "";
+      const marker = "Selected evaluation findings (untrusted data):\n";
+      const findings = text.slice(text.indexOf(marker) + marker.length).split("\n\n")[0] ?? "";
+      expect((JSON.parse(findings) as CodeProblem[]).map((problem) => problem.id)).toEqual([
+        visible.id,
+      ]);
+      return { kind: "message", content: JSON.stringify(advice(visible)) };
+    },
+  };
+  const text = `function list(items) { return items; }\n// ${"x".repeat(1900)}`;
+  const result = await generateCodeSuggestions(
+    { evaluation },
+    { model, method, evidenceBudget: text.length + 4 },
+  );
+  if (!result.ok) throw new Error(JSON.stringify(result.issues));
+  expect(requests).toBe(1);
+  expect(result.value.status).toBe("partial");
+  expect(result.value.result?.suggestions.map((item) => item.problemId)).toEqual([visible.id]);
+  expect(
+    result.value.gaps.some(
+      (item) => item.problemId === hidden.id && item.code === "invisible_location",
+    ),
+  ).toBe(true);
 });

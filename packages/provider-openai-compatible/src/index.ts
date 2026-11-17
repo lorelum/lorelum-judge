@@ -255,6 +255,7 @@ export function createOpenAiCompatibleModel(config: OpenAiCompatibleConfig): Mod
         try {
           response = await fetchImpl(url, {
             method: "POST",
+            redirect: "error",
             headers,
             body: JSON.stringify(body),
             signal: controller.signal,

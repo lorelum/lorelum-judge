@@ -25,9 +25,14 @@ The dependency graph and import rules are documented in
 ## Development
 
 ```sh
+bun run prepare:lumen
 bun install --frozen-lockfile
 bun run validate
 ```
+
+The draft local workspace application and its private LumenUI dependency setup
+are described in `apps/local-workspace/README.md`. The application is not a
+released capability; its upstream workflow dependencies remain draft PRs.
 
 The local validation command is also the CI gate. Run it before opening a pull
 request and record the exact commands and results in the PR body.

@@ -121,20 +121,27 @@ export async function runWorkflowExecution() {
         };
       },
     };
-    const disclosureIdentity = plan.grantModelDisclosure(planner);
+    // Offline example: the host presents each complete preview and recipient before approval.
+    const initialPreview = plan.previewModelDisclosure(planner);
+    const initialGrant = plan.authorizeModelDisclosure(planner, initialPreview.identity);
+    assert(initialGrant.ok, "initial planning disclosure must be authorized");
     const first = await plan.generate({
       model: planner,
       runId: "plan-initial",
       signal,
-      disclosureIdentity,
+      disclosureIdentity: initialGrant.value,
     });
     assert(first.ok, "initial plan must be generated");
+    const instructions = "Preserve the user's untracked file";
+    const revisionPreview = plan.previewModelDisclosure(planner, instructions);
+    const revisionGrant = plan.authorizeModelDisclosure(planner, revisionPreview.identity);
+    assert(revisionGrant.ok, "revision disclosure must be authorized");
     const revision = await plan.generate({
       model: planner,
       runId: "plan-adjusted",
       signal,
-      disclosureIdentity,
-      instructions: "Preserve the user's untracked file",
+      disclosureIdentity: revisionGrant.value,
+      instructions,
     });
     assert(
       revision.ok && !plan.isEligible(first.value.identity, first.value.revision),
@@ -391,12 +398,17 @@ export async function runWorkflowExecution() {
       }
     }
     const unconfirmed = new PlanningSession("unconfirmed-plan", { task, sources });
-    const unconfirmedDisclosure = unconfirmed.grantModelDisclosure(planner);
+    const unconfirmedPreview = unconfirmed.previewModelDisclosure(planner);
+    const unconfirmedDisclosure = unconfirmed.authorizeModelDisclosure(
+      planner,
+      unconfirmedPreview.identity,
+    );
+    assert(unconfirmedDisclosure.ok, "unconfirmed planning disclosure must be authorized");
     const draft = await unconfirmed.generate({
       model: planner,
       runId: "unconfirmed",
       signal,
-      disclosureIdentity: unconfirmedDisclosure,
+      disclosureIdentity: unconfirmedDisclosure.value,
     });
     assert(draft.ok && !draft.value.eligible, "draft must remain unconfirmed");
     await blockedCase(
@@ -422,12 +434,17 @@ export async function runWorkflowExecution() {
         return response;
       },
     };
-    const conflictDisclosure = conflicting.grantModelDisclosure(conflictingPlanner);
+    const conflictPreview = conflicting.previewModelDisclosure(conflictingPlanner);
+    const conflictDisclosure = conflicting.authorizeModelDisclosure(
+      conflictingPlanner,
+      conflictPreview.identity,
+    );
+    assert(conflictDisclosure.ok, "conflict planning disclosure must be authorized");
     const conflict = await conflicting.generate({
       model: conflictingPlanner,
       runId: "conflict",
       signal,
-      disclosureIdentity: conflictDisclosure,
+      disclosureIdentity: conflictDisclosure.value,
     });
     assert(
       conflict.ok && conflict.value.plan.conflicts.length === 1,
@@ -455,6 +472,7 @@ export async function runWorkflowExecution() {
       session.authorize(proposal.identity, implementer, "consumer-explicit-user-decision", checker);
       const controller = new AbortController();
       const actualSandbox = createBubblewrapSandbox();
+      const events = [];
       let runnerRoot;
       const observingSandbox = {
         async run(request) {
@@ -468,8 +486,21 @@ export async function runWorkflowExecution() {
         model: implementer,
         sandbox: observingSandbox,
         runId: "implementation",
+        onEvent: (event) => events.push(event),
         signal: controller.signal,
       });
+      assert(
+        events.some(
+          (event) =>
+            event.kind === "write" && event.stage === "result" && event.status === "completed",
+        ),
+        "the actual completed write must be observable",
+      );
+      assert(
+        events.some((event) => event.kind === "check" && event.stage === "result"),
+        "the actual independent check result must be observable",
+      );
+      assert(events.at(-1)?.kind === "terminal", "the actual terminal status must be observable");
       await closeWorkspaceReview(caseWorkspace);
       if (outcome.workspaceRoot) executionRoots.push(outcome.workspaceRoot);
       assert(

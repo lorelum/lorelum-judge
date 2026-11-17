@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:lorelum:judge:workflow-session-event:v1",
+  "title": "WorkflowSessionEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "sessionId",
+    "sequence",
+    "stage",
+    "actionId",
+    "actionKind",
+    "status",
+    "reason"
+  ],
+  "properties": {
+    "schema": { "const": "workflow-session-event/v1" },
+    "sessionId": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$" },
+    "sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "stage": { "enum": ["proposed", "authorization", "started", "result", "check", "terminal"] },
+    "actionId": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9_-]{1,128}$" },
+    "actionKind": {
+      "enum": ["read", "write", "command", "model", "check", "review", "unknown", null]
+    },
+    "status": {
+      "enum": [
+        "proposed",
+        "allowed",
+        "denied",
+        "started",
+        "completed",
+        "passed",
+        "failed",
+        "cancelled",
+        "timed_out",
+        "truncated",
+        "unavailable",
+        "not_started",
+        "unknown"
+      ]
+    },
+    "reason": {
+      "enum": [
+        "revoked",
+        "expired",
+        "permission_denied",
+        "precondition_changed",
+        "budget_exceeded",
+        "unavailable",
+        "error",
+        "unknown",
+        null
+      ]
+    }
+  }
+}

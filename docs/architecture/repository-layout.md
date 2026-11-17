@@ -30,6 +30,12 @@ protocol and runtime. Neither package type may leak SDK types into public
 contracts. The first provider is `@lorelum/provider-openai-compatible`, a
 non-streaming Chat Completions text transport with no judge dependency.
 
+The draft `apps/local-workspace` is a composition root that may consume the
+public protocol, runtime, judge, workflow, sandbox and provider packages. Core
+packages do not depend on the app. The local UI consumes the separately owned,
+private LumenUI component package; its acquisition and CI access limitations
+are documented in `apps/local-workspace/README.md`.
+
 ## Package Responsibilities
 
 ### Protocol

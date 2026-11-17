@@ -10,6 +10,22 @@ class PreparationStopped extends Error {
   }
 }
 
+function boundedUtf8(
+  chunks: Buffer[],
+  budget: number,
+): { text: string; bytes: number; lost: boolean } {
+  const decoded = Buffer.concat(chunks).toString("utf8");
+  let bytes = 0;
+  let end = 0;
+  for (const character of decoded) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (bytes + size > budget) break;
+    bytes += size;
+    end += character.length;
+  }
+  return { text: decoded.slice(0, end), bytes, lost: end !== decoded.length };
+}
+
 function relativeDirectory(value: string, allowRoot: boolean): string {
   if (value === "." && allowRoot) return value;
   if (
@@ -258,11 +274,14 @@ async function runChecked(
     child.once("close", (exitCode) => {
       clearTimeout(timer);
       request.signal.removeEventListener("abort", abort);
+      const out = boundedUtf8(stdout, request.maxOutputBytes);
+      const err = boundedUtf8(stderr, request.maxOutputBytes - out.bytes);
       resolve({
-        status: stop ?? (exitCode === 0 ? "completed" : "failed"),
+        status:
+          stop ?? (out.lost || err.lost ? "truncated" : exitCode === 0 ? "completed" : "failed"),
         exitCode,
-        stdout: Buffer.concat(stdout).toString("utf8"),
-        stderr: Buffer.concat(stderr).toString("utf8"),
+        stdout: out.text,
+        stderr: err.text,
       });
     });
   });

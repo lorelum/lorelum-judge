@@ -4,6 +4,7 @@ import { instrumentIdentityV2, measurementDefinitionIdentityV2 } from "@lorelum/
 import type { SandboxPort } from "@lorelum/judge-runtime";
 import {
   composeEvidenceReport,
+  type EvidenceLifecycleEvent,
   type EvidenceReviewInput,
   runEvidenceReview,
 } from "../src/evidence-review.js";
@@ -188,6 +189,17 @@ describe("independent evidence review", () => {
     expect(result.usage).toEqual({ commands: 1, outputBytes: 6 });
     expect(result.enforcement).toBe("unknown");
     expect(composeEvidenceReport({ diff: "actual diff" }, result).quality).toBe("unknown");
+  });
+  test("accounts for multi-byte truncated check output without treating it as passed", async () => {
+    const sandbox: SandboxPort = {
+      async run() {
+        return { status: "truncated", exitCode: null, stdout: "中", stderr: "😀" };
+      },
+    };
+    const result = await runEvidenceReview(input(sandbox));
+    expect(result.checks[0]?.status).toBe("truncated");
+    expect(result.usage.outputBytes).toBe(7);
+    expect(result.completeness).toBe("incomplete");
   });
   test("uses the real gate and does not invent calibration", async () => {
     const sandbox: SandboxPort = {
@@ -424,5 +436,192 @@ describe("independent evidence review", () => {
     expect(revoked.review).toBeNull();
     expect(revoked.gate).toBeNull();
     expect(revoked.enforcement).toBe("ineligible");
+  });
+  test("emits real lifecycle checkpoints without exposing evidence or output", async () => {
+    const events: EvidenceLifecycleEvent[] = [];
+    const authorizations: string[] = [];
+    const result = await runEvidenceReview({
+      ...input({
+        async run() {
+          return { status: "completed", exitCode: 0, stdout: "secret output", stderr: "" };
+        },
+      }),
+      guard: () => {},
+      authorize(stage) {
+        authorizations.push(stage);
+      },
+      onEvent(event) {
+        events.push(event);
+        throw new Error("observer failure");
+      },
+    });
+    expect(result.review?.ok).toBe(true);
+    expect(authorizations).toEqual([
+      "before_check",
+      "after_check",
+      "before_review",
+      "after_review",
+    ]);
+    expect(events).toEqual([
+      { kind: "check", id: "test", stage: "proposed", status: "proposed" },
+      { kind: "check", id: "test", stage: "authorization", status: "allowed" },
+      { kind: "check", id: "test", stage: "started", status: "started" },
+      { kind: "check", id: "test", stage: "result", status: "completed" },
+      { kind: "check", id: "test", stage: "authorization", status: "allowed" },
+      { kind: "review", id: "review", stage: "proposed", status: "proposed" },
+      { kind: "review", id: "review", stage: "authorization", status: "allowed" },
+      { kind: "review", id: "review", stage: "started", status: "started" },
+      { kind: "review", id: "review", stage: "result", status: "completed" },
+      { kind: "review", id: "review", stage: "authorization", status: "allowed" },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("secret");
+  });
+
+  test("reports check outcomes and denial without inventing starts", async () => {
+    const events: EvidenceLifecycleEvent[] = [];
+    const result = await runEvidenceReview({
+      ...input({
+        async run() {
+          return { status: "truncated", exitCode: null, stdout: "private", stderr: "" };
+        },
+      }),
+      checks: [check, { ...check, id: "denied" }],
+      guard: () => {},
+      authorize(stage, current) {
+        if (stage === "before_check" && current?.id === "denied") throw new Error("private denial");
+      },
+      onEvent: (event) => events.push(event),
+    });
+    expect(result.checks.map((item) => item.status)).toEqual(["truncated", "not_started"]);
+    expect(events).toContainEqual({
+      kind: "check",
+      id: "test",
+      stage: "result",
+      status: "truncated",
+    });
+    expect(events).toContainEqual({
+      kind: "check",
+      id: "denied",
+      stage: "authorization",
+      status: "denied",
+    });
+    expect(events.some((event) => event.id === "denied" && event.stage === "started")).toBe(false);
+    expect(JSON.stringify(events)).not.toContain("private");
+  });
+
+  test("requires a guard and prevents side effects when an observer revokes authority", async () => {
+    let runs = 0;
+    let authorized = true;
+    const options = input({
+      async run() {
+        runs++;
+        return { status: "completed", exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+    await expect(runEvidenceReview({ ...options, onEvent: () => {} })).rejects.toThrow("guard");
+    const events: EvidenceLifecycleEvent[] = [];
+    const result = await runEvidenceReview({
+      ...options,
+      guard() {
+        if (!authorized) throw new Error("revoked");
+      },
+      onEvent(event) {
+        events.push(event);
+        if (event.kind === "check" && event.stage === "started") authorized = false;
+      },
+    });
+    expect(runs).toBe(0);
+    expect(result.checks[0]?.status).toBe("not_started");
+    expect(events).toContainEqual({
+      kind: "check",
+      id: "test",
+      stage: "authorization",
+      status: "denied",
+    });
+    expect(events.some((event) => event.kind === "review")).toBe(false);
+  });
+
+  test("observer cancellation prevents the next side effect", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const result = await runEvidenceReview({
+      ...input({
+        async run() {
+          calls++;
+          return { status: "completed", exitCode: 0, stdout: "", stderr: "" };
+        },
+      }),
+      signal: controller.signal,
+      guard: () => {},
+      onEvent(event) {
+        if (event.stage === "proposed") controller.abort();
+      },
+    });
+    expect(calls).toBe(0);
+    expect(result.stopReason).toBe("cancelled");
+  });
+  test("reports failures and cancellation from sandbox results", async () => {
+    const events: EvidenceLifecycleEvent[] = [];
+    let calls = 0;
+    const result = await runEvidenceReview({
+      ...input({
+        async run() {
+          calls++;
+          return calls === 1
+            ? { status: "completed", exitCode: 1, stdout: "", stderr: "" }
+            : { status: "cancelled", exitCode: null, stdout: "", stderr: "" };
+        },
+      }),
+      checks: [check, { ...check, id: "cancelled" }],
+      guard: () => {},
+      onEvent: (event) => events.push(event),
+    });
+    expect(result.checks.map((item) => item.status)).toEqual(["failed", "cancelled"]);
+    expect(events).toContainEqual({ kind: "check", id: "test", stage: "result", status: "failed" });
+    expect(events).toContainEqual({
+      kind: "check",
+      id: "cancelled",
+      stage: "result",
+      status: "cancelled",
+    });
+    expect(events.some((event) => event.kind === "review")).toBe(false);
+  });
+
+  test("a review observer can revoke authority before the checker starts", async () => {
+    let authorized = true;
+    let checkerCalls = 0;
+    const options = input({
+      async run() {
+        return { status: "completed", exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+    const events: EvidenceLifecycleEvent[] = [];
+    const result = await runEvidenceReview({
+      ...options,
+      guard() {
+        if (!authorized) throw new Error("revoked");
+      },
+      onEvent(event) {
+        events.push(event);
+        if (event.kind === "review" && event.stage === "started") authorized = false;
+      },
+      review: {
+        ...options.review,
+        ports: {
+          checker: () => {
+            checkerCalls++;
+            return { verdicts: [] };
+          },
+        },
+      },
+    });
+    expect(checkerCalls).toBe(0);
+    expect(result.review).toBeNull();
+    expect(events).toContainEqual({
+      kind: "review",
+      id: "review",
+      stage: "authorization",
+      status: "denied",
+    });
   });
 });

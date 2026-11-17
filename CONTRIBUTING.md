@@ -5,9 +5,14 @@
 仓库使用 Bun 1.4.2 和 Node 22.21.0（`check:dist` 在 Node ESM 下加载构建产物），并在根目录提供唯一验证入口：
 
 ```sh
+bun run prepare:lumen
 bun install --frozen-lockfile
 bun run validate
 ```
+
+`prepare:lumen` 需要读取私有 `lorelum/lumen-ui`；离线运行时不需要访问该仓库。CI 需要配置
+仅可读取该仓库的 `LUMEN_UI_READ_TOKEN` secret。相关限制和本地页面启动方式见
+`apps/local-workspace/README.md`。
 
 本地命令必须与 `.github/workflows/validate.yml` 使用相同的包管理器和验证入口。
 CI 在一次性托管 runner 上允许非特权用户命名空间，并仅在私有 mount namespace 中用空目录

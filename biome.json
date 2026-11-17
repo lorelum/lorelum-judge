@@ -1,7 +1,7 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
   "files": {
-    "includes": ["**", "!**/dist", "!**/node_modules", "!**/generated"]
+    "includes": ["**", "!**/dist", "!**/node_modules", "!**/generated", "!.lumen-cache"]
   },
   "formatter": {
     "enabled": true,
@@ -11,8 +11,17 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "preset": "recommended"
+      "preset": "recommended",
+      "a11y": {
+        "noLabelWithoutControl": {
+          "level": "error",
+          "options": { "inputComponents": ["Input", "Textarea"] }
+        }
+      }
     }
+  },
+  "css": {
+    "parser": { "tailwindDirectives": true }
   },
   "javascript": {
     "formatter": {
