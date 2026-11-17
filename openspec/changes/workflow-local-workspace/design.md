@@ -4,7 +4,7 @@
 
 新增 `apps/local-workspace` 作为 Bun 本机服务和浏览器页面的 composition root；protocol 拥有版本化跨边界事件，workflow 拥有计划、授权、动作和检查，runtime-bubblewrap 拥有隔离，judge 保持现有公开语义。应用不成为核心 package 的依赖。复用 #64/#67，不建立另一套计划或授权语义。
 
-页面使用 `lorelum/lumen-ui` 的 React 组件、LumenProvider 和 Linen 主题，而非另建基础控件；接入应固定可复现版本并遵循组件库的 React、Tailwind 和样式入口要求。该仓库当前为私有，组件标记 UNLICENSED，文档只描述本地打包；必须先明确可供本仓库消费者和 CI 使用的分发方式，不能假设公共 registry 可用或直接复制私有源码。
+页面使用 `lorelum/lumen-ui` 的 React 组件、LumenProvider 和 Linen 主题，而非另建基础控件；对话消息与输入使用组件库的 `Message`、`PromptInput`，仍按纯文本展示未经信任的内容。该仓库当前为私有，组件标记 UNLICENSED；本地和 CI 检出固定 commit，构建后从忽略的生成目录安装，不能假设公共 registry 可用或提交私有源码。
 
 页面以共享对话和可显式切换的三种模式验收代码/PR 评价、基于评价的修改建议，以及用户意见驱动的计划与受控修改；用户可直接发送包含 PR 链接和要求的消息，无需事先选择输入类型或粘贴代码。后续计划可引用当前真实评价中的固定来源和问题，作为参考而非用户要求。共用本机模型配置；评价与建议分别调用已合并的 `evaluateCode` 和 `generateCodeSuggestions`，不得伪造数字评分或结果。仅实际读取本地来源或执行时按需选择现场。对各项真实模型请求统一预览实际完整消息、配置及接收方并逐次授权；功能互不静默触发，离线替身不冒充真实模型。
 

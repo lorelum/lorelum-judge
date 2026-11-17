@@ -2,6 +2,8 @@ import { Button } from "@lorelum/lumen-ui/components/button";
 import { Card } from "@lorelum/lumen-ui/components/card";
 import { Input } from "@lorelum/lumen-ui/components/input";
 import { Textarea } from "@lorelum/lumen-ui/components/textarea";
+import { Message } from "@lorelum/lumen-ui/pro/message";
+import { PromptInput } from "@lorelum/lumen-ui/pro/prompt-input";
 import { LumenProvider } from "@lorelum/lumen-ui/themes";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -785,17 +787,36 @@ function App() {
       setChatBusy(false);
     }
   }
+  const canSend =
+    !!token &&
+    !busy &&
+    !chatBusy &&
+    !chatRunning &&
+    !chatDisclosure &&
+    !analysisRunning &&
+    !planningBusy &&
+    !!conversationInput.trim();
 
   return (
     <LumenProvider>
       <div className="shell">
         <header className="hero">
-          <div>
-            <div className="eyebrow">Lorelum Judge · Local workspace</div>
-            <h1>代码评价与受控修改</h1>
-            <p className="muted">选择功能，审阅每次模型请求；实际修改仅在独立候选副本中执行。</p>
+          <div className="brand">
+            <div className="brand-mark" aria-hidden="true">
+              L
+            </div>
+            <div>
+              <div className="eyebrow">
+                Lorelum Judge <span> / </span> Local workspace
+              </div>
+              <h1>代码评价与受控修改</h1>
+              <p className="muted">从一个问题开始，到有依据的修改。</p>
+            </div>
           </div>
-          <span className="state">{state ? `会话 ${state.execution.status}` : "正在连接"}</span>
+          <span className="state">
+            <span className="state-dot" />
+            {state ? `会话 ${state.execution.status}` : "正在连接"}
+          </span>
         </header>
         {error && (
           <p role="alert" className="notice error">
@@ -804,8 +825,14 @@ function App() {
         )}
         <div className="chat-layout">
           <Card className="section conversation">
-            <h2>选择功能</h2>
-            <p className="muted">评价和规划无需项目；每次发送前都须审核完整请求并单独同意。</p>
+            <div className="conversation-heading">
+              <div>
+                <div className="conversation-kicker">WORKSPACE / 对话</div>
+                <h2>和 Judge 一起解决问题</h2>
+                <p className="muted">选择当前要做的事，切换后仍在同一段对话中。</p>
+              </div>
+              <span className="privacy-note">本地会话</span>
+            </div>
             <div className="row feature-choices">
               {(
                 [
@@ -825,21 +852,82 @@ function App() {
               ))}
             </div>
             {state?.model?.mode !== "configured" && (
-              <p className="notice">请先填写并保存真实模型设置。</p>
+              <p className="notice model-notice">
+                请先在模型设置中配置真实模型。配置本身不会发送请求。
+              </p>
             )}
-            <div className="messages" aria-live="polite" ref={messagesRef}>
+            <div
+              className={`messages${conversation.length ? " has-messages" : ""}`}
+              aria-live="polite"
+              ref={messagesRef}
+            >
               {conversation.length === 0 && (
-                <p className="empty-chat">
-                  在下方发送消息。切换功能不会清除本页对话；刷新后不恢复消息历史。
-                </p>
+                <div className="empty-chat">
+                  <div className="empty-icon" aria-hidden="true">
+                    L
+                  </div>
+                  <h3>今天想解决什么问题？</h3>
+                  <p>发来 PR 链接或代码，也可以从下面的方向开始。</p>
+                  <div className="starter-grid">
+                    <Button
+                      variant="flat"
+                      onClick={() => {
+                        setFeature("evaluation");
+                        setConversationInput("请审查这个 PR：");
+                      }}
+                    >
+                      <span>01</span>
+                      <strong>审查代码或 PR</strong>
+                      <small>发现问题与依据</small>
+                    </Button>
+                    <Button
+                      variant="flat"
+                      onClick={() => {
+                        setFeature("suggestions");
+                        setConversationInput("请根据当前评价给出修改建议");
+                      }}
+                    >
+                      <span>02</span>
+                      <strong>获取修改建议</strong>
+                      <small>基于已有评价</small>
+                    </Button>
+                    <Button
+                      variant="flat"
+                      onClick={() => {
+                        setFeature("planning");
+                        setConversationInput("请帮我制定修改计划：");
+                      }}
+                    >
+                      <span>03</span>
+                      <strong>制定修改计划</strong>
+                      <small>确认后再受控执行</small>
+                    </Button>
+                  </div>
+                  <p className="empty-hint">会话仅保留在当前页面，刷新后不恢复消息历史。</p>
+                </div>
               )}
               {conversation.map((message, index) => (
                 // biome-ignore lint/suspicious/noArrayIndexKey: Messages are append-only.
-                <div className={`message ${message.role}`} key={index}>
-                  <div className="message-label">
-                    {message.role === "user" ? "你" : (message.label ?? "界面提示")}
-                  </div>
-                  <div className="message-content">{message.content}</div>
+                <div key={index}>
+                  <Message
+                    from={message.role === "assistant" && !message.label ? "system" : message.role}
+                    className={`chat-message ${message.role}`}
+                  >
+                    <Message.Header className="message-label">
+                      {message.role === "user" ? "你" : (message.label ?? "界面提示")}
+                    </Message.Header>
+                    <Message.Content
+                      variant={message.role === "user" ? "bubble" : "plain"}
+                      className="message-content"
+                    >
+                      {message.content}
+                    </Message.Content>
+                    {message.role === "assistant" && message.label && (
+                      <Message.Actions>
+                        <Message.Copy value={message.content} />
+                      </Message.Actions>
+                    )}
+                  </Message>
                 </div>
               ))}
             </div>
@@ -851,101 +939,78 @@ function App() {
                     ? "发送消息以根据当前真实评价生成建议；此接口不接收自定义指导，不会修改代码。"
                     : "描述修改需求；有当前评价时以评价作为参考。无需代码或项目即可规划，执行才需要项目和独立授权。"}
               </p>
-              <label className="field">
-                消息
-                <Textarea
+              <PromptInput
+                variant="flat"
+                className="prompt-surface"
+                submitDisabled={!canSend}
+                onSubmit={() => void sendConversation()}
+              >
+                <label className="prompt-label" htmlFor="conversation-message">
+                  消息
+                </label>
+                <PromptInput.Textarea
+                  id="conversation-message"
+                  aria-label="消息"
                   value={conversationInput}
                   onChange={(event) => setConversationInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (
-                      event.key === "Enter" &&
-                      !event.shiftKey &&
-                      !event.nativeEvent.isComposing
-                    ) {
-                      event.preventDefault();
-                      if (
-                        token &&
-                        !busy &&
-                        !chatBusy &&
-                        !chatRunning &&
-                        !chatDisclosure &&
-                        !analysisRunning &&
-                        !planningBusy &&
-                        conversationInput.trim()
-                      )
-                        void sendConversation();
-                    }
-                  }}
                   placeholder={
                     feature === "evaluation"
                       ? "请审核 https://github.com/owner/repo/pull/123，重点关注安全性"
                       : feature === "suggestions"
                         ? "请根据当前评价生成修改建议"
-                        : "请修复评价中发现的问题"
+                        : "请描述希望如何修改"
                   }
                 />
-              </label>
-              {feature === "evaluation" && (
-                <details>
-                  <summary>代码输入选项</summary>
-                  <label className="check">
-                    <input
-                      type="checkbox"
-                      checked={explicitSnippet}
-                      onChange={(event) => setExplicitSnippet(event.target.checked)}
-                    />
-                    整条消息是代码材料
-                  </label>
-                </details>
-              )}
-              <div className="row">
-                <Button
-                  disabled={
-                    !token ||
-                    busy ||
-                    chatBusy ||
-                    chatRunning ||
-                    !!chatDisclosure ||
-                    analysisRunning ||
-                    planningBusy ||
-                    !conversationInput.trim()
-                  }
-                  onClick={() => void sendConversation()}
-                >
-                  发送
-                </Button>
-                <span className="muted">Enter 发送 · Shift+Enter 换行</span>
-                {chatRunning && chatInput !== "连接检查：请回复“连接成功”。" && (
-                  <Button
-                    variant="flat"
-                    color="danger"
-                    onClick={() => {
-                      conversationChat.current = false;
-                      void action("chat.cancel", {});
-                      setConversation((messages) => [
-                        ...messages,
-                        { role: "assistant", content: "已取消普通对话请求。" },
-                      ]);
-                    }}
-                  >
-                    取消对话
-                  </Button>
+                {feature === "evaluation" && (
+                  <details>
+                    <summary>代码输入选项</summary>
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={explicitSnippet}
+                        onChange={(event) => setExplicitSnippet(event.target.checked)}
+                      />
+                      整条消息是代码材料
+                    </label>
+                  </details>
                 )}
-                {analysisRunning && (
-                  <Button
-                    variant="flat"
-                    color="danger"
-                    onClick={() =>
-                      void action(
-                        `${analysisBusy ?? (state?.evaluation.status === "running" ? "evaluation" : "suggestions")}.cancel`,
-                        {},
-                      )
-                    }
-                  >
-                    取消生成
-                  </Button>
-                )}
-              </div>
+                <div className="row">
+                  <PromptInput.Submit aria-label="发送" size="sm">
+                    发送
+                  </PromptInput.Submit>
+                  <span className="muted">Enter 发送 · Shift+Enter 换行</span>
+                  {chatRunning && chatInput !== "连接检查：请回复“连接成功”。" && (
+                    <Button
+                      variant="flat"
+                      color="danger"
+                      onClick={() => {
+                        conversationChat.current = false;
+                        void action("chat.cancel", {});
+                        setConversation((messages) => [
+                          ...messages,
+                          { role: "assistant", content: "已取消普通对话请求。" },
+                        ]);
+                      }}
+                    >
+                      取消对话
+                    </Button>
+                  )}
+                  {analysisRunning && (
+                    <Button
+                      variant="flat"
+                      color="danger"
+                      onClick={() =>
+                        void action(
+                          `${analysisBusy ?? (state?.evaluation.status === "running" ? "evaluation" : "suggestions")}.cancel`,
+                          {},
+                        )
+                      }
+                    >
+                      取消生成
+                    </Button>
+                  )}
+                </div>
+              </PromptInput>
             </div>
             {(["evaluation", "suggestions"] as const).map((kind) => {
               const result = state?.[kind];
