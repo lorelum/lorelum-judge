@@ -1516,7 +1516,12 @@ linux("real workspace authorization", () => {
         sequence: number;
         execution: {
           status: string;
-          result: { workspaceRoot: string | null; report: { checks: string } };
+          result: {
+            workspaceRoot: string | null;
+            report: { checks: string };
+            evidence: unknown;
+            usage: unknown;
+          };
         };
       };
       let terminalSnapshot: CompletedState | undefined;
@@ -1527,7 +1532,13 @@ linux("real workspace authorization", () => {
       const completed = await call(session, "execution.run", {});
       const final = completed.state as unknown as CompletedState;
       expect(final.execution.status).toBe("completed");
-      expect(final.execution.result.report.checks).toBe("complete");
+      expect(
+        final.execution.result.report.checks,
+        JSON.stringify({
+          evidence: final.execution.result.evidence,
+          usage: final.execution.result.usage,
+        }),
+      ).toBe("complete");
       expect(terminalSnapshot?.sequence).toBe(final.sequence);
       expect(terminalSnapshot?.execution.result.report.checks).toBe("complete");
       expect(terminalSnapshot?.execution.status).toBe("completed");
