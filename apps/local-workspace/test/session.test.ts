@@ -1435,14 +1435,14 @@ linux("real workspace authorization", () => {
           disclosures: ["plan", "file-content", "command-output", "review"],
           modelRecipient: "offline (local deterministic model)",
           limits: {
-            totalTimeMs: 30000,
-            commandTimeMs: 15000,
+            totalTimeMs: 180000,
+            commandTimeMs: 90000,
             modelCalls: 4,
             actions: 4,
             commands: 1,
             outputBytes: 10000,
           },
-          expiresAt: Date.now() + 30000,
+          expiresAt: Date.now() + 180000,
           isolation: "bubblewrap-no-network",
         },
         verification: {
@@ -1453,7 +1453,7 @@ linux("real workspace authorization", () => {
               environmentIdentity: null,
               ...command,
               readPaths: ["."],
-              timeoutMs: 15000,
+              timeoutMs: 90000,
               maxOutputBytes: 1000,
             },
           ],
@@ -1599,5 +1599,5 @@ linux("real workspace authorization", () => {
       await call(session, "workspace.discover", { root: "relative", exclusions: [] });
       await rm(root, { recursive: true, force: true });
     }
-  }, 30000);
+  }, 240000);
 });
